@@ -210,6 +210,9 @@ public final class SavePoints {
             }
             throw e;
         }
+        // the log must hold every line the save point has consumed (e.g. a sh step's output up to its offset), or a
+        // controller resuming from it would skip lines the owner read but had not shipped yet
+        BlobLogStorage.Shipper.shipNow(BlobLogStorage.buildKey(st.run.getRootDir()));
         try {
             RunningBuilds.update(st.run, Map.of(SAVE_POINT, savePoint));
         } catch (ConflictException e) {

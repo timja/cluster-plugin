@@ -57,7 +57,13 @@ g $A 'Jenkins.get().securityRealm.createAccount("u1", "u1-password-1")' >/dev/nu
 eventually 15 g_is $B 'println hudson.model.User.getById("u1", false) != null' true
 # as u1 itself (an administrator cannot create another user's tokens), with a password and the cluster crumb
 JAR="$OUT/u1.cookies"
-u1_post() { local crumb; crumb=$(curl -gsf -c "$JAR" -b "$JAR" -u u1:u1-password-1 "http://localhost:$A/crumbIssuer/api/json" | jq_ 'd["crumb"]'); curl -gsf -c "$JAR" -b "$JAR" -u u1:u1-password-1 -H "Jenkins-Crumb: $crumb" -X POST "http://localhost:$A$1"; }
+u1_post() {
+  local crumb
+  rm -f "$JAR"
+  crumb=$(curl -gsf -c "$JAR" -u u1:u1-password-1 "http://localhost:$A/crumbIssuer/api/json" | jq_ 'd["crumb"]')
+  grep -v 'remember-me' "$JAR" > "$JAR.nonce" || true # the crumb is bound to the nonce cookie: send only that
+  curl -gsf -b "$JAR.nonce" -u u1:u1-password-1 -H "Jenkins-Crumb: $crumb" -X POST "http://localhost:$A$1"
+}
 tok=$(u1_post "/user/u1/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken?newTokenName=et6" | jq_ 'd["data"]["tokenValue"] + " " + d["data"]["tokenUuid"]')
 token=${tok% *}; uuid=${tok#* }
 check "1 the token works on B" eventually 15 status_is $B "u1:$token" 200

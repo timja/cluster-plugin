@@ -280,6 +280,14 @@ public final class BlobLogStorage {
             return file.exists() ? shipFile(blobs, blobKey, file, 0) : 0;
         }
 
+        /** Ships what a build's log has now, if it is tracked here; failures propagate. */
+        static void shipNow(@CheckForNull String key) throws IOException {
+            Tracked t = key == null ? null : tracked.get(key);
+            if (t != null) {
+                ship(t);
+            }
+        }
+
         /** Stops shipping a build's log without shipping the rest, as when it is owned elsewhere now. */
         static void drop(String key) {
             tracked.remove(key);

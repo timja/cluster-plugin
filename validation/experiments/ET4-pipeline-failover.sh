@@ -119,6 +119,7 @@ info "1 adopted $((SECONDS - killed)) s after the kill"
 check "1 agent1 reconnects to B" eventually 120 agent_online_on $B
 check "1 the sh step continues to tick 60" eventually 180 console_has $B /job/ag/1 "tick 60"
 check "1 every tick is in the log (1..60)" all_lines $B /job/ag/1 tick 60
+text $B /job/ag/1/consoleText > "$OUT/ag-1-console.txt" 2>&1 || true
 check "1 the sh step was not restarted (tick 1 once)" test "$(count_in_console $B /job/ag/1 'tick 1')" = 1
 check "1 the build waits at input on B" eventually 60 console_has $B /job/ag/1 "continue?"
 post $B "/job/ag/1/input/Go/proceedEmpty" >/dev/null
@@ -161,6 +162,7 @@ check "4 only B published the record" test "$(record_writers pt 1)" = 1
 check "4 A lists B's build (its own copy discarded)" eventually 60 result_is $A /job/pt/1 SUCCESS
 check "4 A's console is B's (no appends from A after the fence)" eventually 30 same_text $A $B /job/pt/1/consoleText
 check "4 every beat is in the log" all_lines $B /job/pt/1 beat 40
+text $B /job/pt/1/consoleText > "$OUT/pt-1-console.txt" 2>&1 || true
 
 # ------------------------------------------------------------------ 5. no false adoption
 log "scenario 5: a long build on a healthy A"
