@@ -151,6 +151,16 @@ public final class ClusterView extends ManagementLink {
         public boolean isAlive() {
             return m.alive();
         }
+
+        @Exported
+        public String getVersion() {
+            return m.version();
+        }
+
+        @Exported
+        public int getProtocol() {
+            return m.protocol();
+        }
     }
 
     @ExportedBean(defaultVisibility = 2)

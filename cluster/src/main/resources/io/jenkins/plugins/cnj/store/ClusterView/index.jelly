@@ -6,13 +6,13 @@
       <p>This page is served by <strong>${it.self}</strong>. Everything below comes from the persistence store.</p>
       <h2>Controllers</h2>
       <table class="jenkins-table">
-        <thead><tr><th>Name</th><th>Internal URL</th><th>Started</th><th>Last heartbeat</th><th>Alive</th></tr></thead>
+        <thead><tr><th>Name</th><th>Internal URL</th><th>Started</th><th>Last heartbeat</th><th>Alive</th><th>Version</th></tr></thead>
         <tbody>
           <j:forEach var="m" items="${it.members}">
             <tr>
               <td>${m.name}</td><td>${m.url}</td>
               <td>${h.getTimeSpanString(m.started)} ago</td><td>${h.getTimeSpanString(m.heartbeat)} ago</td>
-              <td>${m.alive ? 'yes' : 'no'}</td>
+              <td>${m.alive ? 'yes' : 'no'}</td><td>${m.version} (protocol ${m.protocol})</td>
             </tr>
           </j:forEach>
         </tbody>

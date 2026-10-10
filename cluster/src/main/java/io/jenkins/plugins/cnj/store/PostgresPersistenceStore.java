@@ -86,6 +86,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                             + " acquired_at timestamptz not null default now())");
                     s.execute("alter table jenkins_members add column if not exists name text");
                     s.execute("alter table jenkins_members add column if not exists url text");
+                    // Target 10: what each member runs, for rolling upgrades with mixed versions
+                    s.execute("alter table jenkins_members add column if not exists version text");
+                    s.execute("alter table jenkins_members add column if not exists protocol int");
                     s.execute("create sequence if not exists jenkins_queue_ids");
                     s.execute("create table if not exists jenkins_queue ("
                             + "id bigint primary key, task text not null, dedup_key text not null, actions text not null,"
@@ -685,11 +688,14 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         try {
             withTransaction(c -> {
                 try (PreparedStatement ps = c.prepareStatement(
-                        "insert into jenkins_members (origin, heartbeat_at, name, url) values (?, now(), ?, ?)"
-                                + " on conflict (origin) do update set heartbeat_at = now(), name = excluded.name, url = excluded.url")) {
+                        "insert into jenkins_members (origin, heartbeat_at, name, url, version, protocol) values (?, now(), ?, ?, ?, ?)"
+                                + " on conflict (origin) do update set heartbeat_at = now(), name = excluded.name, url = excluded.url,"
+                                + " version = excluded.version, protocol = excluded.protocol")) {
                     ps.setString(1, origin);
                     ps.setString(2, NAME);
                     ps.setString(3, INTERNAL_URL);
+                    ps.setString(4, VERSION);
+                    ps.setInt(5, PROTOCOL);
                     ps.executeUpdate();
                 }
                 return null;
@@ -728,6 +734,41 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     /** How other controllers reach this one directly, e.g. to forward requests for objects only it holds. */
     static final String INTERNAL_URL = env("CNJ_INTERNAL_URL", "http://" + hostName() + ":8080/");
 
+    /**
+     * The version of the cluster protocol this controller speaks: what it stores and expects of its peers.
+     * Raised when a change cannot coexist with older peers (which then must be gone before this version starts).
+     */
+    static final int PROTOCOL = 1;
+
+    /** What this controller runs: core and plugin versions, shown in the cluster view. */
+    static final String VERSION = jenkins.model.Jenkins.VERSION + " / " + java.util.Objects.requireNonNullElse(
+            PostgresPersistenceStore.class.getPackage().getImplementationVersion(), "dev");
+
+    /** Peers older than this protocol must not be alive when this controller starts (Target 10). */
+    static final int MINIMUM_PEER_PROTOCOL = Integer.getInteger(PostgresPersistenceStore.class.getPackageName() + ".minimumPeerProtocol", 0);
+
+    /**
+     * Live controllers other than this one speaking an older protocol than {@code minimum}, as {@code name (protocol)}.
+     */
+    @NonNull
+    List<String> peersBelow(int minimum) throws IOException {
+        return run("check peer versions", c -> {
+            List<String> result = new ArrayList<>();
+            try (PreparedStatement ps = c.prepareStatement("select coalesce(name, origin), coalesce(protocol, 0) from jenkins_members"
+                    + " where origin <> ? and coalesce(protocol, 0) < ? and heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                ps.setString(1, origin);
+                ps.setInt(2, minimum);
+                ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        result.add(rs.getString(1) + " (protocol " + rs.getInt(2) + ")");
+                    }
+                }
+            }
+            return result;
+        });
+    }
+
     private static String env(String name, String fallback) {
         String v = System.getenv(name);
         return v == null || v.isEmpty() ? fallback : v;
@@ -761,7 +802,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     /** A controller in the membership table (Target 8 cluster view). */
-    record Member(String origin, String name, String url, long heartbeatAt, long startedAt, boolean alive) {}
+    record Member(String origin, String name, String url, long heartbeatAt, long startedAt, boolean alive, String version, int protocol) {}
 
     /** Every controller in the membership table, newest first. */
     @NonNull
@@ -769,12 +810,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         return run("list members", c -> {
             List<Member> result = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("select origin, name, url, heartbeat_at, started_at,"
-                    + " heartbeat_at > now() - ? * interval '1 millisecond' from jenkins_members order by started_at desc")) {
+                    + " heartbeat_at > now() - ? * interval '1 millisecond', version, coalesce(protocol, 0) from jenkins_members"
+                    + " order by started_at desc")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         result.add(new Member(rs.getString(1), rs.getString(2), rs.getString(3),
-                                rs.getTimestamp(4).getTime(), rs.getTimestamp(5).getTime(), rs.getBoolean(6)));
+                                rs.getTimestamp(4).getTime(), rs.getTimestamp(5).getTime(), rs.getBoolean(6), rs.getString(7), rs.getInt(8)));
                     }
                 }
             }
