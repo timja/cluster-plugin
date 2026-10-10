@@ -24,6 +24,7 @@ import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.persistence.BuildLeases;
+import jenkins.persistence.ClusterQueue;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import org.postgresql.PGConnection;
@@ -41,6 +42,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     private static final Logger LOGGER = Logger.getLogger(PostgresPersistenceStore.class.getName());
     static final String CHANNEL = "jenkins_store";
+    /** Advisory lock serializing schema creation between controllers. */
+    private static final long SCHEMA_LOCK = 0x6a656e6b696e73L;
 
     private final String url;
     private final String user;
@@ -62,6 +65,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         try {
             withTransaction(c -> {
                 try (Statement s = c.createStatement()) {
+                    // several controllers starting at once: "create ... if not exists" is not safe concurrently in
+                    // Postgres
+                    s.execute("select pg_advisory_xact_lock(" + SCHEMA_LOCK + ")");
                     s.execute("create sequence if not exists jenkins_store_version");
                     s.execute("create table if not exists jenkins_store ("
                             + "key text primary key, content bytea not null, sha256 bytea not null, version bigint not null,"
@@ -75,6 +81,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("create table if not exists jenkins_build_leases ("
                             + "key text primary key, owner text not null, epoch bigint not null,"
                             + " acquired_at timestamptz not null default now())");
+                    s.execute("create sequence if not exists jenkins_queue_ids");
+                    s.execute("create table if not exists jenkins_queue ("
+                            + "id bigint primary key, task text not null, dedup_key text not null, actions text not null,"
+                            + " due_at bigint not null, state text not null, origin text not null, pinned_to text, claimed_by text,"
+                            + " build_number int not null default 0, updated_at timestamptz not null default now())");
+                    s.execute(
+                            "create unique index if not exists jenkins_queue_waiting on jenkins_queue (dedup_key) where state = 'WAITING'");
                     s.execute("create table if not exists jenkins_store_events ("
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
@@ -385,6 +398,246 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     @Override
     public BuildLeases leases() {
         return leases;
+    }
+
+    // ------------------------------------------------------------------ shared build queue (Target 5)
+
+    static final String QUEUE_PREFIX = "queue/";
+
+    private final ClusterQueue queue = new ClusterQueue() {
+        private static final String COLUMNS =
+                "id, task, dedup_key, actions, due_at, state, origin, pinned_to, claimed_by, build_number";
+
+        private Record record(ResultSet rs) throws SQLException {
+            return new Record(
+                    rs.getLong(1),
+                    rs.getString(2),
+                    rs.getString(3),
+                    rs.getString(4),
+                    rs.getLong(5),
+                    State.valueOf(rs.getString(6)),
+                    rs.getString(7),
+                    rs.getString(8),
+                    rs.getString(9),
+                    rs.getInt(10));
+        }
+
+        private Record select(Connection c, String where, Object... args) throws SQLException {
+            try (PreparedStatement ps =
+                    c.prepareStatement("select " + COLUMNS + " from jenkins_queue where " + where)) {
+                for (int i = 0; i < args.length; i++) {
+                    ps.setObject(i + 1, args[i]);
+                }
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? record(rs) : null;
+                }
+            }
+        }
+
+        private int change(Connection c, long id, String sql, Object... args) throws SQLException {
+            int n;
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                for (int i = 0; i < args.length; i++) {
+                    ps.setObject(i + 1, args[i]);
+                }
+                n = ps.executeUpdate();
+            }
+            if (n > 0) {
+                event(c, ChangeEvent.Kind.WRITTEN, QUEUE_PREFIX + id, null, nextVersion(c));
+            }
+            return n;
+        }
+
+        @Override
+        public long nextId() throws IOException {
+            try {
+                return withTransaction(c -> {
+                    try (Statement s = c.createStatement();
+                            ResultSet rs = s.executeQuery("select nextval('jenkins_queue_ids')")) {
+                        rs.next();
+                        return rs.getLong(1);
+                    }
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to allocate a queue id", e);
+            }
+        }
+
+        @NonNull
+        @Override
+        public Record publish(@NonNull Record item) throws IOException {
+            try {
+                return withTransaction(c -> {
+                    int n = change(
+                            c,
+                            item.id(),
+                            "insert into jenkins_queue (" + COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                    + " on conflict do nothing",
+                            item.id(),
+                            item.task(),
+                            item.dedupKey(),
+                            item.actions(),
+                            item.dueAt(),
+                            item.state().name(),
+                            item.origin(),
+                            item.pinnedTo(),
+                            item.claimedBy(),
+                            item.buildNumber());
+                    if (n == 1) {
+                        return item;
+                    }
+                    Record same = select(c, "id = ?", item.id());
+                    return same != null ? same : select(c, "dedup_key = ? and state = 'WAITING'", item.dedupKey());
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to publish queue item " + item.id(), e);
+            }
+        }
+
+        @Override
+        public void update(long id, @NonNull String actions, long dueAt) throws IOException {
+            run(
+                    "update queue item " + id,
+                    c -> change(
+                            c,
+                            id,
+                            "update jenkins_queue set actions = ?, due_at = least(due_at, ?), updated_at = now() where id = ? and state = 'WAITING'"
+                                    + " and (actions <> ? or due_at > ?)",
+                            actions,
+                            dueAt,
+                            id,
+                            actions,
+                            dueAt));
+        }
+
+        @Override
+        public boolean claim(long id) throws IOException {
+            return run("claim queue item " + id, c -> {
+                if (change(
+                                c,
+                                id,
+                                "update jenkins_queue set state = 'CLAIMED', claimed_by = ?, updated_at = now() where id = ? and state = 'WAITING'",
+                                origin,
+                                id)
+                        == 1) {
+                    return true;
+                }
+                Record r = select(c, "id = ?", id);
+                return r != null && origin.equals(r.claimedBy());
+            });
+        }
+
+        @Override
+        public void started(long id, int buildNumber) throws IOException {
+            run(
+                    "record the start of queue item " + id,
+                    c -> change(
+                            c,
+                            id,
+                            "update jenkins_queue set state = 'STARTED', build_number = ?, updated_at = now() where id = ? and claimed_by = ?",
+                            buildNumber,
+                            id,
+                            origin));
+        }
+
+        @Override
+        public boolean cancel(long id) throws IOException {
+            return run(
+                    "cancel queue item " + id,
+                    c -> change(
+                                    c,
+                                    id,
+                                    "update jenkins_queue set state = 'CANCELLED', updated_at = now() where id = ? and state = 'WAITING'",
+                                    id)
+                            == 1);
+        }
+
+        @Override
+        public Record get(long id) throws IOException {
+            return run("read queue item " + id, c -> select(c, "id = ?", id));
+        }
+
+        @NonNull
+        @Override
+        public List<Record> pending() throws IOException {
+            return run("list the queue", c -> {
+                List<Record> records = new ArrayList<>();
+                try (Statement s = c.createStatement();
+                        ResultSet rs = s.executeQuery("select " + COLUMNS
+                                + " from jenkins_queue where state in ('WAITING', 'CLAIMED') order by id")) {
+                    while (rs.next()) {
+                        records.add(record(rs));
+                    }
+                }
+                return records;
+            });
+        }
+
+        @NonNull
+        @Override
+        public AutoCloseable subscribe(@NonNull Consumer<Record> listener) {
+            return PostgresPersistenceStore.this.subscribe(e -> {
+                if (!e.key().startsWith(QUEUE_PREFIX)) {
+                    return;
+                }
+                try {
+                    Record r = get(Long.parseLong(e.key().substring(QUEUE_PREFIX.length())));
+                    if (r != null) {
+                        listener.accept(r);
+                    }
+                } catch (IOException | NumberFormatException x) {
+                    LOGGER.log(Level.WARNING, "Failed to read queue change " + e, x);
+                }
+            });
+        }
+    };
+
+    private <T> T run(String what, Work<T> work) throws IOException {
+        try {
+            return withTransaction(work);
+        } catch (SQLException e) {
+            throw new IOException("Failed to " + what, e);
+        }
+    }
+
+    /** Whether the build queue is shared through this store; on by default. */
+    static final boolean SHARED_QUEUE =
+            !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".sharedQueue"));
+
+    @Override
+    public ClusterQueue queue() {
+        return SHARED_QUEUE ? queue : null;
+    }
+
+    /**
+     * Puts items claimed by controllers which are gone back into the queue, so that another controller starts them;
+     * and forgets finished items after a day.
+     *
+     * @return how many items were put back
+     */
+    int reclaimAndPrune() throws IOException {
+        return run("reclaim queue items", c -> {
+            List<Long> ids = new ArrayList<>();
+            try (PreparedStatement ps = c.prepareStatement(
+                    "update jenkins_queue set state = 'WAITING', claimed_by = null, updated_at = now()"
+                            + " where state = 'CLAIMED' and claimed_by not in (select origin from jenkins_members"
+                            + " where heartbeat_at > now() - ? * interval '1 millisecond') returning id")) {
+                ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        ids.add(rs.getLong(1));
+                    }
+                }
+            }
+            for (long id : ids) {
+                event(c, ChangeEvent.Kind.WRITTEN, QUEUE_PREFIX + id, null, nextVersion(c));
+            }
+            try (Statement s = c.createStatement()) {
+                s.execute(
+                        "delete from jenkins_queue where state in ('STARTED', 'CANCELLED') and updated_at < now() - interval '1 day'");
+            }
+            return ids.size();
+        });
     }
 
     /**

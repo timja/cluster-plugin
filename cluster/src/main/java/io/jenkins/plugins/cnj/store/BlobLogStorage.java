@@ -221,6 +221,10 @@ public final class BlobLogStorage {
 
         private static void ship(Tracked t) throws IOException {
             synchronized (t) {
+                if (PersistenceStores.get() instanceof PostgresPersistenceStore p && p.mayHaveLapsed()) {
+                    // e.g. just woke from a pause: another controller may own the build by now; wait for the heartbeat
+                    return;
+                }
                 long lapses = lapseCount();
                 if (lapses != t.lapses) {
                     // this controller may have looked dead to the others: check it still owns the build first
@@ -234,6 +238,14 @@ public final class BlobLogStorage {
                 long logOffset = shipFile(t.blobs, t.key + "/" + LOG, t.log, t.logOffset);
                 long indexOffset = logOffset < 0 ? -1 : shipFile(t.blobs, t.key + "/" + INDEX, t.index, t.indexOffset);
                 if (logOffset < 0 || indexOffset < 0) {
+                    if (t.run != null && RunningBuilds.owns(t.run)) {
+                        // we own the build: a controller which lost it appended meanwhile; our local copy is the truth
+                        LOGGER.warning(() ->
+                                "Log of " + t.key + " was appended to by a previous owner; rewriting it from here");
+                        t.logOffset = rewrite(t.blobs, t.key + "/" + LOG, t.log);
+                        t.indexOffset = rewrite(t.blobs, t.key + "/" + INDEX, t.index);
+                        return;
+                    }
                     // someone else appended: another controller owns the build now
                     LOGGER.warning(
                             () -> "Log of " + t.key + " was appended to elsewhere; no longer shipping it from here");
@@ -260,6 +272,12 @@ public final class BlobLogStorage {
                 offset += n;
             }
             return offset;
+        }
+
+        /** Replaces a blob with the whole local file, as a fresh append blob; returns the new offset. */
+        private static long rewrite(AzureBlobStore blobs, String blobKey, File file) throws IOException {
+            blobs.delete(blobKey);
+            return file.exists() ? shipFile(blobs, blobKey, file, 0) : 0;
         }
 
         /** Stops shipping a build's log without shipping the rest, as when it is owned elsewhere now. */

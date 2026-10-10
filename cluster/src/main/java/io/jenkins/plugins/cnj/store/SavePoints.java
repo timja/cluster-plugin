@@ -177,6 +177,18 @@ public final class SavePoints {
         if (p == null || st.stopped || blobs == null) {
             return;
         }
+        if (jenkins.persistence.PersistenceStores.get() instanceof PostgresPersistenceStore store
+                && store.mayHaveLapsed()) {
+            // e.g. just woke from a pause: another controller may own the build by now; ship once the heartbeat is back
+            synchronized (st) {
+                if (st.pending == null) {
+                    st.pending = p;
+                } else {
+                    st.pending.nodes.putAll(merge(p.nodes, st.pending.nodes));
+                }
+            }
+            return;
+        }
         RunningBuilds.Placeholder owned = RunningBuilds.ownedPlaceholder(st.run);
         if (owned == null) {
             return; // completed meanwhile

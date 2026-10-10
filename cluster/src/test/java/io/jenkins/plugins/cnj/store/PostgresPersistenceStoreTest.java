@@ -39,7 +39,7 @@ class PostgresPersistenceStoreTest {
         try (var c = POSTGRES.createConnection("");
                 var s = c.createStatement()) {
             s.execute(
-                    "drop table if exists jenkins_store, jenkins_store_events, jenkins_members, jenkins_trigger_claims, jenkins_build_leases");
+                    "drop table if exists jenkins_store, jenkins_store_events, jenkins_members, jenkins_trigger_claims, jenkins_build_leases, jenkins_queue");
         }
         a = store();
         b = store();
@@ -61,6 +61,33 @@ class PostgresPersistenceStoreTest {
 
     private static byte[] bytes(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void controllersStartingAtOnceCreateTheSchemaOnce() throws Exception {
+        a.close();
+        b.close();
+        try (var c = POSTGRES.createConnection("");
+                var st = c.createStatement()) {
+            st.execute(
+                    "drop table if exists jenkins_store, jenkins_store_events, jenkins_members, jenkins_trigger_claims,"
+                            + " jenkins_build_leases, jenkins_queue");
+            st.execute("drop sequence if exists jenkins_store_version, jenkins_queue_ids");
+        }
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(6);
+        try {
+            var stores = new java.util.ArrayList<java.util.concurrent.Future<PostgresPersistenceStore>>();
+            for (int i = 0; i < 6; i++) {
+                stores.add(pool.submit(PostgresPersistenceStoreTest::store));
+            }
+            for (var f : stores) {
+                f.get().close(); // none fails
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        a = store();
+        b = store();
     }
 
     @Test
@@ -221,6 +248,84 @@ class PostgresPersistenceStoreTest {
         b.leases().release(key, second);
         assertFalse(b.leases().holds(key, second));
         assertTrue(a.leases().acquire(key) > second, "free again");
+    }
+
+    private static jenkins.persistence.ClusterQueue.Record waiting(long id, String job, String origin) {
+        return new jenkins.persistence.ClusterQueue.Record(
+                id,
+                job,
+                job,
+                "<list/>",
+                System.currentTimeMillis() + 60_000,
+                jenkins.persistence.ClusterQueue.State.WAITING,
+                origin,
+                null,
+                null,
+                0);
+    }
+
+    @Test
+    void sharedQueue() throws Exception {
+        var qa = a.queue();
+        var qb = b.queue();
+        java.util.List<jenkins.persistence.ClusterQueue.Record> seenByB =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        try (AutoCloseable sub = qb.subscribe(seenByB::add)) {
+            long id1 = qa.nextId();
+            assertEquals(id1, qa.publish(waiting(id1, "p", a.getOrigin())).id());
+            long id2 = qb.nextId();
+            assertTrue(id2 > id1, "ids unique across controllers");
+            assertEquals(
+                    id1,
+                    qb.publish(waiting(id2, "p", b.getOrigin())).id(),
+                    "folds into the waiting item for the same job");
+            assertNull(qb.get(id2));
+
+            assertTrue(qb.claim(id1));
+            assertFalse(qa.claim(id1), "claimed once");
+            assertTrue(qb.claim(id1), "claiming again is harmless for the claimer");
+            assertFalse(qa.cancel(id1), "no longer waiting");
+            qb.started(id1, 7);
+            assertEquals(
+                    jenkins.persistence.ClusterQueue.State.STARTED, qa.get(id1).state());
+            assertEquals(7, qa.get(id1).buildNumber());
+
+            long id3 = qa.nextId();
+            qa.publish(waiting(id3, "p", a.getOrigin())); // a new item once the previous one left the waiting state
+            assertTrue(qa.cancel(id3));
+            assertTrue(qa.pending().isEmpty());
+
+            // an item claimed by a controller which is gone is put back
+            a.heartbeat();
+            b.heartbeat();
+            long id4 = qa.nextId();
+            qa.publish(waiting(id4, "q", a.getOrigin()));
+            assertTrue(qa.claim(id4));
+            assertEquals(0, b.reclaimAndPrune(), "a is alive");
+            try (var c = POSTGRES.createConnection("");
+                    var st = c.createStatement()) {
+                st.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '"
+                        + a.getOrigin() + "'");
+            }
+            assertEquals(1, b.reclaimAndPrune());
+            assertEquals(
+                    jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id4).state());
+            assertTrue(qb.claim(id4));
+
+            for (int i = 0;
+                    i < 100
+                            && seenByB.stream()
+                                    .noneMatch(r -> r.id() == id4
+                                            && r.claimedBy() != null
+                                            && r.claimedBy().equals(b.getOrigin()));
+                    i++) {
+                Thread.sleep(100);
+            }
+            assertTrue(
+                    seenByB.stream()
+                            .anyMatch(r -> r.id() == id4 && b.getOrigin().equals(r.claimedBy())),
+                    "changes reach the other controller");
+        }
     }
 
     @Test

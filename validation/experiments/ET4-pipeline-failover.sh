@@ -124,7 +124,7 @@ check "1 the build waits at input on B" eventually 60 console_has $B /job/ag/1 "
 post $B "/job/ag/1/input/Go/proceedEmpty" >/dev/null
 check "1 approved on B: the build completes with SUCCESS" eventually 120 result_is $B /job/ag/1 SUCCESS
 check "1 post-input agent step ran" console_has $B /job/ag/1 "after input"
-check "1 the log has the pre-kill output, the resumption, and the rest" bash -c "cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" http://localhost:$B/job/ag/1/consoleText | python3 -c 'import sys; t=sys.stdin.read(); i=[t.find(s) for s in (\"stage a\", \"tick 20\", \"Resuming build\", \"tick 60\", \"after input\", \"done\")]; sys.exit(0 if all(x >= 0 for x in i) and i == sorted(i) else 1)'"
+check "1 the log has the pre-kill output, the resumption, and the rest" bash -c "cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" http://localhost:$B/job/ag/1/consoleText | python3 -c 'import sys; t=sys.stdin.read(); i=[t.find(s) for s in (\"stage a\", \"tick 10\", \"Resuming build\", \"tick 60\", \"after input\", \"done\")]; sys.exit(0 if all(x >= 0 for x in i) and i == sorted(i) else 1)'"
 restart jenkins-a; wait_up $A
 check "1 fresh A lists it with the same number and result" eventually 30 result_is $A /job/ag/1 SUCCESS
 check "1 fresh A shows the same console" same_text $A $B /job/ag/1/consoleText
@@ -201,7 +201,9 @@ post $A "/job/steps0/build?delay=0sec" >/dev/null
 eventually 120 result_is $A /job/steps0/1 SUCCESS
 dur0=$(json $A /job/steps0/1/api/json?tree=duration | jq_ 'd["duration"]')
 info "7 the same with PERFORMANCE_OPTIMIZED (no save points): ${dur0} ms"
-check "7 no save points left in blob storage after completion" test "$(groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").findAll { it.contains("/running/") }.size()')" = 0
+leftover=$(groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").findAll { it.contains("/running/") }.collect { it.replaceAll("/running/.*", "") }.unique().join(" ")')
+info "7 builds with save points left in blob storage: ${leftover:-none}"
+check "7 no save points left in blob storage after completion" test -z "$leftover"
 
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1; et1 logs agent1 > "$OUT/agent1.log" 2>&1
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true

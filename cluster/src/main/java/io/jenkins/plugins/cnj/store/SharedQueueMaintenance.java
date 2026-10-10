@@ -1,0 +1,71 @@
+package io.jenkins.plugins.cnj.store;
+
+import hudson.Extension;
+import hudson.model.AsyncPeriodicWork;
+import hudson.model.PeriodicWork;
+import hudson.model.TaskListener;
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import jenkins.persistence.PersistenceStores;
+import jenkins.util.PeriodicWorkCoordinator;
+
+/**
+ * Housekeeping for the shared build queue and cluster-singleton periodic work (Target 5).
+ */
+public final class SharedQueueMaintenance {
+
+    private static final Logger LOGGER = Logger.getLogger(SharedQueueMaintenance.class.getName());
+
+    private SharedQueueMaintenance() {}
+
+    /**
+     * Puts queue items claimed by a controller which then died back into the queue, so that another one starts them.
+     */
+    @Extension
+    public static final class Reclaim extends AsyncPeriodicWork {
+        public Reclaim() {
+            super("Reclaim shared queue items of gone controllers");
+        }
+
+        @Override
+        public long getRecurrencePeriod() {
+            return TimeUnit.SECONDS.toMillis(15);
+        }
+
+        @Override
+        protected void execute(TaskListener listener) throws IOException {
+            if (PersistenceStores.get() instanceof PostgresPersistenceStore store && store.queue() != null) {
+                int n = store.reclaimAndPrune();
+                if (n > 0) {
+                    LOGGER.info(() -> "Put " + n + " queue item(s) claimed by gone controllers back into the queue");
+                }
+            }
+        }
+
+        @Override
+        protected Level getNormalLoggingLevel() {
+            return Level.FINE;
+        }
+    }
+
+    /**
+     * Runs each period of {@link jenkins.util.ClusterSingleton} work on the first controller to claim it.
+     */
+    @Extension
+    public static final class Coordinator implements PeriodicWorkCoordinator {
+        @Override
+        public boolean shouldRun(PeriodicWork work, long period) {
+            if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+                return true;
+            }
+            try {
+                return store.claim("_periodic", work.getClass().getName(), period);
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Cannot claim " + work + " for period " + period + "; skipping it", e);
+                return false;
+            }
+        }
+    }
+}

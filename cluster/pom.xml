@@ -30,6 +30,16 @@
         <version>9.9-185.va_6c6b_3348b_c3</version>
       </dependency>
       <dependency>
+        <groupId>io.jenkins.plugins</groupId>
+        <artifactId>caffeine-api</artifactId>
+        <version>3.2.2-178.v353b_8428ed56</version>
+      </dependency>
+      <dependency>
+        <groupId>org.jenkins-ci.plugins</groupId>
+        <artifactId>scm-api</artifactId>
+        <version>728.vc30dcf7a_0df5</version>
+      </dependency>
+      <dependency>
         <groupId>org.jenkins-ci.plugins</groupId>
         <artifactId>structs</artifactId>
         <version>362.va_b_695ef4fdf9</version>
@@ -40,16 +50,6 @@
         <artifactId>workflow-step-api</artifactId>
         <version>724.v538c2362b_dfb_</version>
       </dependency>
-      <dependency>
-        <groupId>io.jenkins.plugins</groupId>
-        <artifactId>caffeine-api</artifactId>
-        <version>3.2.2-178.v353b_8428ed56</version>
-      </dependency>
-      <dependency>
-        <groupId>org.jenkins-ci.plugins</groupId>
-        <artifactId>scm-api</artifactId>
-        <version>728.vc30dcf7a_0df5</version>
-      </dependency>
     </dependencies>
   </dependencyManagement>
   <dependencies>
@@ -58,6 +58,12 @@
       <groupId>io.jenkins.plugins</groupId>
       <artifactId>azure-sdk</artifactId>
       <version>292.v2db_0b_b_b_50d35</version>
+    </dependency>
+    <dependency>
+      <!-- MilestoneStorage, for milestone across controllers -->
+      <groupId>org.jenkins-ci.plugins</groupId>
+      <artifactId>pipeline-milestone-step</artifactId>
+      <version>152.v6e22b_8cfc66c</version>
     </dependency>
     <dependency>
       <!-- LogStorageFactory, for Pipeline logs in blob storage -->

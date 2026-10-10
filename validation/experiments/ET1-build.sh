@@ -39,6 +39,16 @@ if [[ -d "$WFCPS" ]]; then
   cp "$WFCPS/plugin/target/workflow-cps.hpi" "$ET1/plugins/"
 fi
 
+# Target 5: lockable-resources with cluster locks (skipped if the checkout is absent)
+LR=${LR:-/Users/timja/code/jenkins/lockable-resources-plugin}
+LR_REF=${LR_REF:-cnj/t5-m4-cluster-locks}
+if [[ -d "$LR" ]]; then
+  echo "lockable-resources $LR_REF ($(git -C "$LR" rev-parse --short "$LR_REF"))"
+  git -C "$LR" checkout -q "$LR_REF"
+  (cd "$LR" && $MVN package)
+  cp "$LR/target/lockable-resources.hpi" "$ET1/plugins/"
+fi
+
 echo "persistence-store-postgresql"
 (cd "$HERE/../impl/persistence-store-postgresql" && $MVN package)
 cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgresql.hpi" "$ET1/plugins/"
@@ -46,6 +56,7 @@ cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgres
 { echo "core $CORE_REF $(git -C "$CORE" rev-parse "$CORE_REF")"
   echo "cloudbees-folder $FOLDER_REF $(git -C "$FOLDER" rev-parse "$FOLDER_REF")"
   [[ -d "$WFCPS" ]] && echo "workflow-cps $WFCPS_REF $(git -C "$WFCPS" rev-parse "$WFCPS_REF")"
+  [[ -d "$LR" ]] && echo "lockable-resources $LR_REF $(git -C "$LR" rev-parse "$LR_REF")"
   echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
 
