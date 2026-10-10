@@ -90,6 +90,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                             + " build_number int not null default 0, updated_at timestamptz not null default now())");
                     s.execute(
                             "create unique index if not exists jenkins_queue_waiting on jenkins_queue (dedup_key) where state = 'WAITING'");
+                    // Target 7: which controller holds each agent's channel
+                    s.execute("create table if not exists jenkins_channels ("
+                            + "agent text primary key, origin text not null, since timestamptz not null default now())");
                     s.execute("create table if not exists jenkins_store_events ("
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
@@ -746,6 +749,53 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     return rs.next() ? rs.getString(1) : null;
+                }
+            }
+        });
+    }
+
+    /** Records that this controller now holds the channel of an agent (Target 7). */
+    void channelConnected(@NonNull String agent) throws IOException {
+        run("record the channel of " + agent, c -> {
+            try (PreparedStatement ps = c.prepareStatement("insert into jenkins_channels (agent, origin) values (?, ?)"
+                    + " on conflict (agent) do update set origin = excluded.origin, since = now()")) {
+                ps.setString(1, agent);
+                ps.setString(2, origin);
+                ps.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    /** Records that this controller no longer holds the channel of an agent, unless another one took it meanwhile. */
+    void channelDisconnected(@NonNull String agent) throws IOException {
+        run("forget the channel of " + agent, c -> {
+            try (PreparedStatement ps = c.prepareStatement("delete from jenkins_channels where agent = ? and origin = ?")) {
+                ps.setString(1, agent);
+                ps.setString(2, origin);
+                ps.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    /**
+     * The live controller holding an agent's channel, other than this one.
+     *
+     * @return its name and internal URL, or null
+     */
+    @CheckForNull
+    String[] channelHolder(@NonNull String agent) throws IOException {
+        return run("look up the channel of " + agent, c -> {
+            try (PreparedStatement ps = c.prepareStatement("select m.name, m.url from jenkins_channels ch"
+                    + " join jenkins_members m on m.origin = ch.origin"
+                    + " where ch.agent = ? and ch.origin <> ? and m.url is not null"
+                    + " and m.heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                ps.setString(1, agent);
+                ps.setString(2, origin);
+                ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? new String[] {rs.getString(1), rs.getString(2)} : null;
                 }
             }
         });

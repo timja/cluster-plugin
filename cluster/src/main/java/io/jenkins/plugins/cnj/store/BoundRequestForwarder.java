@@ -11,20 +11,7 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.persistence.PersistenceStores;
 import org.kohsuke.stapler.bind.BoundObjectTable;
@@ -40,24 +27,7 @@ import org.kohsuke.stapler.bind.BoundObjectTable;
 public final class BoundRequestForwarder implements Filter {
 
     private static final Logger LOGGER = Logger.getLogger(BoundRequestForwarder.class.getName());
-    static final String FORWARDED = "X-CNJ-Forwarded-From";
-    private static final Set<String> HOP_BY_HOP = Set.of(
-            "connection",
-            "content-length",
-            "host",
-            "transfer-encoding",
-            "keep-alive",
-            "upgrade",
-            "te",
-            "trailer",
-            "proxy-connection",
-            "expect");
     private static final AtomicLong forwarded = new AtomicLong();
-
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
 
     /** Requests forwarded so far, for diagnostics. */
     public static long getForwardedCount() {
@@ -94,7 +64,7 @@ public final class BoundRequestForwarder implements Filter {
             throws IOException, ServletException {
         if (!(request instanceof HttpServletRequest req)
                 || !(response instanceof HttpServletResponse rsp)
-                || req.getHeader(FORWARDED) != null) {
+                || Forwarding.wasForwarded(req)) {
             chain.doFilter(request, response);
             return;
         }
@@ -107,52 +77,10 @@ public final class BoundRequestForwarder implements Filter {
             chain.doFilter(request, response);
             return;
         }
-        String path = req.getRequestURI().substring(req.getContextPath().length());
-        String target = url.replaceAll("/+$", "")
-                + req.getContextPath()
-                + path
-                + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
-        try {
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(target)).timeout(Duration.ofSeconds(60));
-            for (String name : Collections.list(req.getHeaderNames())) {
-                if (!HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
-                    for (String value : Collections.list(req.getHeaders(name))) {
-                        b.header(name, value);
-                    }
-                }
-            }
-            b.header(FORWARDED, PostgresPersistenceStore.NAME);
-            byte[] body;
-            try (InputStream in = req.getInputStream()) {
-                body = in.readAllBytes();
-            }
-            b.method(
-                    req.getMethod(),
-                    body.length == 0
-                            ? HttpRequest.BodyPublishers.noBody()
-                            : HttpRequest.BodyPublishers.ofByteArray(body));
-            HttpResponse<InputStream> r = http.send(b.build(), HttpResponse.BodyHandlers.ofInputStream());
-            rsp.setStatus(r.statusCode());
-            for (Map.Entry<String, List<String>> h : r.headers().map().entrySet()) {
-                if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))
-                        && !h.getKey().startsWith(":")) {
-                    for (String value : h.getValue()) {
-                        rsp.addHeader(h.getKey(), value);
-                    }
-                }
-            }
-            rsp.setHeader(FORWARDED, owner);
-            try (InputStream in = r.body();
-                    OutputStream out = rsp.getOutputStream()) {
-                in.transferTo(out);
-            }
+        if (Forwarding.forward(req, rsp, owner, url)) {
             forwarded.incrementAndGet();
-            LOGGER.fine(() -> "Forwarded " + req.getMethod() + " " + path + " to " + owner + ": " + r.statusCode());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException(e);
-        } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Failed to forward " + path + " to " + owner, e);
+        } else {
+            LOGGER.warning(() -> "Failed to forward " + req.getRequestURI() + " to " + owner);
             rsp.sendError(HttpServletResponse.SC_BAD_GATEWAY, "Could not reach " + owner);
         }
     }
