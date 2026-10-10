@@ -5,6 +5,8 @@
 #   plugins/persistence-store-postgresql.hpi   from impl/ in this checkout
 # Core is built in a separate worktree so the main checkout can keep working.
 set -euo pipefail
+# fsmonitor daemons can hang git in non-interactive runs
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; ET1="$HERE/.et1"
 CORE=${CORE:-/Users/timja/code/jenkins/jenkins}
 CORE_WT=${CORE_WT:-/Users/timja/code/jenkins/jenkins-cnj-test}
