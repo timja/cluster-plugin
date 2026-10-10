@@ -7,6 +7,11 @@ resources:
   limits: {memory: 2Gi}
 javaOpts: ""
 
+# The Service browsers, API clients and agents use (no session affinity).
+service:
+  type: ClusterIP
+  nodePort: null         # with type NodePort, e.g. 30080
+
 # The S0 key material (pre-plugin keys), identical for every controller: a Secret with a seed.tgz key,
 # made once with scripts/make-seed-secret.sh.
 seedSecret: cnj-seed

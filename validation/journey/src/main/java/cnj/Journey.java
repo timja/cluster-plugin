@@ -47,7 +47,10 @@ public final class Journey {
     }
 
     private static void record(WebResponse r) {
-        String upstream = r.getResponseHeaderValue("X-Upstream");
+        String upstream = r.getResponseHeaderValue("X-CNJ-Controller"); // set by the store plugin on every answer
+        if (upstream == null) {
+            upstream = r.getResponseHeaderValue("X-Upstream"); // nginx (rr)
+        }
         if (upstream != null) {
             upstreams.add(upstream);
         }

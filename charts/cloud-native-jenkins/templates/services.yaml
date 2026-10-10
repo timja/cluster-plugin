@@ -5,8 +5,15 @@ metadata:
   name: {{ include "cnj.fullname" . }}
 spec:
   selector: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-controller}
+  type: {{ .Values.service.type }}
   sessionAffinity: None
-  ports: [{name: http, port: 8080, targetPort: 8080}]
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
 ---
 # Controllers reaching each other (request forwarding, Targets 6-7), and stable per-controller names.
 apiVersion: v1

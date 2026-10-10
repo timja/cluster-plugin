@@ -105,8 +105,14 @@ public final class OwnerRoutingFilter implements Filter {
         return URLDecoder.decode(segment.replace("+", "%2B"), StandardCharsets.UTF_8);
     }
 
+    /** Names the controller answering, on every response (behind any load balancer). */
+    static final String SERVED_BY = "X-CNJ-Controller";
+
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+        if (response instanceof HttpServletResponse r) {
+            r.setHeader(SERVED_BY, PostgresPersistenceStore.NAME); // a forwarded answer overrides it with the owner's
+        }
         if (request instanceof HttpServletRequest req
                 && response instanceof HttpServletResponse rsp
                 && !Forwarding.wasForwarded(req)
