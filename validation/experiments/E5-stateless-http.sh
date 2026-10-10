@@ -34,8 +34,8 @@ r "| attempt | crumb issued by | POST served by | HTTP |"
 r "|---|---|---|---|"
 for i in $(seq 1 6); do
   rm -f "$CJ.2"; (( i % 2 == 0 )) && spacer
-  crumb=$(curl -s -u "$AUTH" -c "$CJ.2" -D "$OUT_DIR/h1" "http://localhost:$LB/crumbIssuer/api/json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["crumbRequestField"]+":"+d["crumb"])')
-  code=$(curl -s -o /dev/null -D "$OUT_DIR/h2" -w '%{http_code}' -u "$AUTH" -b "$CJ.2" -H "$crumb" -X POST "http://localhost:$LB/scriptText" --data-urlencode 'script=print 1')
+  crumb=$(curl -s -u "$PASSWORD_AUTH" -c "$CJ.2" -D "$OUT_DIR/h1" "http://localhost:$LB/crumbIssuer/api/json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["crumbRequestField"]+":"+d["crumb"])')
+  code=$(curl -s -o /dev/null -D "$OUT_DIR/h2" -w '%{http_code}' -u "$PASSWORD_AUTH" -b "$CJ.2" -H "$crumb" -X POST "http://localhost:$LB/scriptText" --data-urlencode 'script=print 1')
   r "| $i | $(ups "$OUT_DIR/h1") | $(ups "$OUT_DIR/h2") | $code |"
 done
 

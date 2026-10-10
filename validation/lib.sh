@@ -6,8 +6,12 @@ VALIDATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$VALIDATION_DIR")"
 RAW_DIR="$ROOT_DIR/findings/raw"
 OUT_DIR="$VALIDATION_DIR/out"
-AUTH="admin:admin"
-COOKIES="$OUT_DIR/.cookies"
+# API token provisioned on every controller by jenkins/init.groovy.d/cnj-admin-token.groovy:
+# token auth needs no crumbs or session cookies, so calls are stateless and safe to run concurrently.
+CNJ_ADMIN_TOKEN=${CNJ_ADMIN_TOKEN:-1100000000000000000000000000c0ffee}
+AUTH="admin:$CNJ_ADMIN_TOKEN"
+# password auth, only for experiments about sessions and crumbs (E5)
+PASSWORD_AUTH="admin:admin"
 
 dc() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.yaml" "$@"; }
 
@@ -31,17 +35,10 @@ wait_up() {
   log "Jenkins on $port is up ($((SECONDS - start))s)"
 }
 
-_crumb() {
-  local port=$1
-  curl -sf -u "$AUTH" -c "$COOKIES.$port" "http://localhost:$port/crumbIssuer/api/json" \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["crumbRequestField"]+":"+d["crumb"])'
-}
-
-# post <port> <path> [curl args...]: authenticated POST with crumb.
+# post <port> <path> [curl args...]: authenticated POST (API token, so no crumb).
 post() {
   local port=$1 path=$2; shift 2
-  local crumb; crumb=$(_crumb "$port")
-  curl -sf -u "$AUTH" -b "$COOKIES.$port" -H "$crumb" -X POST "http://localhost:$port$path" "$@"
+  curl -sf -u "$AUTH" -X POST "http://localhost:$port$path" "$@"
 }
 
 # groovy <port> <script>: run a script console script, print its output.
