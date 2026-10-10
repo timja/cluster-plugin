@@ -5,6 +5,8 @@
 #
 # Prerequisite: experiments/ET1-build.sh has populated validation/.et1/{war,plugins}.
 source "$(dirname "$0")/../lib.sh"
+# the scratch repos are throwaway; never start fsmonitor daemons for them (they can hang in the background)
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=8081 B=8082 JOBS="$VALIDATION_DIR/scenarios/jobs" OUT="$RAW_DIR/ET1" ET1="$VALIDATION_DIR/.et1"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
