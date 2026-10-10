@@ -51,7 +51,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     private Thread listenerThread;
     private volatile boolean closed;
 
-    public PostgresPersistenceStore(String url, String user, String password, Predicate<String> owns) throws IOException {
+    public PostgresPersistenceStore(String url, String user, String password, Predicate<String> owns)
+            throws IOException {
         this.url = url;
         this.user = user;
         this.password = password;
@@ -63,6 +64,12 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("create table if not exists jenkins_store ("
                             + "key text primary key, content bytea not null, sha256 bytea not null, version bigint not null,"
                             + " updated_at timestamptz not null default now(), updated_by text not null)");
+                    s.execute(
+                            "create table if not exists jenkins_members ("
+                                    + "origin text primary key, heartbeat_at timestamptz not null, started_at timestamptz not null default now())");
+                    s.execute("create table if not exists jenkins_trigger_claims ("
+                            + "item text not null, trigger text not null, tick bigint not null, origin text not null,"
+                            + " claimed_at timestamptz not null default now(), primary key (item, trigger, tick))");
                     s.execute("create table if not exists jenkins_store_events ("
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
@@ -90,7 +97,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     public Entry read(@NonNull String key) throws IOException {
         try {
             return withTransaction(c -> {
-                try (PreparedStatement ps = c.prepareStatement("select content, version from jenkins_store where key = ?")) {
+                try (PreparedStatement ps =
+                        c.prepareStatement("select content, version from jenkins_store where key = ?")) {
                     ps.setString(1, key);
                     try (ResultSet rs = ps.executeQuery()) {
                         return rs.next() ? new Entry(rs.getBytes(1), rs.getLong(2)) : null;
@@ -109,7 +117,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             return withTransaction(c -> {
                 long actual = ABSENT;
                 byte[] actualSha = null;
-                try (PreparedStatement ps = c.prepareStatement("select version, sha256 from jenkins_store where key = ? for update")) {
+                try (PreparedStatement ps =
+                        c.prepareStatement("select version, sha256 from jenkins_store where key = ? for update")) {
                     ps.setString(1, key);
                     try (ResultSet rs = ps.executeQuery()) {
                         if (rs.next()) {
@@ -126,8 +135,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 }
                 long version = nextVersion(c);
                 if (actual == ABSENT) {
-                    try (PreparedStatement ps = c.prepareStatement("insert into jenkins_store (key, content, sha256, version, updated_by)"
-                            + " values (?, ?, ?, ?, ?) on conflict (key) do nothing")) {
+                    try (PreparedStatement ps =
+                            c.prepareStatement("insert into jenkins_store (key, content, sha256, version, updated_by)"
+                                    + " values (?, ?, ?, ?, ?) on conflict (key) do nothing")) {
                         ps.setString(1, key);
                         ps.setBytes(2, content);
                         ps.setBytes(3, sha);
@@ -139,8 +149,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                         }
                     }
                 } else {
-                    try (PreparedStatement ps = c.prepareStatement("update jenkins_store set content = ?, sha256 = ?, version = ?,"
-                            + " updated_at = now(), updated_by = ? where key = ?")) {
+                    try (PreparedStatement ps =
+                            c.prepareStatement("update jenkins_store set content = ?, sha256 = ?, version = ?,"
+                                    + " updated_at = now(), updated_by = ? where key = ?")) {
                         ps.setBytes(1, content);
                         ps.setBytes(2, sha);
                         ps.setLong(3, version);
@@ -166,7 +177,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     public void delete(@NonNull String key, long expectedVersion) throws IOException {
         try {
             withTransaction(c -> {
-                try (PreparedStatement ps = c.prepareStatement("delete from jenkins_store where key = ? returning version")) {
+                try (PreparedStatement ps =
+                        c.prepareStatement("delete from jenkins_store where key = ? returning version")) {
                     ps.setString(1, key);
                     try (ResultSet rs = ps.executeQuery()) {
                         if (!rs.next()) {
@@ -216,7 +228,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     public void move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
         try {
             withTransaction(c -> {
-                try (PreparedStatement ps = c.prepareStatement("select 1 from jenkins_store where key = ? or starts_with(key, ?) limit 1")) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "select 1 from jenkins_store where key = ? or starts_with(key, ?) limit 1")) {
                     ps.setString(1, toPrefix);
                     ps.setString(2, toPrefix + "/");
                     try (ResultSet rs = ps.executeQuery()) {
@@ -258,6 +271,125 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
+    // ------------------------------------------------------------------ cluster membership and trigger claims
+
+    /** How often a controller records that it is alive. */
+    static final long HEARTBEAT_MILLIS =
+            Long.getLong(PostgresPersistenceStore.class.getName() + ".heartbeatMillis", 5_000);
+    /** How long after its last heartbeat a controller is considered gone. */
+    static final long MEMBER_TIMEOUT_MILLIS =
+            Long.getLong(PostgresPersistenceStore.class.getName() + ".memberTimeoutMillis", 20_000);
+
+    private Thread heartbeatThread;
+
+    /**
+     * Starts recording this controller as a live member every {@link #HEARTBEAT_MILLIS}.
+     */
+    public synchronized void startHeartbeat() throws IOException {
+        heartbeat();
+        if (heartbeatThread == null) {
+            heartbeatThread = new Thread(
+                    () -> {
+                        long lastPrune = 0;
+                        while (!closed) {
+                            try {
+                                Thread.sleep(HEARTBEAT_MILLIS);
+                                heartbeat();
+                                if (System.currentTimeMillis() - lastPrune > 3_600_000) {
+                                    pruneClaims();
+                                    lastPrune = System.currentTimeMillis();
+                                }
+                            } catch (InterruptedException e) {
+                                return;
+                            } catch (IOException | RuntimeException e) {
+                                LOGGER.log(Level.WARNING, "Heartbeat failed", e);
+                            }
+                        }
+                    },
+                    "PostgresPersistenceStore heartbeat");
+            heartbeatThread.setDaemon(true);
+            heartbeatThread.start();
+        }
+    }
+
+    void heartbeat() throws IOException {
+        try {
+            withTransaction(c -> {
+                try (PreparedStatement ps =
+                        c.prepareStatement("insert into jenkins_members (origin, heartbeat_at) values (?, now())"
+                                + " on conflict (origin) do update set heartbeat_at = now()")) {
+                    ps.setString(1, origin);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (SQLException e) {
+            throw new IOException("Failed to record heartbeat", e);
+        }
+    }
+
+    /**
+     * Origins of controllers whose heartbeat is recent, always including this one.
+     */
+    @NonNull
+    public Set<String> aliveMembers() throws IOException {
+        try {
+            return withTransaction(c -> {
+                Set<String> members = new TreeSet<>();
+                members.add(origin);
+                try (PreparedStatement ps = c.prepareStatement(
+                        "select origin from jenkins_members where heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                    ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            members.add(rs.getString(1));
+                        }
+                    }
+                }
+                return members;
+            });
+        } catch (SQLException e) {
+            throw new IOException("Failed to list members", e);
+        }
+    }
+
+    /**
+     * Claims one tick of one trigger of one item for this controller.
+     *
+     * @return true if this controller is the first (and only) one to claim it
+     */
+    public boolean claim(@NonNull String item, @NonNull String trigger, long tick) throws IOException {
+        try {
+            return withTransaction(c -> {
+                try (PreparedStatement ps =
+                        c.prepareStatement("insert into jenkins_trigger_claims (item, trigger, tick, origin)"
+                                + " values (?, ?, ?, ?) on conflict do nothing")) {
+                    ps.setString(1, item);
+                    ps.setString(2, trigger);
+                    ps.setLong(3, tick);
+                    ps.setString(4, origin);
+                    return ps.executeUpdate() == 1;
+                }
+            });
+        } catch (SQLException e) {
+            throw new IOException("Failed to claim " + trigger + " of " + item, e);
+        }
+    }
+
+    private void pruneClaims() throws IOException {
+        try {
+            withTransaction(c -> {
+                try (Statement s = c.createStatement()) {
+                    s.executeUpdate("delete from jenkins_trigger_claims where claimed_at < now() - interval '1 day'");
+                    s.executeUpdate("delete from jenkins_store_events where at < now() - interval '1 day'");
+                }
+                return null;
+            });
+        } catch (SQLException e) {
+            throw new IOException("Failed to prune claims", e);
+        }
+    }
+
     @NonNull
     @Override
     public synchronized AutoCloseable subscribe(@NonNull Consumer<ChangeEvent> listener) {
@@ -281,7 +413,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("listen " + CHANNEL);
                 }
                 if (lastSeq < 0) {
-                    try (Statement s = c.createStatement(); ResultSet rs = s.executeQuery("select coalesce(max(seq), 0) from jenkins_store_events")) {
+                    try (Statement s = c.createStatement();
+                            ResultSet rs = s.executeQuery("select coalesce(max(seq), 0) from jenkins_store_events")) {
                         rs.next();
                         lastSeq = rs.getLong(1);
                     }
@@ -311,7 +444,12 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     lastSeq = rs.getLong(1);
-                    ChangeEvent e = new ChangeEvent(ChangeEvent.Kind.valueOf(rs.getString(2)), rs.getString(3), rs.getString(4), rs.getLong(5), rs.getString(6));
+                    ChangeEvent e = new ChangeEvent(
+                            ChangeEvent.Kind.valueOf(rs.getString(2)),
+                            rs.getString(3),
+                            rs.getString(4),
+                            rs.getLong(5),
+                            rs.getString(6));
                     for (Consumer<ChangeEvent> l : listeners) {
                         try {
                             l.accept(e);
@@ -328,7 +466,22 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     @Override
     public void close() {
         closed = true;
+        try {
+            // leave the cluster promptly so others take over our items without waiting for the timeout
+            withTransaction(c -> {
+                try (PreparedStatement ps = c.prepareStatement("delete from jenkins_members where origin = ?")) {
+                    ps.setString(1, origin);
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (SQLException | RuntimeException e) {
+            LOGGER.log(Level.FINE, "Failed to leave the cluster", e);
+        }
         synchronized (this) {
+            if (heartbeatThread != null) {
+                heartbeatThread.interrupt();
+            }
             if (connection != null) {
                 try {
                     connection.close();
@@ -340,7 +493,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
-    private void event(Connection c, ChangeEvent.Kind kind, String key, String oldKey, long version) throws SQLException {
+    private void event(Connection c, ChangeEvent.Kind kind, String key, String oldKey, long version)
+            throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(
                 "insert into jenkins_store_events (kind, key, old_key, version, origin) values (?, ?, ?, ?, ?)")) {
             ps.setString(1, kind.name());
@@ -356,7 +510,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     private static long nextVersion(Connection c) throws SQLException {
-        try (Statement s = c.createStatement(); ResultSet rs = s.executeQuery("select nextval('jenkins_store_version')")) {
+        try (Statement s = c.createStatement();
+                ResultSet rs = s.executeQuery("select nextval('jenkins_store_version')")) {
             rs.next();
             return rs.getLong(1);
         }

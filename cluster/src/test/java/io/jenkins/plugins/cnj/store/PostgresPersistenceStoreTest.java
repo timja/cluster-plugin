@@ -36,8 +36,10 @@ class PostgresPersistenceStoreTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        try (var c = POSTGRES.createConnection(""); var s = c.createStatement()) {
-            s.execute("drop table if exists jenkins_store, jenkins_store_events");
+        try (var c = POSTGRES.createConnection("");
+                var s = c.createStatement()) {
+            s.execute(
+                    "drop table if exists jenkins_store, jenkins_store_events, jenkins_members, jenkins_trigger_claims");
         }
         a = store();
         b = store();
@@ -50,8 +52,11 @@ class PostgresPersistenceStoreTest {
     }
 
     private static PostgresPersistenceStore store() throws Exception {
-        return new PostgresPersistenceStore(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(),
-                key -> PostgresPersistenceStoreProvider.ITEM_CONFIG.matcher(key).matches());
+        return new PostgresPersistenceStore(
+                POSTGRES.getJdbcUrl(),
+                POSTGRES.getUsername(),
+                POSTGRES.getPassword(),
+                key -> PostgresPersistenceStoreProvider.OWNED.matcher(key).matches());
     }
 
     private static byte[] bytes(String s) {
@@ -65,8 +70,11 @@ class PostgresPersistenceStoreTest {
         assertTrue(a.owns("jobs/mb/branches/main/config.xml"));
         assertFalse(a.owns("config.xml"));
         assertFalse(a.owns("jobs/p/builds/1/build.xml"));
-        assertFalse(a.owns("jobs/p/nextBuildNumber"));
+        assertTrue(a.owns("jobs/p/nextBuildNumber"));
+        assertTrue(a.owns("jobs/mb/branches/main/scm-revision-hash.xml"));
+        assertTrue(a.owns("jobs/mb/branches/main/scm-last-seen-revision-hash.xml"));
         assertFalse(a.owns("jobs/mb/state.xml"));
+        assertFalse(a.owns("jobs/p/builds/1/build.xml"));
     }
 
     @Test
@@ -85,7 +93,8 @@ class PostgresPersistenceStoreTest {
         long v1 = a.write("jobs/p/config.xml", bytes("one"), PersistenceStore.ABSENT);
         assertThrows(ConflictException.class, () -> b.write("jobs/p/config.xml", bytes("x"), PersistenceStore.ABSENT));
         b.write("jobs/p/config.xml", bytes("two"), v1);
-        ConflictException c = assertThrows(ConflictException.class, () -> a.write("jobs/p/config.xml", bytes("three"), v1));
+        ConflictException c =
+                assertThrows(ConflictException.class, () -> a.write("jobs/p/config.xml", bytes("three"), v1));
         assertEquals("jobs/p/config.xml", c.getKey());
         assertThrows(ConflictException.class, () -> a.delete("jobs/p/config.xml", v1));
         a.write("jobs/p/config.xml", bytes("four"), PersistenceStore.ANY);
@@ -144,7 +153,9 @@ class PostgresPersistenceStoreTest {
                 Thread.sleep(100);
             }
             assertEquals(3, seen.size(), seen::toString);
-            assertEquals(new ChangeEvent(ChangeEvent.Kind.WRITTEN, "jobs/p/config.xml", null, v, a.getOrigin()), seen.get(0));
+            assertEquals(
+                    new ChangeEvent(ChangeEvent.Kind.WRITTEN, "jobs/p/config.xml", null, v, a.getOrigin()),
+                    seen.get(0));
             assertEquals(ChangeEvent.Kind.MOVED, seen.get(1).kind());
             assertEquals("jobs/q/config.xml", seen.get(1).key());
             assertEquals("jobs/p/config.xml", seen.get(1).oldKey());
@@ -159,8 +170,10 @@ class PostgresPersistenceStoreTest {
         try (AutoCloseable sub = b.subscribe(seen::add)) {
             Thread.sleep(1500);
             // kill every connection of the listener; changes made while it is down must still arrive
-            try (var c = POSTGRES.createConnection(""); var s = c.createStatement()) {
-                s.execute("select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid() and (query like 'listen%' or query like '%jenkins_store_events where seq%')");
+            try (var c = POSTGRES.createConnection("");
+                    var s = c.createStatement()) {
+                s.execute(
+                        "select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid() and (query like 'listen%' or query like '%jenkins_store_events where seq%')");
             }
             a.write("jobs/r/config.xml", bytes("while down"), PersistenceStore.ANY);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
@@ -169,5 +182,47 @@ class PostgresPersistenceStoreTest {
             }
             assertEquals("jobs/r/config.xml", seen.get(0).key());
         }
+    }
+
+    @Test
+    void membership() throws Exception {
+        a.startHeartbeat();
+        b.startHeartbeat();
+        assertThat(a.aliveMembers(), containsInAnyOrder(a.getOrigin(), b.getOrigin()));
+        b.close();
+        assertThat(a.aliveMembers(), contains(a.getOrigin()));
+        b = store();
+    }
+
+    @Test
+    void claims() throws Exception {
+        assertTrue(a.claim("job", "trigger", 100));
+        assertFalse(b.claim("job", "trigger", 100));
+        assertFalse(a.claim("job", "trigger", 100));
+        assertTrue(b.claim("job", "trigger", 101));
+        assertTrue(b.claim("other", "trigger", 100));
+    }
+
+    @Test
+    void rendezvousOwnership() {
+        java.util.List<String> three = List.of("m1", "m2", "m3");
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        for (int i = 0; i < 300; i++) {
+            String name = "job" + i;
+            String owner = PostgresTriggerCoordinator.ownerOf(name, three);
+            counts.merge(owner, 1, Integer::sum);
+            // removing a member only moves the items it owned
+            for (String gone : three) {
+                java.util.List<String> two = new java.util.ArrayList<>(three);
+                two.remove(gone);
+                if (!owner.equals(gone)) {
+                    assertEquals(owner, PostgresTriggerCoordinator.ownerOf(name, two));
+                }
+            }
+        }
+        for (String m : three) {
+            assertTrue(counts.get(m) > 60, counts::toString);
+        }
+        assertEquals("folder", PostgresTriggerCoordinator.topLevel("folder/sub/job"));
     }
 }

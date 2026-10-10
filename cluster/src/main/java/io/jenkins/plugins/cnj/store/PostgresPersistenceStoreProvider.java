@@ -13,15 +13,21 @@ import jenkins.persistence.PersistenceStoreProvider;
  * Activates {@link PostgresPersistenceStore} when {@code CNJ_STORE_URL} (or the system property
  * {@code io.jenkins.plugins.cnj.store.url}) is set. Credentials come from {@code CNJ_STORE_USER} / {@code CNJ_STORE_PASSWORD}.
  *
- * <p>Owns item configuration: {@code config.xml} of top-level items, folder children ({@code jobs/})
- * and multibranch children ({@code branches/}).
+ * <p>Owns, for top-level items, folder children ({@code jobs/}) and multibranch children ({@code branches/}):
+ * <ul>
+ * <li>{@code config.xml}: item configuration (Target 1)
+ * <li>{@code nextBuildNumber}: the cluster-wide build number sequence (Target 2)
+ * <li>{@code scm-revision-hash.xml}, {@code scm-last-seen-revision-hash.xml}: branch indexing state,
+ *     so whichever controller indexes compares against the same revisions (Target 2)
+ * </ul>
  */
 @Extension
 public class PostgresPersistenceStoreProvider implements PersistenceStoreProvider {
 
     private static final Logger LOGGER = Logger.getLogger(PostgresPersistenceStoreProvider.class.getName());
 
-    static final Pattern ITEM_CONFIG = Pattern.compile("jobs/[^/]+(/(jobs|branches)/[^/]+)*/config\\.xml");
+    static final Pattern OWNED = Pattern.compile(
+            "jobs/[^/]+(/(jobs|branches)/[^/]+)*/(config\\.xml|nextBuildNumber|scm-revision-hash\\.xml|scm-last-seen-revision-hash\\.xml)");
 
     @CheckForNull
     @Override
@@ -31,8 +37,13 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
             return null;
         }
         try {
-            return new PostgresPersistenceStore(url, setting("user", "CNJ_STORE_USER"), setting("password", "CNJ_STORE_PASSWORD"),
-                    key -> ITEM_CONFIG.matcher(key).matches());
+            PostgresPersistenceStore store = new PostgresPersistenceStore(
+                    url,
+                    setting("user", "CNJ_STORE_USER"),
+                    setting("password", "CNJ_STORE_PASSWORD"),
+                    key -> OWNED.matcher(key).matches());
+            store.startHeartbeat();
+            return store;
         } catch (IOException e) {
             // Refusing to start without the store is safer than silently diverging from other controllers.
             LOGGER.log(Level.SEVERE, "Cannot connect to persistence store " + url, e);
