@@ -47,6 +47,11 @@ postgres:
   url: ""                # e.g. jdbc:postgresql://db.example.com:5432/jenkins when not in-chart
   user: jenkins
   password: jenkins
+# Persistent volumes for the in-chart Postgres and Azurite (kind: the local-path provisioner)
+persistence:
+  enabled: true
+  size: 2Gi
+  storageClass: ""
 blob:
   inChart: true
   image: mcr.microsoft.com/azure-storage/azurite:3.34.0
