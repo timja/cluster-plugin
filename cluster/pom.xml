@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.jenkins-ci.plugins</groupId>
+        <artifactId>plugin</artifactId>
+        <version>6.2236.v12dd4c483242</version>
+        <relativePath />
+    </parent>
+    <groupId>io.jenkins.plugins.cnj</groupId>
+    <artifactId>persistence-store-postgresql</artifactId>
+    <version>${changelist}</version>
+    <packaging>hpi</packaging>
+    <name>Persistence Store: PostgreSQL</name>
+    <description>Stores item configuration in PostgreSQL so several controllers can share it (cloud-native Jenkins, Target 1).</description>
+    <properties>
+        <changelist>999999-SNAPSHOT</changelist>
+        <!-- Needs the jenkins.persistence SPI from the cnj/t1-* core branches, installed locally. -->
+        <jenkins.version>2.586-SNAPSHOT</jenkins.version>
+        <useBeta>true</useBeta>
+        <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
+        <spotbugs.failOnError>false</spotbugs.failOnError>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.8</version>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>1.21.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>1.21.4</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <repositories>
+        <repository>
+            <id>repo.jenkins-ci.org</id>
+            <url>https://repo.jenkins-ci.org/public/</url>
+        </repository>
+    </repositories>
+    <pluginRepositories>
+        <pluginRepository>
+            <id>repo.jenkins-ci.org</id>
+            <url>https://repo.jenkins-ci.org/public/</url>
+        </pluginRepository>
+    </pluginRepositories>
+</project>

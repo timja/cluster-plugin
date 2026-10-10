@@ -1,0 +1,12 @@
+# S0: byte-identical on every controller (no per-controller values).
+jenkins:
+  systemMessage: "cloud-native-jenkins ET1"
+  numExecutors: 4
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: admin
+  authorizationStrategy: loggedInUsersCanDoAnything
+  crumbIssuer: standard

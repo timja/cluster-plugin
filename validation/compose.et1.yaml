@@ -1,0 +1,66 @@
+# Target 1 acceptance (ET1): two controllers with EPHEMERAL homes (tmpfs) sharing item configuration
+# through the Postgres persistence store. Standalone (not an overlay of compose.yaml).
+#
+#   docker compose -f compose.et1.yaml up -d
+#
+# Populated by experiments/ET1-shared-items.sh under .et1/:
+#   war/jenkins.war   core from the cnj/t1 integration branch
+#   plugins/*.hpi     persistence-store-postgresql, cloudbees-folder from cnj/t1 branches
+#   seed/             S0 key material (findings/E8)
+#   repo/             git repository shared by both controllers (multibranch scenario)
+name: et1
+
+x-jenkins: &jenkins
+  image: cnj/jenkins:dev
+  depends_on: [postgres]
+  tmpfs:
+    - /var/jenkins_home:uid=1000,gid=1000,mode=0755,size=2g
+  environment: &env
+    CASC_JENKINS_CONFIG: /casc
+    JAVA_OPTS: >-
+      -Djenkins.install.runSetupWizard=false
+      -Dhudson.model.UpdateCenter.never=true
+      -Dhudson.model.DownloadService.never=true
+      -Djava.awt.headless=true
+      -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true
+      ${CNJ_JAVA_OPTS:-}
+    CNJ_STORE_URL: jdbc:postgresql://postgres:5432/jenkins
+    CNJ_STORE_USER: jenkins
+    CNJ_STORE_PASSWORD: jenkins
+    CNJ_SEED_DIR: /et1/seed
+    CNJ_INOTIFY: ${CNJ_INOTIFY:-0}
+    # the shared repo is bind-mounted with a host owner
+    GIT_CONFIG_COUNT: "1"
+    GIT_CONFIG_KEY_0: safe.directory
+    GIT_CONFIG_VALUE_0: "*"
+  volumes: &vols
+    - ./jenkins/casc-et1:/casc:ro
+    - ./out:/inventory
+    - ./.et1:/et1
+    - ./.et1/war:/war-override:ro
+    - ./.et1/plugins:/extra-plugins:ro
+    - ./.et1/repo:/repo
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: jenkins
+      POSTGRES_PASSWORD: jenkins
+      POSTGRES_DB: jenkins
+
+  jenkins-a:
+    <<: *jenkins
+    hostname: jenkins-a
+    environment:
+      <<: *env
+      CNJ_NAME: jenkins-a
+    ports: ["8081:8080"]
+
+  jenkins-b:
+    <<: *jenkins
+    hostname: jenkins-b
+    environment:
+      <<: *env
+      CNJ_NAME: jenkins-b
+    ports: ["8082:8080"]

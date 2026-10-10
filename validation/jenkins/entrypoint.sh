@@ -17,6 +17,22 @@ if [[ "${CNJ_INOTIFY:-0}" == "1" ]]; then
   sleep 2
 fi
 
+# S0: seed key material (secret.key*, secrets/, identity.key.enc) shared by all controllers, see findings/E8.
+if [[ -n "${CNJ_SEED_DIR:-}" && -d "$CNJ_SEED_DIR" && ! -f "$JENKINS_HOME/secrets/master.key" ]]; then
+  cp -a "$CNJ_SEED_DIR/." "$JENKINS_HOME/"
+fi
+
+# Locally built plugins (e.g. from the cnj/t1-* branches) replace the image's versions.
+if [[ -d /extra-plugins ]]; then
+  mkdir -p "$JENKINS_HOME/plugins"
+  for p in /extra-plugins/*.hpi /extra-plugins/*.jpi; do
+    [[ -f "$p" ]] || continue
+    name=$(basename "$p"); name="${name%.*}"
+    rm -rf "$JENKINS_HOME/plugins/$name" "$JENKINS_HOME/plugins/$name".?pi
+    cp "$p" "$JENKINS_HOME/plugins/$name.jpi"
+  done
+fi
+
 if [[ -f /war-override/jenkins.war ]]; then
   export JENKINS_WAR=/war-override/jenkins.war
 fi
