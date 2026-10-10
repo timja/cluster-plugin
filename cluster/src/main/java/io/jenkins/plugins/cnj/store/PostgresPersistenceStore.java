@@ -328,6 +328,25 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
+    /** Whether completed builds are shared ({@link jenkins.persistence.BuildRecords}); on by default. */
+    static final boolean BUILD_RECORDS =
+            !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".buildRecords"));
+
+    @Override
+    public boolean storesBuildRecords(@NonNull String jobKey) {
+        return BUILD_RECORDS;
+    }
+
+    @Override
+    public Set<String> liveOrigins() throws IOException {
+        synchronized (this) {
+            if (heartbeatThread == null) {
+                return null; // not taking part in membership, so cannot tell
+            }
+        }
+        return aliveMembers();
+    }
+
     /**
      * Origins of controllers whose heartbeat is recent, always including this one.
      */

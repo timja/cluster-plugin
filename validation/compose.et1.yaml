@@ -1,5 +1,6 @@
-# Target 1 acceptance (ET1): two controllers with EPHEMERAL homes (tmpfs) sharing item configuration
-# through the Postgres persistence store. Standalone (not an overlay of compose.yaml).
+# Target 1-3 acceptance (ET1, ET2, ET3): two controllers with EPHEMERAL homes (tmpfs) sharing item configuration,
+# build numbers and build records through the Postgres persistence store, and build snapshots and Pipeline logs
+# through Azure Blob Storage (Azurite). Standalone (not an overlay of compose.yaml).
 #
 #   docker compose -f compose.et1.yaml up -d
 #
@@ -12,7 +13,7 @@ name: et1
 
 x-jenkins: &jenkins
   image: cnj/jenkins:dev
-  depends_on: [postgres]
+  depends_on: [postgres, azurite]
   tmpfs:
     - /var/jenkins_home:uid=1000,gid=1000,mode=0755,size=2g
   environment: &env
@@ -27,6 +28,9 @@ x-jenkins: &jenkins
     CNJ_STORE_URL: jdbc:postgresql://postgres:5432/jenkins
     CNJ_STORE_USER: jenkins
     CNJ_STORE_PASSWORD: jenkins
+    # Target 3: build snapshots and Pipeline logs (Azurite's well-known development account)
+    CNJ_BLOB_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+    CNJ_BLOB_CONTAINER: jenkins
     CNJ_SEED_DIR: /et1/seed
     CNJ_INOTIFY: ${CNJ_INOTIFY:-0}
     # the shared repo is bind-mounted with a host owner
@@ -48,6 +52,10 @@ services:
       POSTGRES_USER: jenkins
       POSTGRES_PASSWORD: jenkins
       POSTGRES_DB: jenkins
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.34.0
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
 
   jenkins-a:
     <<: *jenkins

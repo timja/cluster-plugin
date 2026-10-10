@@ -12,7 +12,7 @@
   <version>${changelist}</version>
   <packaging>hpi</packaging>
   <name>Persistence Store: PostgreSQL</name>
-  <description>Stores item configuration in PostgreSQL so several controllers can share it (cloud-native Jenkins, Target 1).</description>
+  <description>Stores item configuration and build records in PostgreSQL, and build snapshots and Pipeline logs in Azure Blob Storage, so several controllers can share them (cloud-native Jenkins).</description>
   <properties>
     <changelist>999999-SNAPSHOT</changelist>
     <!-- Needs the jenkins.persistence SPI from the cnj/t1-* core branches, installed locally. -->
@@ -21,7 +21,34 @@
     <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
     <spotbugs.failOnError>false</spotbugs.failOnError>
   </properties>
+  <dependencyManagement>
+    <dependencies>
+      <!-- upper bounds required by scm-api (via workflow-api); test classpath only, not plugin dependencies -->
+      <dependency>
+        <groupId>io.jenkins.plugins</groupId>
+        <artifactId>asm-api</artifactId>
+        <version>9.8-163.vb_2a_96d3f9c3c</version>
+      </dependency>
+      <dependency>
+        <groupId>org.jenkins-ci.plugins</groupId>
+        <artifactId>structs</artifactId>
+        <version>353.v261ea_40a_80fb_</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
   <dependencies>
+    <dependency>
+      <!-- Azure Blob Storage client (the harness uses Azurite) -->
+      <groupId>io.jenkins.plugins</groupId>
+      <artifactId>azure-sdk</artifactId>
+      <version>292.v2db_0b_b_b_50d35</version>
+    </dependency>
+    <dependency>
+      <!-- LogStorageFactory, for Pipeline logs in blob storage -->
+      <groupId>org.jenkins-ci.plugins.workflow</groupId>
+      <artifactId>workflow-api</artifactId>
+      <version>1413.v2ff1a_5e720fa_</version>
+    </dependency>
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
