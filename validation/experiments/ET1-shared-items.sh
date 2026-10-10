@@ -43,7 +43,8 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 log "S0: seeding key material from a throwaway controller"
 docker rm -f et1-seed >/dev/null 2>&1 || true
 docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
-  -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -v "$ET1/war:/war-override:ro" cnj/jenkins:dev >/dev/null
+  -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
+  -v "$ET1/war:/war-override:ro" cnj/jenkins:dev >/dev/null
 wait_up 8089
 groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get(); jenkins.model.Jenkins.get().getCrumbIssuer()' >/dev/null
 # docker cp cannot read tmpfs mounts
