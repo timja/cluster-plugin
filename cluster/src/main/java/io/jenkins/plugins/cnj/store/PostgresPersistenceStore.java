@@ -18,10 +18,12 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.persistence.BuildLeases;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import org.postgresql.PGConnection;
@@ -70,6 +72,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("create table if not exists jenkins_trigger_claims ("
                             + "item text not null, trigger text not null, tick bigint not null, origin text not null,"
                             + " claimed_at timestamptz not null default now(), primary key (item, trigger, tick))");
+                    s.execute("create table if not exists jenkins_build_leases ("
+                            + "key text primary key, owner text not null, epoch bigint not null,"
+                            + " acquired_at timestamptz not null default now())");
                     s.execute("create table if not exists jenkins_store_events ("
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
@@ -281,6 +286,106 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             Long.getLong(PostgresPersistenceStore.class.getName() + ".memberTimeoutMillis", 20_000);
 
     private Thread heartbeatThread;
+    /** {@link System#nanoTime} of the last heartbeat that reached the database. */
+    private volatile long lastHeartbeatOk = System.nanoTime() - TimeUnit.DAYS.toNanos(1);
+
+    /**
+     * Whether the other controllers may have considered this one gone by now, because its heartbeat has not
+     * reached the database for the member timeout (measured locally, so e.g. a paused JVM notices on waking).
+     */
+    private final java.util.concurrent.atomic.AtomicLong lapses = new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * How many times this controller's membership may have lapsed (heartbeats missing for longer than the timeout).
+     * When this changes, work done on behalf of leases should check that they are still held.
+     */
+    long lapseCount() {
+        return lapses.get();
+    }
+
+    boolean mayHaveLapsed() {
+        return System.nanoTime() - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS);
+    }
+
+    private final BuildLeases leases = new BuildLeases() {
+        @Override
+        public long acquire(@NonNull String key) throws IOException {
+            try {
+                return withTransaction(c -> {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "insert into jenkins_build_leases (key, owner, epoch) values (?, ?, nextval('jenkins_store_version'))"
+                                    + " on conflict (key) do update set owner = excluded.owner, epoch = excluded.epoch, acquired_at = now()"
+                                    + " where jenkins_build_leases.owner <> excluded.owner and not exists (select 1 from jenkins_members m"
+                                    + " where m.origin = jenkins_build_leases.owner and m.heartbeat_at > now() - ? * interval '1 millisecond')"
+                                    + " returning epoch")) {
+                        ps.setString(1, key);
+                        ps.setString(2, origin);
+                        ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) {
+                                return rs.getLong(1);
+                            }
+                        }
+                    }
+                    // not taken: already ours, or held by a live controller
+                    try (PreparedStatement ps =
+                            c.prepareStatement("select owner, epoch from jenkins_build_leases where key = ?")) {
+                        ps.setString(1, key);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            return rs.next() && rs.getString(1).equals(origin) ? rs.getLong(2) : 0L;
+                        }
+                    }
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to acquire lease on " + key, e);
+            }
+        }
+
+        @Override
+        public boolean holds(@NonNull String key, long epoch) throws IOException {
+            if (mayHaveLapsed()) {
+                return false;
+            }
+            try {
+                return withTransaction(c -> {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "select 1 from jenkins_build_leases where key = ? and owner = ? and epoch = ?")) {
+                        ps.setString(1, key);
+                        ps.setString(2, origin);
+                        ps.setLong(3, epoch);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            return rs.next();
+                        }
+                    }
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to check lease on " + key, e);
+            }
+        }
+
+        @Override
+        public void release(@NonNull String key, long epoch) throws IOException {
+            try {
+                withTransaction(c -> {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "delete from jenkins_build_leases where key = ? and owner = ? and epoch = ?")) {
+                        ps.setString(1, key);
+                        ps.setString(2, origin);
+                        ps.setLong(3, epoch);
+                        ps.executeUpdate();
+                    }
+                    return null;
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to release lease on " + key, e);
+            }
+        }
+    };
+
+    @Override
+    public BuildLeases leases() {
+        return leases;
+    }
 
     /**
      * Starts recording this controller as a live member every {@link #HEARTBEAT_MILLIS}.
@@ -323,6 +428,11 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 }
                 return null;
             });
+            long now = System.nanoTime();
+            if (now - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS)) {
+                lapses.incrementAndGet(); // others may have taken over our builds meanwhile
+            }
+            lastHeartbeatOk = now;
         } catch (SQLException e) {
             throw new IOException("Failed to record heartbeat", e);
         }

@@ -3,6 +3,7 @@ package io.jenkins.plugins.cnj.store;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
+import com.azure.storage.blob.models.AppendBlobRequestConditions;
 import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.BlobRange;
 import com.azure.storage.blob.models.BlobStorageException;
@@ -135,6 +136,38 @@ public class AzureBlobStore implements BlobStore {
                 return null;
             }
             throw wrap("read", key, e);
+        }
+    }
+
+    /**
+     * Appends to an append blob at a known position, creating it first if needed.
+     *
+     * @param position the current length of the blob as this writer knows it
+     * @return false if the blob has a different length, i.e. someone else appended to it
+     */
+    public boolean appendAt(@NonNull String key, @NonNull byte[] bytes, int off, int len, long position)
+            throws IOException {
+        AppendBlobClient blob = container.getBlobClient(key).getAppendBlobClient();
+        try {
+            if (position == 0 && !blob.exists()) {
+                blob.createIfNotExists();
+            }
+            for (int pos = off; pos < off + len; pos += MAX_APPEND_BLOCK) {
+                int n = Math.min(MAX_APPEND_BLOCK, off + len - pos);
+                blob.appendBlockWithResponse(
+                        new ByteArrayInputStream(bytes, pos, n),
+                        n,
+                        null,
+                        new AppendBlobRequestConditions().setAppendPosition(position + (pos - off)),
+                        null,
+                        null);
+            }
+            return true;
+        } catch (RuntimeException e) {
+            if (e instanceof BlobStorageException b && (b.getStatusCode() == 412 || b.getStatusCode() == 404)) {
+                return false;
+            }
+            throw wrap("append to", key, e);
         }
     }
 

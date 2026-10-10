@@ -72,3 +72,23 @@ services:
       <<: *env
       CNJ_NAME: jenkins-b
     ports: ["8082:8080"]
+
+  # Target 4 (profile "agents"): an inbound WebSocket agent behind a failover URL
+  lb:
+    image: nginx:1.27
+    profiles: [agents]
+    volumes:
+      - ./lb/failover.conf:/etc/nginx/conf.d/default.conf:ro
+
+  agent1:
+    image: jenkins/inbound-agent:latest-jdk21
+    profiles: [agents]
+    depends_on: [lb]
+    environment:
+      JENKINS_URL: http://lb/
+      JENKINS_AGENT_NAME: agent1
+      JENKINS_WEB_SOCKET: "true"
+    # the secret is derived from the seeded key material, written by the experiment
+    entrypoint: ["sh", "-c", "JENKINS_SECRET=$$(cat /et1/agent1.secret) exec /usr/local/bin/jenkins-agent"]
+    volumes:
+      - ./.et1:/et1:ro

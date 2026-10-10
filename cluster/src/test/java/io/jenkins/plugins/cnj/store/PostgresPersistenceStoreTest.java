@@ -39,7 +39,7 @@ class PostgresPersistenceStoreTest {
         try (var c = POSTGRES.createConnection("");
                 var s = c.createStatement()) {
             s.execute(
-                    "drop table if exists jenkins_store, jenkins_store_events, jenkins_members, jenkins_trigger_claims");
+                    "drop table if exists jenkins_store, jenkins_store_events, jenkins_members, jenkins_trigger_claims, jenkins_build_leases");
         }
         a = store();
         b = store();
@@ -192,6 +192,35 @@ class PostgresPersistenceStoreTest {
         b.close();
         assertThat(a.aliveMembers(), contains(a.getOrigin()));
         b = store();
+    }
+
+    @Test
+    void leases() throws Exception {
+        a.heartbeat();
+        b.heartbeat();
+        String key = "jobs/p/running/1.xml";
+        long first = a.leases().acquire(key);
+        assertTrue(first > 0);
+        assertEquals(first, a.leases().acquire(key), "re-acquiring keeps the epoch");
+        assertEquals(0, b.leases().acquire(key), "held by a live controller");
+        assertTrue(a.leases().holds(key, first));
+        assertFalse(b.leases().holds(key, first));
+
+        // a stops heartbeating: its lease lapses and b takes over with a higher epoch
+        try (var c = POSTGRES.createConnection("");
+                var s = c.createStatement()) {
+            s.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '"
+                    + a.getOrigin() + "'");
+        }
+        long second = b.leases().acquire(key);
+        assertTrue(second > first);
+        assertFalse(a.leases().holds(key, first), "fenced");
+        assertTrue(b.leases().holds(key, second));
+        a.leases().release(key, first); // a stale release does nothing
+        assertTrue(b.leases().holds(key, second));
+        b.leases().release(key, second);
+        assertFalse(b.leases().holds(key, second));
+        assertTrue(a.leases().acquire(key) > second, "free again");
     }
 
     @Test

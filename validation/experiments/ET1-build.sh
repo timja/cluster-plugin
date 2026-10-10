@@ -29,12 +29,23 @@ git -C "$FOLDER_WT" checkout -q --detach "$FOLDER_REF"
 (cd "$FOLDER_WT" && $MVN package)
 cp "$FOLDER_WT/target/cloudbees-folder.hpi" "$ET1/plugins/"
 
+# Target 4: workflow-cps with ProgramSavedListener, needed by the store plugin (skipped if the worktree is absent)
+WFCPS=${WFCPS:-/Users/timja/code/jenkins/workflow-cps-plugin-cnj}
+WFCPS_REF=${WFCPS_REF:-cnj/t4-m1-program-saved-listener}
+if [[ -d "$WFCPS" ]]; then
+  echo "workflow-cps $WFCPS_REF ($(git -C "$WFCPS" rev-parse --short "$WFCPS_REF"))"
+  git -C "$WFCPS" checkout -q "$WFCPS_REF"
+  (cd "$WFCPS" && $MVN -pl dgm-builder,lib,plugin install)
+  cp "$WFCPS/plugin/target/workflow-cps.hpi" "$ET1/plugins/"
+fi
+
 echo "persistence-store-postgresql"
 (cd "$HERE/../impl/persistence-store-postgresql" && $MVN package)
 cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgresql.hpi" "$ET1/plugins/"
 
 { echo "core $CORE_REF $(git -C "$CORE" rev-parse "$CORE_REF")"
   echo "cloudbees-folder $FOLDER_REF $(git -C "$FOLDER" rev-parse "$FOLDER_REF")"
+  [[ -d "$WFCPS" ]] && echo "workflow-cps $WFCPS_REF $(git -C "$WFCPS" rev-parse "$WFCPS_REF")"
   echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
 

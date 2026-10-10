@@ -27,12 +27,28 @@
       <dependency>
         <groupId>io.jenkins.plugins</groupId>
         <artifactId>asm-api</artifactId>
-        <version>9.8-163.vb_2a_96d3f9c3c</version>
+        <version>9.9-185.va_6c6b_3348b_c3</version>
       </dependency>
       <dependency>
         <groupId>org.jenkins-ci.plugins</groupId>
         <artifactId>structs</artifactId>
-        <version>353.v261ea_40a_80fb_</version>
+        <version>362.va_b_695ef4fdf9</version>
+      </dependency>
+      <!-- required by workflow-cps / workflow-support; the harness image has these or newer -->
+      <dependency>
+        <groupId>org.jenkins-ci.plugins.workflow</groupId>
+        <artifactId>workflow-step-api</artifactId>
+        <version>724.v538c2362b_dfb_</version>
+      </dependency>
+      <dependency>
+        <groupId>io.jenkins.plugins</groupId>
+        <artifactId>caffeine-api</artifactId>
+        <version>3.2.2-178.v353b_8428ed56</version>
+      </dependency>
+      <dependency>
+        <groupId>org.jenkins-ci.plugins</groupId>
+        <artifactId>scm-api</artifactId>
+        <version>728.vc30dcf7a_0df5</version>
       </dependency>
     </dependencies>
   </dependencyManagement>
@@ -48,6 +64,12 @@
       <groupId>org.jenkins-ci.plugins.workflow</groupId>
       <artifactId>workflow-api</artifactId>
       <version>1413.v2ff1a_5e720fa_</version>
+    </dependency>
+    <dependency>
+      <!-- ProgramSavedListener, from the cnj/t4-m1-program-saved-listener branch, installed locally -->
+      <groupId>org.jenkins-ci.plugins.workflow</groupId>
+      <artifactId>workflow-cps</artifactId>
+      <version>999999-SNAPSHOT</version>
     </dependency>
     <dependency>
       <groupId>org.postgresql</groupId>

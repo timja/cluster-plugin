@@ -35,6 +35,7 @@ import jenkins.model.TransientActionFactory;
 import jenkins.persistence.BuildRecords;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
+import jenkins.persistence.RunningBuilds;
 import jenkins.util.Timer;
 import org.jenkinsci.plugins.workflow.flow.FlowExecutionOwner;
 import org.jenkinsci.plugins.workflow.log.FileLogStorage;
@@ -134,18 +135,20 @@ public final class BlobLogStorage {
                 return null;
             }
             File dir;
-            boolean runningHere;
+            Run<?, ?> running = null;
             try {
                 dir = owner.getRootDir();
                 Queue.Executable executable = owner.getExecutable();
-                runningHere = executable instanceof Run<?, ?> run && run.isLogUpdated();
+                if (executable instanceof Run<?, ?> run && run.isLogUpdated()) {
+                    running = run;
+                }
             } catch (IOException e) {
                 LOGGER.log(Level.FINE, "Cannot tell whether " + owner + " is running", e);
                 return null;
             }
             File log = new File(dir, LOG);
-            if (runningHere) {
-                Shipper.track(blobs, key, log);
+            if (running != null) {
+                Shipper.track(blobs, key, log, running);
             } else if (!log.exists()) {
                 try {
                     fetch(blobs, key, dir);
@@ -167,13 +170,17 @@ public final class BlobLogStorage {
             final String key;
             final File log;
             final File index;
+            final Run<?, ?> run;
             long logOffset;
             long indexOffset;
+            long lapses;
 
-            Tracked(AzureBlobStore blobs, String key, File log) throws IOException {
+            Tracked(AzureBlobStore blobs, String key, File log, Run<?, ?> run) throws IOException {
                 this.blobs = blobs;
                 this.key = key;
                 this.log = log;
+                this.run = run;
+                this.lapses = lapseCount();
                 this.index = new File(log.getPath() + "-index");
                 // resuming (e.g. after a restart): continue after what was already shipped
                 this.logOffset = blobs.size(key + "/" + LOG);
@@ -184,10 +191,10 @@ public final class BlobLogStorage {
         private static final Map<String, Tracked> tracked = new ConcurrentHashMap<>();
         private static ScheduledFuture<?> task;
 
-        static void track(AzureBlobStore blobs, String key, File log) {
+        static void track(AzureBlobStore blobs, String key, File log, Run<?, ?> run) {
             tracked.computeIfAbsent(key, k -> {
                 try {
-                    return new Tracked(blobs, k, log);
+                    return new Tracked(blobs, k, log, run);
                 } catch (IOException e) {
                     LOGGER.log(Level.WARNING, "Cannot ship the log of " + k, e);
                     return null;
@@ -214,11 +221,31 @@ public final class BlobLogStorage {
 
         private static void ship(Tracked t) throws IOException {
             synchronized (t) {
-                t.logOffset = shipFile(t.blobs, t.key + "/" + LOG, t.log, t.logOffset);
-                t.indexOffset = shipFile(t.blobs, t.key + "/" + INDEX, t.index, t.indexOffset);
+                long lapses = lapseCount();
+                if (lapses != t.lapses) {
+                    // this controller may have looked dead to the others: check it still owns the build first
+                    if (t.run != null && !RunningBuilds.owns(t.run)) {
+                        drop(t.key);
+                        RunningBuilds.lost(t.run);
+                        return;
+                    }
+                    t.lapses = lapses;
+                }
+                long logOffset = shipFile(t.blobs, t.key + "/" + LOG, t.log, t.logOffset);
+                long indexOffset = logOffset < 0 ? -1 : shipFile(t.blobs, t.key + "/" + INDEX, t.index, t.indexOffset);
+                if (logOffset < 0 || indexOffset < 0) {
+                    // someone else appended: another controller owns the build now
+                    LOGGER.warning(
+                            () -> "Log of " + t.key + " was appended to elsewhere; no longer shipping it from here");
+                    drop(t.key);
+                    return;
+                }
+                t.logOffset = logOffset;
+                t.indexOffset = indexOffset;
             }
         }
 
+        /** @return the new offset, or -1 if the blob was appended to by someone else */
         private static long shipFile(AzureBlobStore blobs, String blobKey, File file, long offset) throws IOException {
             while (file.length() > offset) {
                 int n = (int) Math.min(MAX_SHIP, file.length() - offset);
@@ -227,10 +254,21 @@ public final class BlobLogStorage {
                     raf.seek(offset);
                     raf.readFully(bytes);
                 }
-                blobs.append(blobKey, bytes, 0, n);
+                if (!blobs.appendAt(blobKey, bytes, 0, n, offset)) {
+                    return -1;
+                }
                 offset += n;
             }
             return offset;
+        }
+
+        /** Stops shipping a build's log without shipping the rest, as when it is owned elsewhere now. */
+        static void drop(String key) {
+            tracked.remove(key);
+        }
+
+        private static long lapseCount() {
+            return PersistenceStores.get() instanceof PostgresPersistenceStore p ? p.lapseCount() : 0;
         }
 
         /** Ships the rest of a build's log and stops tracking it. */
@@ -252,7 +290,7 @@ public final class BlobLogStorage {
                     ? null
                     : buildKey(run.getRootDir());
             if (key != null) {
-                Shipper.track(blobs, key, new File(run.getRootDir(), LOG));
+                Shipper.track(blobs, key, new File(run.getRootDir(), LOG), run);
             }
         }
 
@@ -260,6 +298,10 @@ public final class BlobLogStorage {
         public void onFinalized(Run<?, ?> run) {
             String key = run instanceof FlowExecutionOwner.Executable ? buildKey(run.getRootDir()) : null;
             if (key != null) {
+                if (!RunningBuilds.owns(run)) {
+                    Shipper.drop(key); // taken over by another controller, which ships the log from now on
+                    return;
+                }
                 try {
                     Shipper.finish(key);
                 } catch (IOException | RuntimeException e) {

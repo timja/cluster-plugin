@@ -1,0 +1,250 @@
+package io.jenkins.plugins.cnj.store;
+
+import edu.umd.cs.findbugs.annotations.CheckForNull;
+import edu.umd.cs.findbugs.annotations.NonNull;
+import hudson.Extension;
+import hudson.model.Queue;
+import hudson.model.Run;
+import hudson.model.listeners.RunListener;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import jenkins.persistence.ConflictException;
+import jenkins.persistence.RunningBuilds;
+import jenkins.util.Timer;
+import org.jenkinsci.plugins.workflow.cps.CpsFlowExecution;
+import org.jenkinsci.plugins.workflow.cps.ProgramSavedListener;
+import org.jenkinsci.plugins.workflow.flow.FlowExecutionOwner;
+
+/**
+ * Replicates save points of running Pipeline builds to blob storage, so that another controller can
+ * {@linkplain PipelineAdopter adopt} a build if this one is lost.
+ *
+ * <p>A save point is what CPS needs to resume: {@code program.dat}, the running {@code build.xml},
+ * and the flow nodes in {@code workflow/}. {@link ProgramSavedListener} reports each consistent one; it is copied
+ * in memory on the CPS VM thread, and the latest is uploaded every {@link #SHIP_PERIOD_MILLIS}
+ * (intermediate ones are coalesced), under keys unique to the owner's lease epoch and a sequence number:
+ * <ul>
+ * <li>{@code jobs/<item>/builds/<N>/running/program.dat.<epoch>.<seq>} and {@code .../build.xml.<epoch>.<seq>}
+ * <li>{@code .../running/workflow/<id>.xml}, uploaded only when changed
+ * </ul>
+ * It is then committed by recording {@code savePoint=<epoch>.<seq>} in the build's placeholder
+ * ({@link RunningBuilds#update}), a compare-and-set which fails once another controller has taken the build over;
+ * this controller then stops the build ({@link RunningBuilds#lost}).
+ * Everything under {@code running/} is deleted once the build completes here.
+ */
+public final class SavePoints {
+
+    private static final Logger LOGGER = Logger.getLogger(SavePoints.class.getName());
+
+    static final String DIR = "running";
+    static final String PROGRAM = "program.dat";
+    static final String RECORD = "build.xml";
+    static final String NODES = "workflow";
+    static final String SAVE_POINT = "savePoint";
+
+    static final long SHIP_PERIOD_MILLIS = Long.getLong(SavePoints.class.getName() + ".shipPeriodMillis", 1_000);
+
+    private SavePoints() {}
+
+    /** A save point copied but not yet uploaded. */
+    private static final class Pending {
+        byte[] program;
+        byte[] record;
+        final Map<String, byte[]> nodes = new HashMap<>();
+    }
+
+    /** Replication state of one running build. */
+    private static final class State {
+        final Run<?, ?> run;
+        final String base;
+        /** File name → last modified and length, to copy only changed nodes. */
+        final Map<String, String> nodeStamps = new HashMap<>();
+
+        Pending pending;
+        long seq;
+        String committed;
+        volatile boolean stopped;
+
+        State(Run<?, ?> run, String base) {
+            this.run = run;
+            this.base = base;
+        }
+    }
+
+    private static final Map<String, State> states = new ConcurrentHashMap<>();
+    private static ScheduledFuture<?> task;
+
+    /** Blob key prefix of a build's save points, or null if they are not replicated. */
+    @CheckForNull
+    static String base(@NonNull Run<?, ?> run) {
+        String key = BlobLogStorage.buildKey(run.getRootDir());
+        return key == null ? null : key + "/" + DIR;
+    }
+
+    @Extension
+    public static final class Copier implements ProgramSavedListener {
+        @Override
+        public void onProgramSaved(@NonNull CpsFlowExecution execution, @NonNull File programDat) {
+            if (BlobLogStorage.blobs() == null) {
+                return;
+            }
+            Run<?, ?> run;
+            try {
+                Queue.Executable executable = execution.getOwner().getExecutable();
+                if (!(executable instanceof Run<?, ?> r)) {
+                    return;
+                }
+                run = r;
+            } catch (IOException e) {
+                return;
+            }
+            String base = base(run);
+            if (base == null || RunningBuilds.ownedPlaceholder(run) == null) {
+                return; // not shared, or not leased by this controller
+            }
+            State st = states.computeIfAbsent(base, k -> new State(run, k));
+            if (st.stopped) {
+                return;
+            }
+            try {
+                Pending p = new Pending();
+                p.program = Files.readAllBytes(programDat.toPath());
+                p.record = Files.readAllBytes(new File(run.getRootDir(), RECORD).toPath());
+                File[] nodes = new File(run.getRootDir(), NODES).listFiles((d, n) -> n.endsWith(".xml"));
+                synchronized (st) {
+                    if (nodes != null) {
+                        for (File node : nodes) {
+                            String stamp = node.lastModified() + ":" + node.length();
+                            if (!stamp.equals(st.nodeStamps.get(node.getName()))) {
+                                p.nodes.put(node.getName(), Files.readAllBytes(node.toPath()));
+                                st.nodeStamps.put(node.getName(), stamp);
+                            }
+                        }
+                    }
+                    if (st.pending != null) {
+                        p.nodes.putAll(merge(st.pending.nodes, p.nodes));
+                    }
+                    st.pending = p;
+                }
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Could not copy the save point of " + run, e);
+                return;
+            }
+            schedule();
+        }
+    }
+
+    private static Map<String, byte[]> merge(Map<String, byte[]> older, Map<String, byte[]> newer) {
+        Map<String, byte[]> all = new HashMap<>(older);
+        all.putAll(newer);
+        return all;
+    }
+
+    private static synchronized void schedule() {
+        if (task == null) {
+            task = Timer.get()
+                    .scheduleWithFixedDelay(
+                            SavePoints::shipAll, SHIP_PERIOD_MILLIS, SHIP_PERIOD_MILLIS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private static void shipAll() {
+        for (State st : states.values()) {
+            try {
+                ship(st);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Failed to ship the save point of " + st.run + "; will retry", e);
+            }
+        }
+    }
+
+    private static void ship(State st) throws IOException {
+        AzureBlobStore blobs = BlobLogStorage.blobs();
+        Pending p;
+        synchronized (st) {
+            p = st.pending;
+            st.pending = null;
+        }
+        if (p == null || st.stopped || blobs == null) {
+            return;
+        }
+        RunningBuilds.Placeholder owned = RunningBuilds.ownedPlaceholder(st.run);
+        if (owned == null) {
+            return; // completed meanwhile
+        }
+        String savePoint = owned.getEpoch() + "." + (st.seq + 1);
+        try {
+            for (Map.Entry<String, byte[]> node : p.nodes.entrySet()) {
+                put(blobs, st.base + "/" + NODES + "/" + node.getKey(), node.getValue());
+            }
+            put(blobs, st.base + "/" + PROGRAM + "." + savePoint, p.program);
+            put(blobs, st.base + "/" + RECORD + "." + savePoint, p.record);
+        } catch (IOException e) {
+            synchronized (st) { // retry with whatever is newer
+                if (st.pending == null) {
+                    st.pending = p;
+                } else {
+                    st.pending.nodes.putAll(merge(p.nodes, st.pending.nodes));
+                }
+            }
+            throw e;
+        }
+        try {
+            RunningBuilds.update(st.run, Map.of(SAVE_POINT, savePoint));
+        } catch (ConflictException e) {
+            st.stopped = true;
+            states.remove(st.base);
+            BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run.getRootDir()));
+            RunningBuilds.lost(st.run);
+            return;
+        }
+        st.seq++;
+        String previous = st.committed;
+        st.committed = savePoint;
+        if (previous != null) {
+            blobs.delete(st.base + "/" + PROGRAM + "." + previous);
+            blobs.delete(st.base + "/" + RECORD + "." + previous);
+        }
+        LOGGER.fine(() -> "Committed save point " + savePoint + " of " + st.run + " (" + p.program.length
+                + " bytes of program, " + p.nodes.size() + " nodes)");
+    }
+
+    private static void put(AzureBlobStore blobs, String key, byte[] content) throws IOException {
+        blobs.put(key, new ByteArrayInputStream(content), content.length);
+    }
+
+    @Extension(ordinal = 1000) // with the log shipper, before the record is published
+    public static final class Cleanup extends RunListener<Run<?, ?>> {
+        @Override
+        public void onFinalized(Run<?, ?> run) {
+            if (!(run instanceof FlowExecutionOwner.Executable)) {
+                return;
+            }
+            String base = base(run);
+            if (base == null) {
+                return;
+            }
+            State st = states.remove(base);
+            if (st != null) {
+                st.stopped = true;
+            }
+            AzureBlobStore blobs = BlobLogStorage.blobs();
+            if (blobs != null && RunningBuilds.owns(run)) { // a new owner still needs them otherwise
+                try {
+                    blobs.delete(base);
+                } catch (IOException e) {
+                    LOGGER.log(Level.WARNING, "Failed to delete the save points of " + run, e);
+                }
+            }
+        }
+    }
+}
