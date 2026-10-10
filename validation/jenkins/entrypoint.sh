@@ -33,6 +33,11 @@ if [[ -d /extra-plugins ]]; then
   done
 fi
 
+# Target 6: each controller prefixes its bound object ids with its name, so requests for them can be forwarded to it
+if [[ -n "${CNJ_NAME:-}" ]]; then
+  export JAVA_OPTS="${JAVA_OPTS:-} -Dorg.kohsuke.stapler.bind.BoundObjectTable.idPrefix=${CNJ_NAME} -Djenkins.persistence.RunningBuilds.controllerName=${CNJ_NAME}"
+fi
+
 if [[ -f /war-override/jenkins.war ]]; then
   export JENKINS_WAR=/war-override/jenkins.war
 fi

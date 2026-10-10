@@ -24,6 +24,7 @@ x-jenkins: &jenkins
       -Dhudson.model.DownloadService.never=true
       -Djava.awt.headless=true
       -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true
+      -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true
       ${CNJ_JAVA_OPTS:-}
     CNJ_STORE_URL: jdbc:postgresql://postgres:5432/jenkins
     CNJ_STORE_USER: jenkins
@@ -38,7 +39,7 @@ x-jenkins: &jenkins
     GIT_CONFIG_KEY_0: safe.directory
     GIT_CONFIG_VALUE_0: "*"
   volumes: &vols
-    - ./jenkins/casc-et1:/casc:ro
+    - ${CNJ_CASC_DIR:-./jenkins/casc-et1}:/casc:ro
     - ./out:/inventory
     - ./.et1:/et1
     - ./.et1/war:/war-override:ro
@@ -63,6 +64,7 @@ services:
     environment:
       <<: *env
       CNJ_NAME: jenkins-a
+      CNJ_INTERNAL_URL: http://jenkins-a:8080/
     ports: ["8081:8080"]
 
   jenkins-b:
@@ -71,6 +73,7 @@ services:
     environment:
       <<: *env
       CNJ_NAME: jenkins-b
+      CNJ_INTERNAL_URL: http://jenkins-b:8080/
     ports: ["8082:8080"]
 
   # Target 4 (profile "agents"): an inbound WebSocket agent behind a failover URL
@@ -92,3 +95,10 @@ services:
     entrypoint: ["sh", "-c", "JENKINS_SECRET=$$(cat /et1/agent1.secret) exec /usr/local/bin/jenkins-agent"]
     volumes:
       - ./.et1:/et1:ro
+
+  # Target 6: a load balancer which does not pin browsers (round robin), for browsers and API clients
+  rr:
+    image: nginx:1.27
+    volumes:
+      - ./lb/roundrobin.conf:/etc/nginx/conf.d/default.conf:ro
+    ports: ["8090:80"]

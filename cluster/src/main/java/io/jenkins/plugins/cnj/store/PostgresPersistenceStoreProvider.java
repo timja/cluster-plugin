@@ -29,6 +29,25 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
     static final Pattern OWNED = Pattern.compile(
             "jobs/[^/]+(/(jobs|branches)/[^/]+)*/(config\\.xml|nextBuildNumber|scm-revision-hash\\.xml|scm-last-seen-revision-hash\\.xml)");
 
+    /**
+     * Static state (Target 6): global configuration and descriptors at the root, users, nodes.
+     * Per-controller files at the root are excluded, as are files mixing configuration with runtime state:
+     * lockable-resources' (declared resources with each controller's waiting builds; Target 5 shares its locks).
+     */
+    static final Pattern STATIC = Pattern.compile(
+            "users/[^/]+/config\\.xml|nodes/[^/]+/config\\.xml"
+                    + "|(?!queue\\.xml$|nodeMonitors\\.xml$|hudson\\.model\\.UpdateCenter\\.xml$|jenkins\\.install\\.|.*FlowExecutionList\\.xml$"
+                    + "|org\\.jenkins\\.plugins\\.lockableresources\\.LockableResourcesManager\\.xml$)[^/]+\\.xml");
+
+    /** Whether static state is shared; on by default. */
+    static final boolean SHARE_STATIC = !"false"
+            .equals(System.getProperty(PostgresPersistenceStoreProvider.class.getPackageName() + ".staticState"));
+
+    static boolean owns(String key) {
+        return OWNED.matcher(key).matches()
+                || SHARE_STATIC && STATIC.matcher(key).matches();
+    }
+
     @CheckForNull
     @Override
     public PersistenceStore create() {
@@ -41,7 +60,7 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
                     url,
                     setting("user", "CNJ_STORE_USER"),
                     setting("password", "CNJ_STORE_PASSWORD"),
-                    key -> OWNED.matcher(key).matches());
+                    PostgresPersistenceStoreProvider::owns);
             store.startHeartbeat();
             return store;
         } catch (IOException e) {

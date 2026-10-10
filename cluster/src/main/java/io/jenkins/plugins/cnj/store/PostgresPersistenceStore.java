@@ -81,6 +81,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("create table if not exists jenkins_build_leases ("
                             + "key text primary key, owner text not null, epoch bigint not null,"
                             + " acquired_at timestamptz not null default now())");
+                    s.execute("alter table jenkins_members add column if not exists name text");
+                    s.execute("alter table jenkins_members add column if not exists url text");
                     s.execute("create sequence if not exists jenkins_queue_ids");
                     s.execute("create table if not exists jenkins_queue ("
                             + "id bigint primary key, task text not null, dedup_key text not null, actions text not null,"
@@ -673,10 +675,12 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     void heartbeat() throws IOException {
         try {
             withTransaction(c -> {
-                try (PreparedStatement ps =
-                        c.prepareStatement("insert into jenkins_members (origin, heartbeat_at) values (?, now())"
-                                + " on conflict (origin) do update set heartbeat_at = now()")) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "insert into jenkins_members (origin, heartbeat_at, name, url) values (?, now(), ?, ?)"
+                                + " on conflict (origin) do update set heartbeat_at = now(), name = excluded.name, url = excluded.url")) {
                     ps.setString(1, origin);
+                    ps.setString(2, NAME);
+                    ps.setString(3, INTERNAL_URL);
                     ps.executeUpdate();
                 }
                 return null;
@@ -708,6 +712,43 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             }
         }
         return aliveMembers();
+    }
+
+    /** This controller's name, as other controllers see it (and as the prefix of its bound object ids). */
+    static final String NAME = env("CNJ_NAME", hostName());
+    /** How other controllers reach this one directly, e.g. to forward requests for objects only it holds. */
+    static final String INTERNAL_URL = env("CNJ_INTERNAL_URL", "http://" + hostName() + ":8080/");
+
+    private static String env(String name, String fallback) {
+        String v = System.getenv(name);
+        return v == null || v.isEmpty() ? fallback : v;
+    }
+
+    private static String hostName() {
+        try {
+            return java.net.InetAddress.getLocalHost().getHostName();
+        } catch (java.io.IOException e) {
+            return "localhost";
+        }
+    }
+
+    /**
+     * The internal URL of a live controller, by name.
+     *
+     * @return null if no live controller has that name
+     */
+    @CheckForNull
+    String urlOf(@NonNull String name) throws IOException {
+        return run("look up controller " + name, c -> {
+            try (PreparedStatement ps = c.prepareStatement("select url from jenkins_members where name = ?"
+                    + " and heartbeat_at > now() - ? * interval '1 millisecond' order by heartbeat_at desc limit 1")) {
+                ps.setString(1, name);
+                ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? rs.getString(1) : null;
+                }
+            }
+        });
     }
 
     /**

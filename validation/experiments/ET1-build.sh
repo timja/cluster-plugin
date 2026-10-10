@@ -16,6 +16,15 @@ FOLDER_REF=${FOLDER_REF:-cnj/t1-m2-folder-children}
 MVN="mvn -B -ntp -q -Dspotbugs.skip -Dcheckstyle.skip -Denforcer.skip -Dlicense.skip=true -Dspotless.check.skip -Djacoco.skip -DskipTests"
 mkdir -p "$ET1/war" "$ET1/plugins"
 
+# Target 6: Stapler with prefixed bound object ids, which core is built against (skipped if the worktree is absent)
+STAPLER=${STAPLER:-/Users/timja/code/jenkins/stapler-cnj}
+STAPLER_REF=${STAPLER_REF:-cnj/t6-m5-bound-id-prefix}
+if [[ -d "$STAPLER" ]]; then
+  echo "stapler $STAPLER_REF ($(git -C "$STAPLER" rev-parse --short "$STAPLER_REF"))"
+  git -C "$STAPLER" checkout -q "$STAPLER_REF"
+  (cd "$STAPLER" && $MVN install)
+fi
+
 echo "core $CORE_REF ($(git -C "$CORE" rev-parse --short "$CORE_REF"))"
 [[ -d "$CORE_WT" ]] || git -C "$CORE" worktree add -q --detach "$CORE_WT" "$CORE_REF"
 git -C "$CORE_WT" checkout -q --detach "$CORE_REF"
@@ -49,6 +58,16 @@ if [[ -d "$LR" ]]; then
   cp "$LR/target/lockable-resources.hpi" "$ET1/plugins/"
 fi
 
+# Target 6: credentials with reload of credentials changed elsewhere (skipped if the worktree is absent)
+CREDS=${CREDS:-/Users/timja/code/jenkins/credentials-plugin-cnj}
+CREDS_REF=${CREDS_REF:-cnj/t6-m4-credentials-reload}
+if [[ -d "$CREDS" ]]; then
+  echo "credentials $CREDS_REF ($(git -C "$CREDS" rev-parse --short "$CREDS_REF"))"
+  git -C "$CREDS" checkout -q "$CREDS_REF"
+  (cd "$CREDS" && $MVN package)
+  cp "$CREDS/target/credentials.hpi" "$ET1/plugins/"
+fi
+
 echo "persistence-store-postgresql"
 (cd "$HERE/../impl/persistence-store-postgresql" && $MVN package)
 cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgresql.hpi" "$ET1/plugins/"
@@ -57,6 +76,8 @@ cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgres
   echo "cloudbees-folder $FOLDER_REF $(git -C "$FOLDER" rev-parse "$FOLDER_REF")"
   [[ -d "$WFCPS" ]] && echo "workflow-cps $WFCPS_REF $(git -C "$WFCPS" rev-parse "$WFCPS_REF")"
   [[ -d "$LR" ]] && echo "lockable-resources $LR_REF $(git -C "$LR" rev-parse "$LR_REF")"
+  [[ -d "$STAPLER" ]] && echo "stapler $STAPLER_REF $(git -C "$STAPLER" rev-parse "$STAPLER_REF")"
+  [[ -d "$CREDS" ]] && echo "credentials $CREDS_REF $(git -C "$CREDS" rev-parse "$CREDS_REF")"
   echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
 
