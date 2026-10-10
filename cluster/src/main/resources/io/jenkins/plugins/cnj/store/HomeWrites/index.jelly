@@ -1,0 +1,24 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout">
+  <l:layout title="Cluster compatibility" permission="${app.SYSTEM_READ}" type="one-column">
+    <l:main-panel>
+      <l:app-bar title="Cluster compatibility"/>
+      <p>Files <strong>${it.controller}</strong> has written under its home since it started, which the persistence store does
+        not hold and which are not local by design. Other controllers do not see them, and they are lost with this one.</p>
+      <j:set var="findings" value="${it.findings}"/>
+      <j:choose>
+        <j:when test="${findings.isEmpty()}"><p>None.</p></j:when>
+        <j:otherwise>
+          <table class="jenkins-table">
+            <thead><tr><th>Pattern</th><th>Files</th><th>Example</th><th>Plugin</th></tr></thead>
+            <tbody>
+              <j:forEach var="f" items="${findings}">
+                <tr><td><code>${f.pattern}</code></td><td>${f.count}</td><td><code>${f.example}</code></td><td>${f.plugin}</td></tr>
+              </j:forEach>
+            </tbody>
+          </table>
+        </j:otherwise>
+      </j:choose>
+    </l:main-panel>
+  </l:layout>
+</j:jelly>

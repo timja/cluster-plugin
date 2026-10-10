@@ -3,7 +3,7 @@
   <l:layout title="${it.displayName}" permission="${app.SYSTEM_READ}" type="one-column">
     <l:main-panel>
       <l:app-bar title="${it.displayName}"/>
-      <p>This page is served by <strong>${it.self}</strong>. Everything below comes from the persistence store.</p>
+      <p>This page is served by <strong>${it.self}</strong>. Everything below comes from the persistence store. See also <a href="compatibility/">what this controller keeps that the cluster does not share</a>.</p>
       <h2>Controllers</h2>
       <table class="jenkins-table">
         <thead><tr><th>Name</th><th>Internal URL</th><th>Started</th><th>Last heartbeat</th><th>Alive</th><th>Version</th></tr></thead>

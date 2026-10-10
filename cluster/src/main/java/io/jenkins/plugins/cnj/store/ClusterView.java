@@ -62,6 +62,12 @@ public final class ClusterView extends ManagementLink {
         return Category.STATUS;
     }
 
+    /** What this controller writes under its home that the cluster does not share (Target 11). */
+    public HomeWrites getCompatibility() {
+        Jenkins.get().checkPermission(Jenkins.SYSTEM_READ);
+        return new HomeWrites();
+    }
+
     public Api getApi() {
         Jenkins.get().checkPermission(Jenkins.SYSTEM_READ);
         return new Api(this);
