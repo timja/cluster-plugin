@@ -194,6 +194,14 @@ public final class SavePoints {
             return; // completed meanwhile
         }
         String savePoint = owned.getEpoch() + "." + (st.seq + 1);
+        if (!RunningBuilds.owns(st.run)) {
+            // fenced: another controller took the build over; never write over its flow nodes or leave save points
+            st.stopped = true;
+            states.remove(st.base);
+            BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run.getRootDir()));
+            RunningBuilds.lost(st.run);
+            return;
+        }
         try {
             for (Map.Entry<String, byte[]> node : p.nodes.entrySet()) {
                 put(blobs, st.base + "/" + NODES + "/" + node.getKey(), node.getValue());
@@ -216,6 +224,9 @@ public final class SavePoints {
         try {
             RunningBuilds.update(st.run, Map.of(SAVE_POINT, savePoint));
         } catch (ConflictException e) {
+            // lost the build meanwhile: the save point just uploaded is not one; remove it
+            blobs.delete(st.base + "/" + PROGRAM + "." + savePoint);
+            blobs.delete(st.base + "/" + RECORD + "." + savePoint);
             st.stopped = true;
             states.remove(st.base);
             BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run.getRootDir()));
