@@ -51,6 +51,11 @@ PY
 count() { builds "$@" | wc -l | tr -d ' '; }
 numbers_unique() { [[ -z "$(builds "$1" | awk '{print $1}' | sort | uniq -d)" ]]; }
 at_most_one_per_minute() { [[ -z "$(builds "$@" | awk '{print $3}' | sort | uniq -d)" ]]; }
+# exactly once per cron tick: every build of the job corresponds to one claimed tick, and vice versa.
+# (Trigger.Cron catches up a late minute, so two ticks can legitimately fire within one wall-clock minute.)
+claims_of() { psql_q "select count(*) from jenkins_trigger_claims where item='$1'"; }
+one_build_per_tick() { snap "/job/$1" "${@:2}"; [[ "$(count "/job/$1")" == "$(claims_of "$1")" ]]; }
+tick_info() { r "| ℹ️ | $1: $(count /job/cron1) builds, $(claims_of cron1) claimed ticks; wall-clock minutes with 2 builds (cron catch-up): $(builds /job/cron1 | awk '{print $3}' | sort | uniq -d | wc -l | tr -d ' ') |"; }
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
 [[ -f "$ET1/war/jenkins.war" && -n "$(ls "$ET1"/plugins/*.hpi 2>/dev/null)" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
@@ -115,7 +120,8 @@ sleep 270
 snap /job/cron1 $A $B
 r "| ℹ️ | 1 cron1 builds: $(builds /job/cron1 | awk '{print "#"$1"@"($2=="'$A'"?"A":"B")}' | tr '\n' ' ') |"
 check "1 cron fired (≥3 builds in ~4.5 min: $(count /job/cron1))" test "$(count /job/cron1)" -ge 3
-check "1 never more than one cron build per minute across controllers" at_most_one_per_minute /job/cron1
+check "1 exactly one cron build per claimed tick across controllers" eventually 30 one_build_per_tick cron1 $A $B
+tick_info "1"
 check "1 cron build numbers are unique across controllers" numbers_unique /job/cron1
 owner_port=$(builds /job/cron1 | awk '{print $2}' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
 check "1 all cron builds ran on one controller (affinity)" test "$(builds /job/cron1 | awk '{print $2}' | sort -u | wc -l | tr -d ' ')" = 1
@@ -179,7 +185,8 @@ docker kill -s KILL "et1-$owner_name-1" >/dev/null
 sleep 150
 snap /job/cron1 $survivor
 check "5 survivor took over cron within 2.5 min ($(count /job/cron1 "$kill_ms") builds after the kill)" test "$(count /job/cron1 "$kill_ms")" -ge 1
-check "5 still never more than one cron build per minute" at_most_one_per_minute /job/cron1
+check "5 still exactly one cron build per claimed tick" eventually 30 one_build_per_tick cron1 $survivor
+tick_info "5"
 check "5 cron build numbers still unique" numbers_unique /job/cron1
 
 # ------------------------------------------------------------------ 6. rejoin
@@ -190,7 +197,8 @@ et1 up -d "$owner_name" >/dev/null 2>&1; wait_up "$owner_port"
 sleep 180
 snap /job/cron1 $A $B
 check "6 cron kept firing across the rejoin ($(count /job/cron1 "$rejoin_ms") builds in 3 min)" test "$(count /job/cron1 "$rejoin_ms")" -ge 2
-check "6 never more than one cron build per minute across failover and rejoin" at_most_one_per_minute /job/cron1
+check "6 exactly one cron build per claimed tick across failover and rejoin" eventually 30 one_build_per_tick cron1 $A $B
+tick_info "6"
 check "6 cron build numbers unique across all incarnations" numbers_unique /job/cron1
 
 # ------------------------------------------------------------------ 7. continuity
