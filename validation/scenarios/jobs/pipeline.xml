@@ -1,0 +1,20 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job">
+  <description>E1 pipeline on agent: archive, fingerprint, stash, junit, credentials</description>
+  <properties></properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>
+node(&quot;linux&quot;) {
+  stage(&quot;build&quot;) {
+    sh &quot;echo pipeline ${env.BUILD_NUMBER}; mkdir -p out reports; echo pipe-${env.BUILD_NUMBER} &gt; out/lib.txt&quot;
+    writeFile file: &quot;reports/TEST-p.xml&quot;, text: &quot;&quot;&quot;&lt;testsuite name=&quot;p&quot; tests=&quot;1&quot;&gt;&lt;testcase classname=&quot;p.B&quot; name=&quot;ok&quot; time=&quot;0.3&quot;/&gt;&lt;/testsuite&gt;&quot;&quot;&quot;
+    archiveArtifacts artifacts: &quot;out/*.txt&quot;, fingerprint: true
+    stash name: &quot;stuff&quot;, includes: &quot;out/**&quot;
+    junit &quot;reports/*.xml&quot;
+    withCredentials([string(credentialsId: &quot;harness-secret&quot;, variable: &quot;S&quot;)]) { sh &quot;test -n \&quot;\$S\&quot;&quot; }
+  }
+  stage(&quot;unstash&quot;) { dir(&quot;again&quot;) { unstash &quot;stuff&quot;; sh &quot;cat out/lib.txt&quot; } }
+}</script>
+    <sandbox>true</sandbox>
+  </definition>
+</flow-definition>

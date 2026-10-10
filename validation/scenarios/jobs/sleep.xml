@@ -1,0 +1,10 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job">
+  <description>E4 long sleep on agent, for failover</description>
+  <properties></properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>
+node(&quot;linux&quot;) { sh &quot;for i in \$(seq 1 120); do echo tick \$i; sleep 1; done&quot; }</script>
+    <sandbox>true</sandbox>
+  </definition>
+</flow-definition>

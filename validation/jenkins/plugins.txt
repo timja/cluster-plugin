@@ -1,0 +1,14 @@
+configuration-as-code
+workflow-aggregator
+pipeline-utility-steps
+credentials
+credentials-binding
+plain-credentials
+git
+timestamper
+junit
+junit-sql-storage
+database-postgresql
+azure-artifact-manager
+windows-azure-storage
+instance-identity

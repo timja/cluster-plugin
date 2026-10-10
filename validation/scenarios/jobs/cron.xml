@@ -1,0 +1,10 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job">
+  <description>E1/E3 cron-triggered pipeline (every minute)</description>
+  <properties><org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty><triggers><hudson.triggers.TimerTrigger><spec>* * * * *</spec></hudson.triggers.TimerTrigger></triggers></org.jenkinsci.plugins.workflow.job.properties.PipelineTriggersJobProperty></properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">
+    <script>
+echo &quot;cron run ${env.BUILD_NUMBER} on ${env.JENKINS_URL}&quot;</script>
+    <sandbox>true</sandbox>
+  </definition>
+</flow-definition>

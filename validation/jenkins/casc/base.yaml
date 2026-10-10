@@ -1,0 +1,57 @@
+jenkins:
+  systemMessage: "cloud-native-jenkins harness (${CNJ_NAME})"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: admin
+  authorizationStrategy: loggedInUsersCanDoAnything
+  crumbIssuer: standard
+  slaveAgentPort: 50000
+  nodes:
+    - permanent:
+        name: agent1
+        remoteFS: /home/jenkins/agent
+        numExecutors: 2
+        labelString: linux
+        launcher:
+          inbound:
+            webSocket: true
+unclassified:
+  location:
+    url: "${CNJ_URL}"
+  globalDatabaseConfiguration:
+    database:
+      postgreSQL:
+        hostname: postgres
+        database: jenkins
+        username: jenkins
+        password: jenkins
+        validationQuery: "SELECT 1"
+  junitTestResultStorage:
+    storage: database
+  artifactManager:
+    artifactManagerFactories:
+      - azure:
+          config:
+            container: jenkins
+            prefix: "artifacts/"
+            storageCredentialId: azurite
+            disableExternalUrl: true
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - azureStorageAccount:
+              id: azurite
+              scope: GLOBAL
+              storageAccountName: devstoreaccount1
+              # Well-known Azurite development key, not a secret.
+              storageKey: "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+              blobEndpointURL: "http://azurite:10000/devstoreaccount1"
+          - string:
+              id: harness-secret
+              scope: GLOBAL
+              secret: "s3cr3t-value"

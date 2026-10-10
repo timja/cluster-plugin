@@ -1,0 +1,27 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<project>
+  <description>E1 freestyle: shell, archive+fingerprint, junit</description>
+  <keepDependencies>false</keepDependencies>
+  <canRoam>false</canRoam>
+  <assignedNode>built-in</assignedNode>
+  <disabled>false</disabled>
+  <builders>
+    <hudson.tasks.Shell>
+      <command>echo "hello from freestyle $BUILD_NUMBER"
+mkdir -p out reports
+echo "artifact $BUILD_NUMBER" > out/app.txt
+cat > reports/TEST-fs.xml &lt;&lt;XML
+&lt;testsuite name="fs" tests="2" failures="0"&gt;&lt;testcase classname="fs.A" name="one" time="0.1"/&gt;&lt;testcase classname="fs.A" name="two" time="0.2"/&gt;&lt;/testsuite&gt;
+XML</command>
+    </hudson.tasks.Shell>
+  </builders>
+  <publishers>
+    <hudson.tasks.ArtifactArchiver>
+      <artifacts>out/*.txt</artifacts>
+      <fingerprint>true</fingerprint>
+    </hudson.tasks.ArtifactArchiver>
+    <hudson.tasks.junit.JUnitResultArchiver plugin="junit">
+      <testResults>reports/*.xml</testResults>
+    </hudson.tasks.junit.JUnitResultArchiver>
+  </publishers>
+</project>
