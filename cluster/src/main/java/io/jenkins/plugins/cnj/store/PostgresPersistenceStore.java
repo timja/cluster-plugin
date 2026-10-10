@@ -46,6 +46,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     static final String CHANNEL = "jenkins_store";
     /** Advisory lock serializing schema creation between controllers. */
     private static final long SCHEMA_LOCK = 0x6a656e6b696e73L;
+    private static final long COUNTERS_LOCK = 0x636e6a636e7472L;
 
     private final String url;
     private final String user;
@@ -95,6 +96,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     // Target 7: which controller holds each agent's channel
                     s.execute("create table if not exists jenkins_channels ("
                             + "agent text primary key, origin text not null, since timestamptz not null default now())");
+                    // Target 9: cluster-wide counters (e.g. cloud agent caps), one row per scope and controller
+                    s.execute("create table if not exists jenkins_counters ("
+                            + "scope text not null, origin text not null, count int not null, primary key (scope, origin))");
                     s.execute("create table if not exists jenkins_store_events ("
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
@@ -812,6 +816,61 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             }
             return result;
         });
+    }
+
+    /**
+     * Atomically adds {@code delta} to this controller's share of each scope if, summed over live controllers, every scope
+     * stays within its cap (Target 9: cloud agent caps for the cluster).
+     *
+     * @param caps scope → cap
+     * @return false, changing nothing, if a cap would be exceeded
+     */
+    boolean addWithinCaps(@NonNull Map<String, Integer> caps, int delta) throws IOException {
+        return run("count " + caps.keySet(), c -> {
+            try (Statement s = c.createStatement()) {
+                s.execute("select pg_advisory_xact_lock(" + COUNTERS_LOCK + ")");
+            }
+            for (Map.Entry<String, Integer> cap : caps.entrySet()) {
+                try (PreparedStatement ps = c.prepareStatement("select coalesce(sum(k.count), 0) from jenkins_counters k"
+                        + " join jenkins_members m on m.origin = k.origin"
+                        + " where k.scope = ? and (k.origin = ? or m.heartbeat_at > now() - ? * interval '1 millisecond')")) {
+                    ps.setString(1, cap.getKey());
+                    ps.setString(2, origin);
+                    ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        if (rs.getLong(1) + delta > cap.getValue()) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            for (String scope : caps.keySet()) {
+                addToCounter(c, scope, delta);
+            }
+            return true;
+        });
+    }
+
+    /** Subtracts from this controller's share of each scope, not below zero. */
+    void subtractFromCounters(@NonNull Set<String> scopes, int delta) throws IOException {
+        run("release " + scopes, c -> {
+            for (String scope : scopes) {
+                addToCounter(c, scope, -delta);
+            }
+            return null;
+        });
+    }
+
+    private void addToCounter(Connection c, String scope, int delta) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("insert into jenkins_counters (scope, origin, count) values (?, ?, greatest(?, 0))"
+                + " on conflict (scope, origin) do update set count = greatest(jenkins_counters.count + ?, 0)")) {
+            ps.setString(1, scope);
+            ps.setString(2, origin);
+            ps.setInt(3, delta);
+            ps.setInt(4, delta);
+            ps.executeUpdate();
+        }
     }
 
     /** Records that this controller now holds the channel of an agent (Target 7). */

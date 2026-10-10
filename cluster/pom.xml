@@ -95,6 +95,13 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <!-- Target 9: cluster-wide cloud agent caps (kubernetes-plugin cnj/t9-m2-cluster-cap, installed locally) -->
+      <groupId>org.csanchez.jenkins.plugins</groupId>
+      <artifactId>kubernetes</artifactId>
+      <version>999999-SNAPSHOT</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-core</artifactId>
       <scope>test</scope>

@@ -222,6 +222,26 @@ class PostgresPersistenceStoreTest {
     }
 
     @Test
+    void capsHoldAcrossControllers() throws Exception {
+        a.heartbeat();
+        b.heartbeat();
+        java.util.Map<String, Integer> caps = java.util.Map.of("cloud", 3, "template", 2);
+        assertTrue(a.addWithinCaps(caps, 1));
+        assertTrue(b.addWithinCaps(caps, 1));
+        assertFalse(b.addWithinCaps(caps, 1), "the template cap (2) holds across both");
+        assertTrue(b.addWithinCaps(java.util.Map.of("cloud", 3, "other-template", 2), 1), "the cloud has room for a third");
+        assertFalse(a.addWithinCaps(java.util.Map.of("cloud", 3, "other-template", 2), 1), "but not a fourth");
+        a.subtractFromCounters(java.util.Set.of("cloud", "template"), 1);
+        assertTrue(b.addWithinCaps(caps, 1), "fits once released");
+        // a controller that stops heartbeating no longer counts
+        try (var c = POSTGRES.createConnection("");
+                var s = c.createStatement()) {
+            s.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '" + b.getOrigin() + "'");
+        }
+        assertTrue(a.addWithinCaps(caps, 2), "b's share lapsed with its membership");
+    }
+
+    @Test
     void leases() throws Exception {
         a.heartbeat();
         b.heartbeat();
