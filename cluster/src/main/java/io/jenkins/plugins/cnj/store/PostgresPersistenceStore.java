@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -751,6 +753,64 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     return rs.next() ? rs.getString(1) : null;
                 }
             }
+        });
+    }
+
+    /** A controller in the membership table (Target 8 cluster view). */
+    record Member(String origin, String name, String url, long heartbeatAt, long startedAt, boolean alive) {}
+
+    /** Every controller in the membership table, newest first. */
+    @NonNull
+    List<Member> members() throws IOException {
+        return run("list members", c -> {
+            List<Member> result = new ArrayList<>();
+            try (PreparedStatement ps = c.prepareStatement("select origin, name, url, heartbeat_at, started_at,"
+                    + " heartbeat_at > now() - ? * interval '1 millisecond' from jenkins_members order by started_at desc")) {
+                ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        result.add(new Member(rs.getString(1), rs.getString(2), rs.getString(3),
+                                rs.getTimestamp(4).getTime(), rs.getTimestamp(5).getTime(), rs.getBoolean(6)));
+                    }
+                }
+            }
+            return result;
+        });
+    }
+
+    /** Running-build placeholders, by key, with their content (Target 8 cluster view). */
+    @NonNull
+    Map<String, byte[]> runningPlaceholders() throws IOException {
+        return run("list running builds", c -> {
+            Map<String, byte[]> result = new TreeMap<>();
+            try (PreparedStatement ps = c.prepareStatement(
+                    "select key, content from jenkins_store where key ~ '^jobs/.+/running/[0-9]+\\.xml$'")) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        result.put(rs.getString(1), rs.getBytes(2));
+                    }
+                }
+            }
+            return result;
+        });
+    }
+
+    /** Agent channels and the name of the controller holding each (Target 8 cluster view). */
+    @NonNull
+    Map<String, String> channels() throws IOException {
+        return run("list channels", c -> {
+            Map<String, String> result = new TreeMap<>();
+            try (PreparedStatement ps = c.prepareStatement("select ch.agent, coalesce(m.name, ch.origin) from jenkins_channels ch"
+                    + " left join jenkins_members m on m.origin = ch.origin"
+                    + " where m.heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        result.put(rs.getString(1), rs.getString(2));
+                    }
+                }
+            }
+            return result;
         });
     }
 
