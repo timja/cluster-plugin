@@ -22,6 +22,11 @@ if [[ -n "${CNJ_SEED_DIR:-}" && -d "$CNJ_SEED_DIR" && ! -f "$JENKINS_HOME/secret
   cp -a "$CNJ_SEED_DIR/." "$JENKINS_HOME/"
 fi
 
+# Target 9 (Kubernetes): the same seed as one archive, from a Secret
+if [[ -n "${CNJ_SEED_TGZ:-}" && -f "$CNJ_SEED_TGZ" && ! -f "$JENKINS_HOME/secrets/master.key" ]]; then
+  tar -C "$JENKINS_HOME" -xzf "$CNJ_SEED_TGZ"
+fi
+
 # Locally built plugins (e.g. from the cnj/t1-* branches) replace the image's versions.
 if [[ -d /extra-plugins ]]; then
   mkdir -p "$JENKINS_HOME/plugins"

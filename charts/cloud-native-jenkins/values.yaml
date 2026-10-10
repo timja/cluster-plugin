@@ -1,0 +1,49 @@
+# Controllers: a StatefulSet for stable names (logs, the cluster view); their homes are disposable (emptyDir).
+controllers: 2
+image: cnj/jenkins:k8s
+imagePullPolicy: Never   # loaded into the cluster (kind load docker-image)
+resources:
+  requests: {cpu: 250m, memory: 1Gi}
+  limits: {memory: 2Gi}
+javaOpts: ""
+
+# The S0 key material (pre-plugin keys), identical for every controller: a Secret with a seed.tgz key,
+# made once with scripts/make-seed-secret.sh.
+seedSecret: cnj-seed
+
+# Configuration as code, identical for every controller. Settings not declared here are edited in the UI and shared.
+casc: |
+  jenkins:
+    systemMessage: "cloud-native-jenkins on Kubernetes"
+    numExecutors: 0
+    securityRealm:
+      local:
+        allowsSignup: false
+        users:
+          - id: admin
+            password: admin
+    authorizationStrategy: loggedInUsersCanDoAnything
+    crumbIssuer: cluster
+  unclassified:
+    globalDefaultFlowDurabilityLevel:
+      durabilityHint: MAX_SURVIVABILITY
+
+# Kubernetes agents: a cloud in the agent namespace; each controller's pods connect back to it (KUBERNETES_JENKINS_URL).
+kubernetesCloud:
+  enabled: true
+  containerCap: 4
+  namespace: ""          # default: the release namespace
+  agentImage: jenkins/inbound-agent:latest-jdk21
+
+# Shared state. In-chart Postgres and Azurite are for development; point at managed services in production.
+postgres:
+  inChart: true
+  image: postgres:16
+  url: ""                # e.g. jdbc:postgresql://db.example.com:5432/jenkins when not in-chart
+  user: jenkins
+  password: jenkins
+blob:
+  inChart: true
+  image: mcr.microsoft.com/azure-storage/azurite:3.34.0
+  connectionString: ""   # when not in-chart
+  container: jenkins

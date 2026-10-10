@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cnj.fullname" . }}-casc
+data:
+  base.yaml: |
+{{ .Values.casc | indent 4 }}
+{{- if .Values.kubernetesCloud.enabled }}
+  cloud.yaml: |
+    jenkins:
+      clouds:
+        - kubernetes:
+            name: kubernetes
+            namespace: {{ .Values.kubernetesCloud.namespace | default .Release.Namespace | quote }}
+            containerCap: {{ .Values.kubernetesCloud.containerCap }}
+            webSocket: true
+            # no jenkinsUrl: each controller's pods connect back to it (KUBERNETES_JENKINS_URL)
+            templates:
+              - name: default
+                label: k8s
+                containers:
+                  - name: jnlp
+                    image: {{ .Values.kubernetesCloud.agentImage | quote }}
+                    imagePullPolicy: Never
+{{- end }}

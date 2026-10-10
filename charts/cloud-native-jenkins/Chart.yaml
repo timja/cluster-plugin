@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cloud-native-jenkins
+description: Several Jenkins controllers, active/active, with disposable homes and all state in Postgres and blob storage
+type: application
+version: 0.1.0
+appVersion: "2.586-cnj"

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cnj.fullname" . }}
+spec:
+  serviceName: {{ include "cnj.fullname" . }}-headless
+  replicas: {{ .Values.controllers }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-controller}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-controller}
+      annotations:
+        checksum/casc: {{ include (print $.Template.BasePath "/configmap-casc.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "cnj.fullname" . }}
+      securityContext: {fsGroup: 1000}
+      containers:
+        - name: jenkins
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports: [{containerPort: 8080, name: http}]
+          envFrom: [{secretRef: {name: {{ include "cnj.fullname" . }}-store}}]
+          env:
+            - {name: CNJ_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+            - {name: CNJ_INTERNAL_URL, value: "http://$(CNJ_NAME).{{ include "cnj.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:8080/"}
+            - {name: KUBERNETES_JENKINS_URL, value: "$(CNJ_INTERNAL_URL)"}
+            - {name: CASC_JENKINS_CONFIG, value: /casc}
+            - {name: CNJ_SEED_TGZ, value: /seed/seed.tgz}
+            - name: JAVA_OPTS
+              value: >-
+                -Djenkins.install.runSetupWizard=false -Dhudson.model.UpdateCenter.never=true
+                -Dhudson.model.DownloadService.never=true -Djava.awt.headless=true
+                -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true {{ .Values.javaOpts }}
+          readinessProbe:
+            httpGet: {path: /login, port: 8080}
+            periodSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet: {path: /login, port: 8080}
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /login, port: 8080}
+            periodSeconds: 10
+            failureThreshold: 6
+          resources: {{ toJson .Values.resources }}
+          volumeMounts:
+            - {name: home, mountPath: /var/jenkins_home}
+            - {name: casc, mountPath: /casc, readOnly: true}
+            - {name: seed, mountPath: /seed, readOnly: true}
+      volumes:
+        - {name: home, emptyDir: {}}
+        - {name: casc, configMap: {name: {{ include "cnj.fullname" . }}-casc}}
+        - {name: seed, secret: {secretName: {{ .Values.seedSecret }}}}
