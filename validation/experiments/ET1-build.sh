@@ -35,3 +35,6 @@ cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgres
   echo "cloudbees-folder $FOLDER_REF $(git -C "$FOLDER" rev-parse "$FOLDER_REF")"
   echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
+
+echo "harness image (entrypoint installs .et1/plugins and the S0 seed)"
+docker build -q -t cnj/jenkins:dev "$HERE/jenkins"

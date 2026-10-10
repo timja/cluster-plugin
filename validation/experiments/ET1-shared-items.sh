@@ -44,7 +44,8 @@ docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gi
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -v "$ET1/war:/war-override:ro" cnj/jenkins:dev >/dev/null
 wait_up 8089
 groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get(); jenkins.model.Jenkins.get().getCrumbIssuer()' >/dev/null
-for f in secret.key secret.key.not-so-secret identity.key.enc secrets; do docker cp "et1-seed:/var/jenkins_home/$f" "$ET1/seed/" ; done
+# docker cp cannot read tmpfs mounts
+docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -f et1-seed >/dev/null
 
 log "shared git repository for the multibranch scenario"
@@ -142,6 +143,35 @@ for br in main feature2; do
   check "4 mb/$br keeps its properties() parameter in the store" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select convert_from(content,'UTF8') from jenkins_store where key='jobs/mb/branches/$br/config.xml'\" | grep -c ParametersDefinitionProperty) -ge 1 ]]"
   check "4 mb/$br shows the parameter on A and B" bash -c "curl -gsf -u $AUTH 'http://localhost:$A/job/mb/job/$br/api/json?tree=property[parameterDefinitions[name]]' | grep -q GREETING && curl -gsf -u $AUTH 'http://localhost:$B/job/mb/job/$br/api/json?tree=property[parameterDefinitions[name]]' | grep -q GREETING"
 done
+
+# ------------------------------------------------------------------ 4b. genuinely conflicting writers
+log "scenario 4b: builds of one job on A and B rewrite its config with different values"
+python3 - "$OUT_DIR/race.xml" <<'PY'
+import html, sys
+script = 'properties([parameters([string(name: "V", defaultValue: params.V ?: "0")])])\necho "V=${params.V}"'
+open(sys.argv[1], "w").write("<?xml version='1.1' encoding='UTF-8'?>\n<flow-definition plugin=\"workflow-job\"><definition class=\"org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition\" plugin=\"workflow-cps\">\n<script>" + html.escape(script) + "</script><sandbox>true</sandbox></definition></flow-definition>")
+PY
+create_job $A race "$OUT_DIR/race.xml"
+build $A race >/dev/null; wait_build $A race 1 >/dev/null
+eventually 15 exists $B /job/race
+ca0=$(conflicts $A); cb0=$(conflicts $B); v0=$(psql_q "select version from jenkins_store where key='jobs/race/config.xml'")
+for i in $(seq 1 40); do
+  post $A "/job/race/buildWithParameters?V=a$i" >/dev/null 2>&1 || true
+  post $B "/job/race/buildWithParameters?V=b$i" >/dev/null 2>&1 || true
+  sleep 0.5
+done
+wait_idle $A; wait_idle $B; sleep 5
+ca=$(( $(conflicts $A) - ca0 )); cb=$(( $(conflicts $B) - cb0 ))
+v1=$(psql_q "select version from jenkins_store where key='jobs/race/config.xml'")
+r "| ℹ️ | scenario 4b: 80 builds rewrote jobs/race/config.xml; store version $v0 → $v1; conflicts detected A=$ca B=$cb |"
+default_of() { grep -o '<defaultValue>[^<]*' | sed 's/<defaultValue>//' | tr -d '\r\n'; }
+stored_default=$(psql_q "select convert_from(content,'UTF8') from jenkins_store where key='jobs/race/config.xml'" | default_of)
+a_default=$(json $A /job/race/config.xml | default_of)
+b_default=$(json $B /job/race/config.xml | default_of)
+r "| ℹ️ | scenario 4b: final default parameter value: store=$stored_default A=$a_default B=$b_default |"
+check "4b A, B and the store converge on the same job config" test "$stored_default" = "$a_default" -a "$a_default" = "$b_default"
+writes=$(psql_q "select count(*) from jenkins_store_events where key='jobs/race/config.xml' and kind='WRITTEN' and version > $v0")
+r "| ℹ️ | scenario 4b: $writes writes in the event log; the store holds the last one. Builds reach properties() out of trigger order, so it need not be a40/b40; a stale overwrite would have shown as a conflict |"
 
 # ------------------------------------------------------------------ 6. write amplification (before 5, while A and B are settled)
 log "scenario 6: re-index with no changes"
