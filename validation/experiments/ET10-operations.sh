@@ -81,6 +81,20 @@ eventually 400 ready 2
 
 # ------------------------------------------------------------------ 3. importing a file-based home
 log "scenario 3: import a plain Jenkins home"
+# a plain controller (no store), as a team's existing Jenkins: an admin user and executors of its own
+cat <<EOF | k apply -f - >/dev/null
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: old-casc}
+data:
+  base.yaml: |
+    jenkins:
+      numExecutors: 2
+      securityRealm:
+        local:
+          users: [{id: admin, password: admin}]
+      authorizationStrategy: loggedInUsersCanDoAnything
+EOF
 cat <<EOF | k apply -f - >/dev/null
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -100,7 +114,7 @@ spec:
         - {name: JAVA_OPTS, value: "-Djenkins.install.runSetupWizard=false"}
         - {name: CASC_JENKINS_CONFIG, value: /casc/base.yaml}
       volumeMounts: [{name: home, mountPath: /var/jenkins_home}, {name: casc, mountPath: /casc}]
-  volumes: [{name: home, persistentVolumeClaim: {claimName: old-home}}, {name: casc, configMap: {name: $REL-casc}}]
+  volumes: [{name: home, persistentVolumeClaim: {claimName: old-home}}, {name: casc, configMap: {name: old-casc}}]
 EOF
 k wait --for=condition=Ready pod/old --timeout=300s >/dev/null
 until on old /api/json >/dev/null 2>&1; do sleep 3; done
@@ -108,7 +122,7 @@ g_on old 'def f = Jenkins.get().createProject(com.cloudbees.hudson.plugins.folde
 pipeline_on old oldp 'echo "an old pipeline"'
 on old "/job/team/job/fs/build?delay=0sec" -X POST >/dev/null; sleep 20; on old "/job/team/job/fs/build?delay=0sec" -X POST >/dev/null
 on old "/job/oldp/build?delay=0sec" -X POST >/dev/null
-sleep 30
+for b in "team/job/fs 1" "team/job/fs 2" "oldp 1"; do set -- $b; eventually 120 result_on old "$1" "$2" SUCCESS || true; done
 g_on old 'Jenkins.get().securityRealm.createAccount("olduser", "old-password-1")' >/dev/null
 old_token=$(g_on old 'def u = hudson.model.User.getById("olduser", false); def t = u.getProperty(jenkins.security.ApiTokenProperty).tokenStore.generateNewToken("old"); u.save(); println t.plainValue')
 g_on old 'def p = com.cloudbees.plugins.credentials.SystemCredentialsProvider.getInstance(); p.getCredentials().add(new org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl(com.cloudbees.plugins.credentials.CredentialsScope.GLOBAL, "oldsecret", "old", hudson.util.Secret.fromString("old-value"))); p.save()' >/dev/null
@@ -157,6 +171,7 @@ check "3 the old user's API token works" bash -c "[[ \$(kubectl --context kind-$
 pipeline_on "$REL-0" usecred 'withCredentials([string(credentialsId: "oldsecret", variable: "S")]) { echo "length ${S.length()}" }'
 on "$REL-0" "/job/usecred/build?delay=0sec" -X POST >/dev/null
 check "3 the old credential decrypts in a build" eventually 120 bash -c "kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' http://localhost:8080/job/usecred/1/consoleText | grep -q 'length 9'"
+info "3 node and quiet period on $REL-1: $(g_on "$REL-1" 'println((Jenkins.get().getNode("oldnode") != null) + "/" + Jenkins.get().quietPeriod)')"
 check "3 the old node and setting" bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' -X POST http://localhost:8080/scriptText --data-urlencode 'script=println((Jenkins.get().getNode(\"oldnode\") != null) + \"/\" + Jenkins.get().quietPeriod)' | tr -d '\r\n ') == true/3 ]]"
 # again: nothing changes
 h upgrade "$REL" "$CHART" --reuse-values --set controllers=0 >/dev/null; sleep 10
