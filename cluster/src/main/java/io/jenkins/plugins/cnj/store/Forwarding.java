@@ -47,6 +47,13 @@ final class Forwarding {
             "proxy-connection",
             "expect");
 
+    /**
+     * How long to wait for the owner's response headers (not its body: consoles stream). An owner that is paused or
+     * overloaded accepts the connection and never answers; after this the request is served locally, where the build
+     * is, by then, usually adopted.
+     */
+    static final long TIMEOUT_SECONDS = Long.getLong(Forwarding.class.getName() + ".timeoutSeconds", 20);
+
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NEVER)
@@ -71,7 +78,7 @@ final class Forwarding {
                 + req.getContextPath()
                 + path
                 + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(target)).timeout(Duration.ofMinutes(5));
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(target)).timeout(Duration.ofSeconds(TIMEOUT_SECONDS));
         for (String name : Collections.list(req.getHeaderNames())) {
             if (!HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
                 for (String value : Collections.list(req.getHeaders(name))) {

@@ -24,15 +24,25 @@ wait_idle() { sleep 3; eventually 300 idle "$1"; }
 psql_q() { et1 exec -T postgres psql -U jenkins -At -c "$1"; }
 container_of() { [[ $1 == "$A" ]] && echo jenkins-a || echo jenkins-b; }
 
-# snap <job path, e.g. /job/x or /job/mb/job/main> <ports...>: record every build the controllers know about
+# ran_on <job key> <number>: the port of the controller that first wrote the build's record (builds are shared since T3,
+# so every controller lists every build; the writer is the one that ran it)
+ran_on() {
+  local n; n=$(psql_q "select m.name from jenkins_store_events e left join jenkins_members m on m.origin = e.origin where e.key = '$1/builds/$2/build.xml' and e.kind = 'WRITTEN' order by e.seq limit 1")
+  case "$n" in jenkins-a) echo $A ;; jenkins-b) echo $B ;; *) echo "?" ;; esac
+}
+# snap <job path, e.g. /job/x or /job/mb/job/main> <ports...>: record every build the controllers know about, with the controller that ran it
 snap() {
-  local path=$1; shift
+  local path=$1 key; shift
+  key=$(echo "$path" | sed -e 's#^/job/#jobs/#' -e 's#/job/#/jobs/#g')
   for port in "$@"; do
     json "$port" "$path/api/json?tree=builds[number,timestamp]" 2>/dev/null \
       | python3 -c 'import json,sys
 d=json.load(sys.stdin)
 for b in d.get("builds", []):
-    print(json.dumps({"job": sys.argv[1], "controller": sys.argv[2], "number": b["number"], "ts": b["timestamp"]}))' "$path" "$port" >> "$OUT/builds.jsonl" || true
+    print(b["number"], b["timestamp"])' | while read -r num ts; do
+        grep -q "\"job\": \"$path\", \"number\": $num," "$OUT/builds.jsonl" && continue
+        echo "{\"job\": \"$path\", \"number\": $num, \"controller\": \"$(ran_on "$key" "$num")\", \"ts\": $ts}" >> "$OUT/builds.jsonl"
+      done || true
   done
 }
 # builds <job path> [since-epoch-ms]: unique builds recorded so far, as "number controller minute" lines

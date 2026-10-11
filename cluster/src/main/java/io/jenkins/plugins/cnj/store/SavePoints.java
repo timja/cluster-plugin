@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.persistence.ConflictException;
+import jenkins.persistence.PersistenceStores;
 import jenkins.persistence.RunningBuilds;
 import jenkins.util.Timer;
 import org.jenkinsci.plugins.workflow.cps.CpsFlowExecution;
@@ -207,6 +208,7 @@ public final class SavePoints {
             // fenced: another controller took the build over; never write over its flow nodes or leave save points
             st.stopped = true;
             states.remove(st.base);
+            deleteIfCompleted(blobs, st);
             BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run.getRootDir()));
             RunningBuilds.lost(st.run);
             return;
@@ -238,6 +240,7 @@ public final class SavePoints {
             blobs.delete(st.base + "/" + RECORD + "." + savePoint);
             st.stopped = true;
             states.remove(st.base);
+            deleteIfCompleted(blobs, st);
             BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run.getRootDir()));
             RunningBuilds.lost(st.run);
             return;
@@ -251,6 +254,21 @@ public final class SavePoints {
         }
         LOGGER.fine(() -> "Committed save point " + savePoint + " of " + st.run + " (" + p.program.length
                 + " bytes of program, " + p.nodes.size() + " nodes)");
+    }
+
+    /**
+     * A fenced owner (e.g. one woken from a pause) may have uploaded flow nodes after the new owner completed the build
+     * and deleted its save points: once the build has no running placeholder any more, nothing needs them.
+     */
+    private static void deleteIfCompleted(AzureBlobStore blobs, State st) {
+        try {
+            String placeholder = PersistenceStores.keyFor(st.run.getParent().getRootDir()) + "/running/" + st.run.getNumber() + ".xml";
+            if (PersistenceStores.get().read(placeholder) == null) {
+                blobs.delete(st.base);
+            }
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.FINE, "Could not clean up after " + st.run, e);
+        }
     }
 
     private static void put(AzureBlobStore blobs, String key, byte[] content) throws IOException {

@@ -204,6 +204,7 @@ eventually 120 result_is $A /job/steps0/1 SUCCESS
 dur0=$(json $A /job/steps0/1/api/json?tree=duration | jq_ 'd["duration"]')
 info "7 the same with PERFORMANCE_OPTIMIZED (no save points): ${dur0} ms"
 leftover=$(groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").findAll { it.contains("/running/") }.collect { it.replaceAll("/running/.*", "") }.unique().join(" ")')
+groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").findAll { it.contains("/running/") }.join("\n")' > "$OUT/leftover-save-points.txt" 2>&1 || true
 info "7 builds with save points left in blob storage: ${leftover:-none}"
 check "7 no save points left in blob storage after completion" test -z "$leftover"
 
