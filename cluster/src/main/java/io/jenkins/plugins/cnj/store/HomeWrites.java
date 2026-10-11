@@ -28,6 +28,7 @@ import org.kohsuke.stapler.export.ExportedBean;
  * {@code <class>.xml}), attributed to the plugin defining it. A list of what to check before relying on HA.
  */
 @ExportedBean
+@jenkins.security.stapler.StaplerAccessibleType // reached through ClusterView#getCompatibility
 public final class HomeWrites {
 
     /** Local by design: never reported. */
