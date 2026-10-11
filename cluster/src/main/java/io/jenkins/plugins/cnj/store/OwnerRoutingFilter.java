@@ -113,6 +113,27 @@ public final class OwnerRoutingFilter implements Filter {
         return new LastBuildPath(String.join("/", names), before, after);
     }
 
+    /** The job whose SCM polling log a path addresses ({@code [/view/v…]/job/a[/job/b…]/scmPollLog[/…]}), or null. */
+    @CheckForNull
+    static String pollLogPath(@NonNull String path) {
+        String[] segments = path.split("/");
+        int i = 0;
+        while (i < segments.length && segments[i].isEmpty()) {
+            i++;
+        }
+        while (i + 1 < segments.length && segments[i].equals("view")) {
+            i += 2;
+        }
+        List<String> names = new ArrayList<>();
+        while (i + 1 < segments.length && segments[i].equals("job")) {
+            names.add(decode(segments[i + 1]));
+            i += 2;
+        }
+        return names.isEmpty() || i >= segments.length || !segments[i].equals("scmPollLog") ? null : String.join("/", names);
+    }
+
+    static final String SCM_TRIGGER = "hudson.triggers.SCMTrigger";
+
     private static int newerElsewhere(Job<?, ?> job) {
         return RunningBuilds.newerElsewhere(job);
     }
@@ -170,6 +191,14 @@ public final class OwnerRoutingFilter implements Filter {
                             + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
                     rsp.sendRedirect(target);
                     return;
+                } else if (pollLogPath(path) instanceof String polled
+                        && Jenkins.get().getItemByFullName(polled, Job.class) != null
+                        && store.lastClaimant(polled, SCM_TRIGGER) instanceof String claimant
+                        && !claimant.equals(store.getOrigin()) && store.urlOfOrigin(claimant) instanceof String pollerUrl) {
+                    // Target 15: polling runs once per tick, on whichever controller claimed it; its log is there
+                    if (relay(req, rsp, "the controller that polled", pollerUrl)) {
+                        return;
+                    }
                 } else {
                     String agent = computerPath(path);
                     String[] holder = agent == null || isOnlineHere(agent) ? null : store.channelHolder(agent);

@@ -90,6 +90,16 @@ rc=0; timeout 180 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/"
 info "3 build -s -v exit $rc: $(grep -m1 'Started' "$OUT/build-s.txt"), $(grep -m1 'Completed' "$OUT/build-s.txt")"
 check "3 build -s -v on B waits for the build A ran, with its log" bash -c "grep -q 'ala-line 5' '$OUT/build-s.txt' && grep -q 'Completed onala #1 : SUCCESS' '$OUT/build-s.txt' && [[ $rc == 0 ]]"
 
+# ------------------------------------------------------------------ 4. a controller without the cluster's keys (Target 15)
+log "scenario 4: a controller started against the store without the cluster's seeded keys"
+docker rm -f et20-noseed >/dev/null 2>&1 || true
+et1 run -d --no-deps --name et20-noseed -e CNJ_SEED_DIR= -e CNJ_NAME=noseed -e CNJ_INTERNAL_URL=http://et20-noseed:8080/ jenkins-a >/dev/null 2>&1 || true
+refuses() { docker logs et20-noseed 2>&1 | grep -q "does not have the key material of the cluster"; }
+check "4 it refuses to start, saying why" eventually 180 refuses
+check "4 ... and never became a member" bash -c "! curl -gsf -u '$AUTH' http://localhost:$A/manage/cluster/api/json | grep -q '\"noseed\"'"
+docker logs et20-noseed > "$OUT/noseed.log" 2>&1 || true
+docker rm -f et20-noseed >/dev/null 2>&1 || true
+
 docker rm -f et20-ala >/dev/null 2>&1 || true
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true

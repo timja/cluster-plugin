@@ -139,6 +139,27 @@ check "4 it was retried on a new agent pod" bash -c "[[ \$(curl -gsf -u '$AUTH' 
 check "4 the old agent pod is garbage collected" eventually 400 bash -c "! kubectl --context kind-$CLUSTER -n $NS get pod '$first_pod' >/dev/null 2>&1"
 eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 2 ]]"
 
+# ------------------------------------------------------------------ 4b. pod workspaces and stashes across an adoption (Target 15)
+log "scenario 4b: inline podTemplate; a stage stashes, the next is interrupted by losing its controller and resumes on a new pod"
+pipeline carry 'stage("write") { podTemplate { node(POD_LABEL) { sh "echo carried-by-stash > out.txt"; stash name: "out", includes: "out.txt" } } }
+stage("use") { retry(count: 2, conditions: [kubernetesAgent(), nonresumable()]) { podTemplate { node(POD_LABEL) {
+  sh '"'"'echo attempt-on-$(hostname); if test -f out.txt; then echo workspace-kept; else echo workspace-new; fi'"'"'
+  sleep 45; unstash "out"; sh "cat out.txt" } } } }'
+on "$REL-0" "/job/carry/build?delay=0sec" -X POST >/dev/null
+eventually 180 bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText 2>/dev/null | grep -q attempt-on" || true
+owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = 'jobs/carry/running/1.xml'" | sed -n 's/^controller=//p')
+info "4b carry #1 running on $owner_before"
+k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
+check "4b the build completes after its controller's pod was deleted" eventually 400 result_is carry 1 SUCCESS
+check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c 'attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
+check "4b ... and got the earlier stage's file from its stash" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q '^carried-by-stash'"
+eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 2 ]]"
+counters_zero() { [[ "$(psql_q "select coalesce(sum(count), 0) from jenkins_counters")" == 0 ]]; }
+check "4b the cluster's agent counters are back to 0 once the pods are gone" eventually 300 counters_zero
+info "4b counter rows left: $(psql_q "select count(*) from jenkins_counters")"
+zero_rows_pruned() { [[ "$(psql_q "select count(*) from jenkins_counters where scope like 'k8s-template:%' and count = 0")" == 0 ]]; }
+check "4b the inline templates' counters do not accumulate (rows at 0 are pruned)" zero_rows_pruned
+
 # ------------------------------------------------------------------ 5. no foreign garbage collection
 log "scenario 5: no controller deletes another's pods"
 for p in $(controllers); do k logs "$p" -c jenkins > "$OUT/$p.log" 2>&1; done

@@ -146,6 +146,24 @@ check "2 approved on A: the build completes with SUCCESS" eventually 180 result_
 check "2 the agent step after input ran" console_has $A /job/inp/1 "agent after input"
 restart jenkins-b; wait_up $B
 
+# ------------------------------------------------------------------ 2b. the workspace across an adoption (Target 15)
+log "scenario 2b: a later stage reads what an earlier stage left in the workspace, the owner killed in between"
+if agent_online_on $A; then OWNER=$A OTHER=$B KILL=kill_a OWNER_SVC=jenkins-a; else OWNER=$B OTHER=$A KILL=kill_b OWNER_SVC=jenkins-b; fi
+pipeline_job ws 'pipeline { agent { label "agent1" }; stages {
+  stage("write") { steps { sh "echo carried-from-stage-write > carried.txt" } }
+  stage("wait") { steps { sleep 40 } }
+  stage("read") { steps { sh "cat carried.txt" } } } }'
+create_job $OWNER ws "$OUT_DIR/ws.xml"; eventually 15 exists $OTHER /job/ws
+post $OWNER "/job/ws/build?delay=0sec" >/dev/null
+eventually 90 console_has $OWNER /job/ws/1 "Sleeping for"
+sleep 3 # its save point is shipped
+$KILL
+on_other() { agent_online_on $OTHER; }
+check "2b the other controller adopts it, and agent1 reconnects there" eventually 150 on_other
+check "2b the read stage finds the file the write stage left: the build completes" eventually 240 result_is $OTHER /job/ws/1 SUCCESS
+check "2b ... printing it after the resumption" bash -c "cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" http://localhost:$OTHER/job/ws/1/consoleText | python3 -c 'import sys; t=sys.stdin.read(); i=[t.find(s) for s in (\"Resuming\", \"cat carried.txt\", \"carried-from-stage-write\")]; sys.exit(0 if all(x >= 0 for x in i) and i == sorted(i) else 1)'"
+restart $OWNER_SVC; wait_up $OWNER
+
 # ------------------------------------------------------------------ 4. partition: owner paused, not killed
 log "scenario 4: docker pause A until B adopts, then unpause"
 pipeline_job pt 'echo "start"; for (int i = 1; i <= 40; i++) { echo "beat ${i}"; sleep 2 }; echo "end"'

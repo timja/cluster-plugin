@@ -960,6 +960,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             lastAlive = alive;
             if (!left.isEmpty()) {
                 LOGGER.info(() -> left.size() + " controller(s) left the cluster: " + left);
+                forgetCounters(left);
                 for (Consumer<Set<String>> l : leaveListeners) {
                     try {
                         l.accept(left);
@@ -1281,6 +1282,29 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             ps.setInt(4, delta);
             ps.executeUpdate();
         }
+        if (delta < 0) {
+            // Target 15: a row at 0 says nothing; Pipelines' own pod templates would otherwise leave one each
+            try (PreparedStatement ps = c.prepareStatement("delete from jenkins_counters where scope = ? and origin = ? and count = 0")) {
+                ps.setString(1, scope);
+                ps.setString(2, origin);
+                ps.executeUpdate();
+            }
+        }
+    }
+
+    /** Forgets what controllers that left the cluster counted (their counts no longer apply; Target 15). */
+    private void forgetCounters(Set<String> origins) {
+        try {
+            withControl(c -> {
+                try (PreparedStatement ps = c.prepareStatement("delete from jenkins_counters where origin = any(?)")) {
+                    ps.setArray(1, c.createArrayOf("text", origins.toArray()));
+                    ps.executeUpdate();
+                }
+                return null;
+            });
+        } catch (SQLException | RuntimeException e) {
+            LOGGER.log(Level.FINE, "Could not forget the counters of " + origins, e);
+        }
     }
 
     /** Records that this controller now holds the channel of an agent (Target 7). */
@@ -1375,6 +1399,21 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
+    /** The origin which claimed the latest tick of a trigger of an item (Target 15: whose log of it is the latest), or null. */
+    @CheckForNull
+    String lastClaimant(@NonNull String item, @NonNull String trigger) throws IOException {
+        return run("look up the last claim of " + trigger + " of " + item, c -> {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "select origin from jenkins_trigger_claims where item = ? and trigger = ? order by tick desc limit 1")) {
+                ps.setString(1, item);
+                ps.setString(2, trigger);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? rs.getString(1) : null;
+                }
+            }
+        });
+    }
+
     /**
      * Claims one tick of one trigger of one item for this controller.
      *
@@ -1404,6 +1443,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 try (Statement s = c.createStatement()) {
                     s.executeUpdate("delete from jenkins_trigger_claims where claimed_at < now() - interval '1 day'");
                     s.executeUpdate("delete from jenkins_store_events where at < now() - interval '1 day'");
+                    s.executeUpdate("delete from jenkins_counters k where not exists (select 1 from jenkins_members m where m.origin = k.origin"
+                            + " and m.heartbeat_at > now() - interval '1 hour')");
                 }
                 return null;
             });
