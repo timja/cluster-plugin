@@ -106,9 +106,10 @@ check "2 the whole log, in order, across the segments of both owners" eventually
 info "2 log segments: $(groovy $B "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/adopted/builds/1').findAll { it ==~ /.*\\/log(\\.[0-9]+)?/ }.size()" | tr -d '\r\n ')"
 restart_a
 
-# ------------------------------------------------------------------ 3. a folder renamed while a build in it runs
-# (a job itself cannot be renamed while it builds; its folder can, which moves the running build's log blobs)
-log "scenario 3: a folder renamed while a build in it runs"
+# ------------------------------------------------------------------ 3. no rename while a build runs elsewhere
+# (a job, or a folder holding it, cannot be renamed while it builds: also not from the controller that is not running it,
+# which would move the running build's blobs underneath its owner)
+log "scenario 3: renaming a job and its folder from B while the job builds on A"
 groovy $A 'Jenkins.get().createProject(com.cloudbees.hudson.plugins.folder.Folder, "before")' >/dev/null
 eventually 15 exists $B /job/before
 python3 - "$OUT_DIR/inner.xml" "${CHATTY//COUNT/200}" <<'PY'
@@ -121,11 +122,12 @@ curl -sf -u "$AUTH" -X POST "http://localhost:$A/job/before/createItem?name=inne
 eventually 15 exists $B /job/before/job/inner
 post $A "/job/before/job/inner/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/before/job/inner/1 "line 50"
-post $A "/job/before/confirmRename?newName=after" >/dev/null || true
-check "3 the folder was renamed while its build ran" eventually 15 exists $A /job/after/job/inner
-check "3 the build completes under its new name" eventually 180 is_result $A /job/after/job/inner/1 SUCCESS
-check "3 its whole log, in order, on B" eventually 60 console_whole_on $B /job/after/job/inner/1 after-b 200
-check "3 no failed appends after the rename" bash -c "[[ \$(docker logs et1-jenkins-a-1 2>&1 | grep -c 'Failed to ship the log of jobs/after') == 0 ]]"
+job_rename=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -X POST "http://localhost:$B/job/before/job/inner/confirmRename?newName=moved")
+folder_rename=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -X POST "http://localhost:$B/job/before/confirmRename?newName=after")
+check "3 renaming the job from B is refused ($job_rename)" bash -c "[[ '$job_rename' == 400 ]] && ! curl -gsf -u '$AUTH' http://localhost:$A/job/before/job/moved/api/json >/dev/null"
+check "3 renaming its folder from B is refused ($folder_rename)" bash -c "[[ '$folder_rename' == 400 ]] && ! curl -gsf -u '$AUTH' http://localhost:$A/job/after/api/json >/dev/null"
+check "3 the build completes, with its whole log on B" eventually 180 is_result $A /job/before/job/inner/1 SUCCESS
+check "3 ... in order" eventually 60 console_whole_on $B /job/before/job/inner/1 inner-b 200
 
 # ------------------------------------------------------------------ 4. failover time
 log "scenario 4: failover time (SIGKILL, three times)"
