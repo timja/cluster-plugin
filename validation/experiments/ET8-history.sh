@@ -84,8 +84,10 @@ log "scenario 2: 10 builds on A and 10 on B record the same file at once"
 for i in $(seq 1 10); do build_on $A fpa & build_on $B fpb & done; wait
 eventually 300 idle
 u=$(usages $A $md5)
-info "2 usages after: $u; builds: fpa [$(builds_of $A fpa)] fpb [$(builds_of $A fpb)]"
-check "2 all 20 new usages are recorded (fpa:1-11 fpb:1-11)" test "$u" = "fpa:1-11 fpb:1-11"
+na=$(builds_of $A fpa | wc -w | tr -d ' '); nb=$(builds_of $A fpb | wc -w | tr -d ' ')
+info "2 usages after: $u; builds (requests without parameters fold in the queue): fpa [$(builds_of $A fpa)] fpb [$(builds_of $A fpb)]"
+check "2 every build is a usage (fpa:1-$na fpb:1-$nb)" test "$u" = "fpa:1-$na fpb:1-$nb"
+check "2 builds ran on both controllers at once (more than one each)" test "$na" -gt 2 -a "$nb" -gt 2
 check "2 B agrees" test "$(usages $B $md5)" = "$u"
 
 # ------------------------------------------------------------------ 3. test results
@@ -139,6 +141,7 @@ exit(0 if strip(a) == strip(b) else 1)'"
 check "4b dk #1, running on A while B discarded, completed: its record was published" eventually 90 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store_events where key = 'jobs/dk/builds/1/build.xml' and kind = 'WRITTEN'\") -ge 1 ]]"
 check "4b then, the oldest of three, it was discarded: both keep [2 3]" eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$A/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' && \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' ]]"
 sleep 5; info "4b dk builds after: A [$(builds_of $A dk)] B [$(builds_of $B dk)]"
+et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1  # before they are replaced
 docker kill -s KILL et1-jenkins-a-1 >/dev/null
 alive_only_b() { [[ "$(json $B /manage/cluster/api/json?depth=1 | jq_ '",".join(sorted(m["name"] for m in d["members"] if m["alive"]))')" == jenkins-b ]]; }
 check "5 after A dies, B's view shows only B alive (within the membership timeout)" eventually 40 alive_only_b
@@ -149,7 +152,7 @@ et1 rm -sf jenkins-a jenkins-b >/dev/null 2>&1
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1; wait_up $A; wait_up $B
 check "1 the fingerprint and its usages survive (fresh B)" eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/fingerprint/$md5/api/json?tree=usage[name]' | python3 -c 'import json,sys; print(sorted(u[\"name\"] for u in json.load(sys.stdin)[\"usage\"]))') == \"['fpa', 'fpb']\" ]]"
 
-et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
+et1 logs jenkins-a > "$OUT/jenkins-a-fresh.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b-fresh.log" 2>&1
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true
 r ""
 r "Failures: $FAILED"
