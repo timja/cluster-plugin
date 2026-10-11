@@ -90,3 +90,19 @@ mark() { printf '%.3f %s\n' "$(python3 -c 'import time; print(time.time())')" "$
 agent_secret() {
   groovy "$1" "println(jenkins.model.Jenkins.get().getComputer('$2').getJnlpMac())" | tr -d '\r\n'
 }
+
+# Namespaces on the kind cluster that experiments create are labelled, and only those are ever deleted: a namespace
+# someone else made (e.g. a release installed by hand to try things) is left alone and the experiment stops.
+# claim_ns <kube-context> <namespace>
+claim_ns() {
+  local ctx=$1 ns=$2 owner
+  if kubectl --context "$ctx" get namespace "$ns" >/dev/null 2>&1; then
+    owner=$(kubectl --context "$ctx" get namespace "$ns" -o jsonpath='{.metadata.labels.cnj-validation}')
+    if [[ "$owner" != experiment ]]; then
+      echo "namespace $ns exists and was not created by an experiment; not touching it (delete it yourself, or use another one)" >&2
+      return 1
+    fi
+    kubectl --context "$ctx" delete namespace "$ns" --wait=true >/dev/null 2>&1
+  fi
+  kubectl --context "$ctx" create namespace "$ns" >/dev/null && kubectl --context "$ctx" label namespace "$ns" cnj-validation=experiment >/dev/null
+}

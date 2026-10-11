@@ -1,6 +1,6 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout">
-  <l:settings-subpage permission="${app.SYSTEM_READ}" width="wide" includeBreadcrumb="true">
+  <l:settings-subpage permission="${app.SYSTEM_READ}" width="wide">
       <p>This page is served by <strong>${it.self}</strong>. Everything below comes from the persistence store. See also <a href="compatibility/">what this controller keeps that the cluster does not share</a>.</p>
       <h2>Controllers</h2>
       <table class="jenkins-table">

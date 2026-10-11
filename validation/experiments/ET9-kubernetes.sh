@@ -60,8 +60,7 @@ EOF
   kind create cluster --name "$CLUSTER" --config "$OUT_DIR/kind.yaml" --wait 120s >/dev/null || exit 3
   "$VALIDATION_DIR/experiments/ET9-build-image.sh" >/dev/null || exit 3
 fi
-k delete namespace "$NS" --ignore-not-found --wait=true >/dev/null 2>&1
-kubectl --context "kind-$CLUSTER" create namespace "$NS" >/dev/null
+claim_ns "kind-$CLUSTER" "$NS" || exit 2
 "$CHART/scripts/make-seed-secret.sh" cnj/jenkins:k8s "$NS" >/dev/null || exit 3
 helm --kube-context "kind-$CLUSTER" -n "$NS" install "$REL" "$CHART" --set service.type=NodePort --set service.nodePort=30080 >/dev/null || exit 3
 r "## ET9 results ($(date -u +%Y-%m-%dT%H:%MZ))"

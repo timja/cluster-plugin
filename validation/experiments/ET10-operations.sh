@@ -30,7 +30,7 @@ open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
 PY
   k exec -i "$1" -c jenkins -- curl -gsf -u "$AUTH" -X POST "http://localhost:8080/createItem?name=$2" -H 'Content-Type: application/xml' --data-binary @- < "$OUT_DIR/$2.xml" >/dev/null
 }
-fresh_ns() { k delete namespace "$NS" --ignore-not-found --wait=true >/dev/null 2>&1; kubectl --context "kind-$CLUSTER" create namespace "$NS" >/dev/null; }
+fresh_ns() { claim_ns "kind-$CLUSTER" "$NS" || exit 2; }
 
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || { echo "run ET9 first (it creates the kind cluster)" >&2; exit 2; }
 # the "next" image: the same build, rebuilt (a new image id), to roll to
