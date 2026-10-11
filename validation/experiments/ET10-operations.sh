@@ -127,6 +127,7 @@ g_on old 'Jenkins.get().securityRealm.createAccount("olduser", "old-password-1")
 old_token=$(g_on old 'def u = hudson.model.User.getById("olduser", false); def t = u.getProperty(jenkins.security.ApiTokenProperty).tokenStore.generateNewToken("old"); u.save(); println t.plainValue')
 g_on old 'def p = com.cloudbees.plugins.credentials.SystemCredentialsProvider.getInstance(); p.getCredentials().add(new org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl(com.cloudbees.plugins.credentials.CredentialsScope.GLOBAL, "oldsecret", "old", hudson.util.Secret.fromString("old-value"))); p.save()' >/dev/null
 g_on old 'Jenkins.get().addNode(new hudson.slaves.DumbSlave("oldnode", "/tmp/oldnode", new hudson.slaves.JNLPLauncher())); Jenkins.get().setQuietPeriod(3)' >/dev/null
+info "3 the old controller's quiet period: $(g_on old 'println Jenkins.get().quietPeriod')"
 info "3 the old home: $(g_on old 'println Jenkins.get().getAllItems(hudson.model.Job).collect { it.fullName + "#" + it.builds.size() }.join(" ")')"
 k delete pod old --wait=true >/dev/null
 # the importer: the old home, with the store, importing (its keys become the cluster's seed)
@@ -157,6 +158,8 @@ EOF
 }
 importer
 k exec importer -c jenkins -- cat /var/jenkins_home/cnj-import-report.txt > "$OUT/import-report-1.txt" 2>/dev/null || true
+info "3 the importer's quiet period: $(g_on importer 'println Jenkins.get().quietPeriod'); stored: $(k exec "$REL-postgres-0" -- psql -U jenkins -At -c "select substring(convert_from(content, 'UTF8') from '<quietPeriod>[0-9]+</quietPeriod>') from jenkins_store where key = 'config.xml'")"
+k exec "$REL-postgres-0" -- psql -U jenkins -At -c "select e.kind, e.version, e.origin, e.at from jenkins_store_events e where e.key = 'config.xml' order by seq" > "$OUT/config-events.txt" 2>&1 || true
 info "3 import: $(tail -1 "$OUT/import-report-1.txt")"
 k exec importer -c jenkins -- tar -C /var/jenkins_home -czf - secret.key secret.key.not-so-secret identity.key.enc secrets > "$OUT_DIR/old-seed.tgz"
 k create secret generic old-seed --from-file=seed.tgz="$OUT_DIR/old-seed.tgz" >/dev/null

@@ -62,6 +62,7 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
                     setting("password", "CNJ_STORE_PASSWORD"),
                     PostgresPersistenceStoreProvider::owns);
             store.startHeartbeat();
+            HomeImporter.importFiles(store); // only with -D…importHome=true
             return store;
         } catch (IOException e) {
             // Refusing to start without the store is safer than silently diverging from other controllers.
