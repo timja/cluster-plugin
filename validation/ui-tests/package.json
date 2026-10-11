@@ -1,0 +1,11 @@
+{
+  "name": "cnj-ui-tests",
+  "private": true,
+  "description": "Real-browser checks of a cloud-native Jenkins cluster behind a round-robin load balancer (Target 15)",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
