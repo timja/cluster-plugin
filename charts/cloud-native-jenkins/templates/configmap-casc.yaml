@@ -23,5 +23,5 @@ data:
                 containers:
                   - name: jnlp
                     image: {{ .Values.kubernetesCloud.agentImage | quote }}
-                    imagePullPolicy: Never
+                    alwaysPullImage: false  # loaded into the cluster; IfNotPresent
 {{- end }}
