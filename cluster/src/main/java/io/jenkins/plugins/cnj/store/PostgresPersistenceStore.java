@@ -85,8 +85,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("create table if not exists jenkins_store ("
                             + "key text primary key, content bytea not null, sha256 bytea not null, version bigint not null,"
                             + " updated_at timestamptz not null default now(), updated_by text not null)");
-                    // Target 14 (scale): prefix listings (children, moves) use this index instead of scanning every row
-                    s.execute("create index if not exists jenkins_store_key_prefix on jenkins_store (key text_pattern_ops)");
+                    // Target 14 (scale): prefix listings (children, moves) use an index on keys; Target 15: it is built in the
+                    // background (SchemaMigrations.KEY_INDEX), concurrently, so that a large table is not locked meanwhile
+                    SchemaMigrations.expand(s);
                     s.execute(
                             "create table if not exists jenkins_members ("
                                     + "origin text primary key, heartbeat_at timestamptz not null, started_at timestamptz not null default now())");
@@ -187,13 +188,14 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 long version = nextVersion(c);
                 if (actual == ABSENT) {
                     try (PreparedStatement ps =
-                            c.prepareStatement("insert into jenkins_store (key, content, sha256, version, updated_by)"
-                                    + " values (?, ?, ?, ?, ?) on conflict (key) do nothing")) {
+                            c.prepareStatement("insert into jenkins_store (key, content, sha256, version, updated_by, size)"
+                                    + " values (?, ?, ?, ?, ?, ?) on conflict (key) do nothing")) {
                         ps.setString(1, key);
                         ps.setBytes(2, content);
                         ps.setBytes(3, sha);
                         ps.setLong(4, version);
                         ps.setString(5, origin);
+                        ps.setInt(6, content.length);
                         if (ps.executeUpdate() == 0) {
                             // created concurrently by someone else since our select
                             throw new Conflict(new ConflictException(key, expectedVersion, -1));
@@ -202,12 +204,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 } else {
                     try (PreparedStatement ps =
                             c.prepareStatement("update jenkins_store set content = ?, sha256 = ?, version = ?,"
-                                    + " updated_at = now(), updated_by = ? where key = ?")) {
+                                    + " updated_at = now(), updated_by = ?, size = ? where key = ?")) {
                         ps.setBytes(1, content);
                         ps.setBytes(2, sha);
                         ps.setLong(3, version);
                         ps.setString(4, origin);
-                        ps.setString(5, key);
+                        ps.setInt(5, content.length);
+                        ps.setString(6, key);
                         ps.executeUpdate();
                     }
                 }
@@ -498,6 +501,21 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     boolean holdsLivenessLockForTests() {
         return lockHeld;
+    }
+
+    /** Whether this controller runs schema migrations in the background (Target 15); on by default. */
+    static final boolean MIGRATE = !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".migrate"));
+    final SchemaMigrations migrations = new SchemaMigrations(this);
+    private Thread migrationThread;
+
+    /** A transaction for {@link SchemaMigrations}, on the work pool. */
+    <T> T migrationTransaction(Work<T> work) throws SQLException {
+        return withTransaction(work);
+    }
+
+    /** A connection outside the pools, for statements Postgres refuses in a transaction ({@code create index concurrently}). */
+    Connection directConnection() throws SQLException {
+        return dataSource().getConnection();
     }
 
     /** For tests: as if this controller had been steadily connected for long. */
@@ -857,6 +875,21 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * Starts recording this controller as a live member every {@link #HEARTBEAT_MILLIS}.
      */
     public synchronized void startHeartbeat() throws IOException {
+        if (migrationThread == null && MIGRATE) {
+            migrationThread = new Thread(() -> {
+                while (!closed) {
+                    try {
+                        Thread.sleep(TimeUnit.SECONDS.toMillis(10));
+                        migrations.runPending();
+                        Thread.sleep(TimeUnit.SECONDS.toMillis(50));
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }, "PostgresPersistenceStore schema migrations");
+            migrationThread.setDaemon(true);
+            migrationThread.start();
+        }
         if (SESSION_LOCKS && lockThread == null) {
             lockThread = new Thread(this::holdLock, "PostgresPersistenceStore liveness lock");
             lockThread.setDaemon(true);
@@ -1050,7 +1083,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * The version of the cluster protocol this controller speaks: what it stores and expects of its peers.
      * Raised when a change cannot coexist with older peers (which then must be gone before this version starts).
      */
-    static final int PROTOCOL = 1;
+    static final int PROTOCOL = 2; // 2 (Target 15): writes jenkins_store.size (SchemaMigrations.STORE_SIZE)
 
     /** What this controller runs: core and plugin versions, shown in the cluster view. */
     static final String VERSION = jenkins.model.Jenkins.VERSION + " / " + java.util.Objects.requireNonNullElse(
@@ -1514,6 +1547,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             if (lockThread != null) {
                 lockThread.interrupt();
             }
+            if (migrationThread != null) {
+                migrationThread.interrupt();
+            }
         }
         work.close();
         control.close();
@@ -1577,7 +1613,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
-    private interface Work<T> {
+    interface Work<T> {
         T run(Connection c) throws SQLException;
     }
 

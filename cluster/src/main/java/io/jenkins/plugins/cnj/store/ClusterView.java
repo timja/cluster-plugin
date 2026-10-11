@@ -230,6 +230,16 @@ public final class ClusterView extends ManagementLink {
         return result;
     }
 
+    /** Background schema migrations and how far they got (Target 15). */
+    public List<SchemaMigrations.Progress> getMigrations() {
+        PostgresPersistenceStore store = store();
+        try {
+            return store == null ? List.of() : store.migrations.progress();
+        } catch (java.sql.SQLException | RuntimeException e) {
+            return List.of();
+        }
+    }
+
     /** Shared-queue items waiting for a controller to start them, and claimed by one (Target 15). */
     @Exported
     public java.util.Map<String, Integer> getQueue() throws IOException {

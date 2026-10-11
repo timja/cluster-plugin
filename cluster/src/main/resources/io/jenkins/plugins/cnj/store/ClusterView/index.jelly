@@ -35,6 +35,15 @@
           </table>
         </j:otherwise>
       </j:choose>
+      <h2>Schema migrations</h2>
+      <table class="jenkins-table">
+        <thead><tr><th>Migration</th><th>State</th><th>Rows done</th></tr></thead>
+        <tbody>
+          <j:forEach var="m" items="${it.migrations}">
+            <tr><td>${m.id()}</td><td>${m.state()}</td><td>${m.rows()}</td></tr>
+          </j:forEach>
+        </tbody>
+      </table>
       <h2>Running builds</h2>
       <table class="jenkins-table">
         <thead><tr><th>Build</th><th>Running on</th></tr></thead>
