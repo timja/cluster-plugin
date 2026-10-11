@@ -159,7 +159,7 @@ check "no queue item was put back for a controller wrongly taken for gone" no_re
 log "scenario 6: A restarted while Postgres is down"
 et1 stop jenkins-a >/dev/null 2>&1
 et1 stop postgres >/dev/null 2>&1
-et1 rm -f jenkins-a >/dev/null 2>&1; et1 up -d jenkins-a >/dev/null 2>&1
+et1 rm -f jenkins-a >/dev/null 2>&1; et1 up -d --no-deps jenkins-a >/dev/null 2>&1 # (not Postgres with it)
 sleep 40
 info "6 A while the store is down: /login $(code $A /login)"
 check "6 A is not serving while it waits for the store" not_serving
