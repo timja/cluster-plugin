@@ -1,14 +1,11 @@
 package io.jenkins.plugins.cnj.store;
 
-import hudson.init.InitMilestone;
-import hudson.init.Initializer;
 import hudson.util.Secret;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.logging.Logger;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
-import jenkins.persistence.PersistenceStores;
 import jenkins.util.SystemProperties;
 
 /**
@@ -29,10 +26,12 @@ public final class KeyCheck {
 
     private KeyCheck() {}
 
-    @Initializer(after = InitMilestone.EXTENSIONS_AUGMENTED, before = InitMilestone.JOB_LOADED)
-    public static void check() throws IOException {
-        PersistenceStore store = PersistenceStores.get();
-        if (!(store instanceof PostgresPersistenceStore) || SystemProperties.getBoolean(KeyCheck.class.getName() + ".skip")) {
+    /**
+     * Called as soon as the store is created (before this controller heartbeats, and before anything reads secrets
+     * from it, which would fail less clearly).
+     */
+    static void verify(PostgresPersistenceStore store) throws IOException {
+        if (SystemProperties.getBoolean(KeyCheck.class.getName() + ".skip")) {
             return;
         }
         PersistenceStore.Entry e = store.read(KEY);
@@ -41,7 +40,7 @@ public final class KeyCheck {
                 store.write(KEY, Secret.fromString(VALUE).getEncryptedValue().getBytes(StandardCharsets.UTF_8), PersistenceStore.ABSENT);
                 LOGGER.info("Recorded the cluster's key check: controllers started without this controller's keys will refuse to start");
             } catch (ConflictException raced) {
-                check(); // another controller recorded it first: check against theirs
+                verify(store); // another controller recorded it first: check against theirs
             }
             return;
         }
@@ -49,7 +48,7 @@ public final class KeyCheck {
         if (s == null || !VALUE.equals(s.getPlainText())) {
             // leave the cluster before failing: a Jenkins that failed to start keeps running (its error page), and must
             // not go on heartbeating as a member
-            ((PostgresPersistenceStore) store).close();
+            store.close();
             throw new IllegalStateException("This controller does not have the key material of the cluster it shares a store with:"
                     + " it cannot decrypt the cluster's secrets, and would write secrets the others cannot read. Start it with"
                     + " the cluster's seeded keys (secret.key, secrets/; the chart's seed Secret), or set"

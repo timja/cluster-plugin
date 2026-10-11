@@ -29,6 +29,9 @@ open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
 PY
   create_job $A "$1" "$OUT_DIR/$1.xml"; eventually 15 exists $B "/job/$1"
 }
+# runs a command for at most $1 seconds (macOS has no timeout(1)); its exit code, or 124 if it was stopped
+run_for() { local secs=$1; shift; "$@" & local pid=$!; ( sleep "$secs"; kill "$pid" 2>/dev/null ) & local w=$!
+  local rc=0; wait "$pid" || rc=$?; kill "$w" 2>/dev/null; return $rc; }
 cli() { java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$1/" -auth "$AUTH" -http "${@:2}"; }
 
 [[ -f "$ET1/war/jenkins.war" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
@@ -70,7 +73,7 @@ log "scenario 2: CLI console -f on B"
 pipeline tick 'pipeline { agent none; stages { stage("tick") { steps { script { for (int i = 1; i <= 15; i++) { echo "tick ${i}"; sleep 1 } } } } } }'
 post $A "/job/tick/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/tick/1 "tick 2"
-rc=0; timeout 120 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/" -auth "$AUTH" -http console tick 1 -f > "$OUT/console-f.txt" 2>&1 || rc=$?
+rc=0; run_for 120 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/" -auth "$AUTH" -http console tick 1 -f > "$OUT/console-f.txt" 2>&1 || rc=$?
 info "2 console -f exit $rc, $(grep -c '^tick\|tick [0-9]' "$OUT/console-f.txt") tick lines"
 check "2 console -f on B follows A's build to the end" bash -c "grep -q 'tick 15' '$OUT/console-f.txt' && grep -q 'Finished: SUCCESS' '$OUT/console-f.txt' && [[ $rc == 0 ]]"
 
@@ -86,7 +89,7 @@ cat > "$OUT_DIR/onala.xml" <<'XML'
 <project><assignedNode>ala</assignedNode><canRoam>false</canRoam><builders><hudson.tasks.Shell><command>for i in 1 2 3 4 5; do echo "ala-line $i"; sleep 1; done</command></hudson.tasks.Shell></builders></project>
 XML
 create_job $A onala "$OUT_DIR/onala.xml"; eventually 15 exists $B /job/onala
-rc=0; timeout 180 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/" -auth "$AUTH" -http build onala -s -v > "$OUT/build-s.txt" 2>&1 || rc=$?
+rc=0; run_for 180 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/" -auth "$AUTH" -http build onala -s -v > "$OUT/build-s.txt" 2>&1 || rc=$?
 info "3 build -s -v exit $rc: $(grep -m1 'Started' "$OUT/build-s.txt"), $(grep -m1 'Completed' "$OUT/build-s.txt")"
 check "3 build -s -v on B waits for the build A ran, with its log" bash -c "grep -q 'ala-line 5' '$OUT/build-s.txt' && grep -q 'Completed onala #1 : SUCCESS' '$OUT/build-s.txt' && [[ $rc == 0 ]]"
 

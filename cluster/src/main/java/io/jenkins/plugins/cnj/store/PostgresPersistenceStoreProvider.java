@@ -82,6 +82,9 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
                         }
                     });
                 });
+                if (!HomeImporter.IMPORT) {
+                    KeyCheck.verify(store); // Target 15: refuses a controller without the cluster's key material
+                }
                 store.startHeartbeat();
                 HomeImporter.importFiles(store); // only with -D…importHome=true
                 return store;
