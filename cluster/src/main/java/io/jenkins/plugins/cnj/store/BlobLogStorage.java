@@ -112,7 +112,7 @@ public final class BlobLogStorage {
             try {
                 boolean found;
                 try (OutputStream out = Files.newOutputStream(tmp)) {
-                    found = blobs.download(key + "/" + name, out);
+                    found = blobs.downloadSegmented(key + "/" + name, out); // every segment, in order
                 }
                 if (found) {
                     Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE);
@@ -165,14 +165,55 @@ public final class BlobLogStorage {
      */
     static final class Shipper {
 
+        /**
+         * One local file shipped to a segmented append blob ({@code log}, {@code log.1}, …): a new segment starts before
+         * the current one reaches {@link AzureBlobStore#MAX_SEGMENT_BLOCKS} blocks (Target 14).
+         */
+        private static final class Stream {
+            final String base;
+            final File file;
+            /** Bytes shipped, over all segments. */
+            long offset;
+            int segment;
+            /** Where the current segment starts in the file. */
+            long segmentStart;
+            int segmentBlocks;
+            /** {@link System#currentTimeMillis} of the last append. */
+            long lastShip;
+
+            Stream(AzureBlobStore blobs, String base, File file) throws IOException {
+                this.base = base;
+                this.file = file;
+                // resuming (e.g. after a restart or adoption): continue after what was already shipped
+                List<AzureBlobStore.Segment> segments = blobs.segments(base);
+                for (AzureBlobStore.Segment seg : segments) {
+                    segment = seg.index();
+                    segmentStart = offset;
+                    segmentBlocks = seg.blocks();
+                    offset += seg.size();
+                }
+            }
+
+            long pending() {
+                return Math.max(0, file.length() - offset);
+            }
+
+            void reset() {
+                offset = 0;
+                segment = 0;
+                segmentStart = 0;
+                segmentBlocks = 0;
+            }
+        }
+
         private static final class Tracked {
             final AzureBlobStore blobs;
             final String key;
             final File log;
             final File index;
             final Run<?, ?> run;
-            long logOffset;
-            long indexOffset;
+            final Stream logStream;
+            final Stream indexStream;
             long lapses;
             /** The build completed: stop tracking once everything is shipped (Target 14). */
             volatile boolean finishing;
@@ -180,7 +221,7 @@ public final class BlobLogStorage {
             volatile boolean publishedEarly;
 
             boolean shippedAll() {
-                return logOffset >= log.length() && indexOffset >= (index.exists() ? index.length() : 0);
+                return logStream.pending() == 0 && (!index.exists() || indexStream.pending() == 0);
             }
 
             Tracked(AzureBlobStore blobs, String key, File log, Run<?, ?> run) throws IOException {
@@ -190,9 +231,8 @@ public final class BlobLogStorage {
                 this.run = run;
                 this.lapses = lapseCount();
                 this.index = new File(log.getPath() + "-index");
-                // resuming (e.g. after a restart): continue after what was already shipped
-                this.logOffset = blobs.size(key + "/" + LOG);
-                this.indexOffset = blobs.size(key + "/" + INDEX);
+                this.logStream = new Stream(blobs, key + "/" + LOG, log);
+                this.indexStream = new Stream(blobs, key + "/" + INDEX, index);
             }
         }
 
@@ -217,9 +257,26 @@ public final class BlobLogStorage {
             }
         }
 
+        /**
+         * Fewer, larger appends (Target 14): a build's log is shipped once this much is pending, or
+         * {@link #COALESCE_MILLIS} after the last shipment; save points and the end of a build ship at once.
+         */
+        static final int COALESCE_BYTES = Integer.getInteger(BlobLogStorage.class.getName() + ".coalesceBytes", 32 * 1024);
+        static final long COALESCE_MILLIS = Long.getLong(BlobLogStorage.class.getName() + ".coalesceMillis", 3_000);
+
+        private static boolean due(Tracked t) {
+            return t.finishing
+                    || t.logStream.pending() >= COALESCE_BYTES
+                    || System.currentTimeMillis() - t.logStream.lastShip >= COALESCE_MILLIS
+                    || t.indexStream.pending() > 0 && System.currentTimeMillis() - t.indexStream.lastShip >= COALESCE_MILLIS;
+        }
+
         private static void shipAll() {
             for (Tracked t : tracked.values()) {
                 try {
+                    if (!due(t)) {
+                        continue;
+                    }
                     ship(t);
                     if (t.finishing && t.shippedAll()) {
                         done(t);
@@ -259,49 +316,61 @@ public final class BlobLogStorage {
                     }
                     t.lapses = lapses;
                 }
-                long logOffset = shipFile(t.blobs, t.key + "/" + LOG, t.log, t.logOffset);
-                long indexOffset = logOffset < 0 ? -1 : shipFile(t.blobs, t.key + "/" + INDEX, t.index, t.indexOffset);
-                if (logOffset < 0 || indexOffset < 0) {
+                boolean ok = shipStream(t.blobs, t.logStream) && shipStream(t.blobs, t.indexStream);
+                if (!ok) {
                     if (t.run != null && RunningBuilds.owns(t.run)) {
                         // we own the build: a controller which lost it appended meanwhile; our local copy is the truth
                         LOGGER.warning(() ->
                                 "Log of " + t.key + " was appended to by a previous owner; rewriting it from here");
-                        t.logOffset = rewrite(t.blobs, t.key + "/" + LOG, t.log);
-                        t.indexOffset = rewrite(t.blobs, t.key + "/" + INDEX, t.index);
+                        rewrite(t.blobs, t.logStream);
+                        rewrite(t.blobs, t.indexStream);
                         return;
                     }
                     // someone else appended: another controller owns the build now
                     LOGGER.warning(
                             () -> "Log of " + t.key + " was appended to elsewhere; no longer shipping it from here");
                     drop(t.key);
-                    return;
                 }
-                t.logOffset = logOffset;
-                t.indexOffset = indexOffset;
             }
         }
 
-        /** @return the new offset, or -1 if the blob was appended to by someone else */
-        private static long shipFile(AzureBlobStore blobs, String blobKey, File file, long offset) throws IOException {
-            while (file.length() > offset) {
-                int n = (int) Math.min(MAX_SHIP, file.length() - offset);
+        /**
+         * Appends what the file has beyond what was shipped, starting a new segment before the current one is full.
+         *
+         * @return false if the blob was appended to by someone else
+         */
+        private static boolean shipStream(AzureBlobStore blobs, Stream st) throws IOException {
+            while (st.file.length() > st.offset) {
+                int n = (int) Math.min(MAX_SHIP, st.file.length() - st.offset);
+                int blocks = (n + AzureBlobStore.MAX_APPEND_BLOCK - 1) / AzureBlobStore.MAX_APPEND_BLOCK;
+                if (st.segmentBlocks > 0 && st.segmentBlocks + blocks > AzureBlobStore.MAX_SEGMENT_BLOCKS) {
+                    st.segment++;
+                    st.segmentStart = st.offset;
+                    st.segmentBlocks = 0;
+                    LOGGER.fine(() -> "Starting segment " + st.segment + " of " + st.base);
+                }
                 byte[] bytes = new byte[n];
-                try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
-                    raf.seek(offset);
+                try (RandomAccessFile raf = new RandomAccessFile(st.file, "r")) {
+                    raf.seek(st.offset);
                     raf.readFully(bytes);
                 }
-                if (!blobs.appendAt(blobKey, bytes, 0, n, offset)) {
-                    return -1;
+                if (!blobs.appendAt(AzureBlobStore.segment(st.base, st.segment), bytes, 0, n, st.offset - st.segmentStart)) {
+                    return false;
                 }
-                offset += n;
+                st.offset += n;
+                st.segmentBlocks += blocks;
+                st.lastShip = System.currentTimeMillis();
             }
-            return offset;
+            return true;
         }
 
-        /** Replaces a blob with the whole local file, as a fresh append blob; returns the new offset. */
-        private static long rewrite(AzureBlobStore blobs, String blobKey, File file) throws IOException {
-            blobs.delete(blobKey);
-            return file.exists() ? shipFile(blobs, blobKey, file, 0) : 0;
+        /** Replaces a segmented blob with the whole local file, as fresh append blobs. */
+        private static void rewrite(AzureBlobStore blobs, Stream st) throws IOException {
+            blobs.deleteSegmented(st.base);
+            st.reset();
+            if (st.file.exists()) {
+                shipStream(blobs, st);
+            }
         }
 
         /** Ships what a build's log has now, if it is tracked here; failures propagate. */
@@ -420,7 +489,7 @@ public final class BlobLogStorage {
             }
             byte[] log = blobs == null || jobKey == null
                     ? null
-                    : blobs.readFrom(jobKey + "/builds/" + number + "/" + LOG, 0);
+                    : blobs.readSegmentedFrom(jobKey + "/builds/" + number + "/" + LOG, 0);
             if (log == null) {
                 rsp.sendError(404);
                 return;

@@ -2,6 +2,7 @@ package io.jenkins.plugins.cnj.store;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.io.ByteArrayInputStream;
@@ -102,5 +103,41 @@ class AzureBlobStoreTest {
         }
         blobs.append("jobs/p/builds/4/log", big, 0, big.length);
         assertArrayEquals(big, blobs.readFrom("jobs/p/builds/4/log", 0));
+    }
+
+    private static byte[] b(String s) {
+        return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void segmentedLogsReadAsOne() throws Exception {
+        String base = "jobs/p/builds/1/log";
+        assertTrue(blobs.appendAt(base, b("one\n"), 0, 4, 0));
+        assertTrue(blobs.appendAt(AzureBlobStore.segment(base, 1), b("two\n"), 0, 4, 0));
+        assertTrue(blobs.appendAt(AzureBlobStore.segment(base, 2), b("three\n"), 0, 6, 0));
+        assertTrue(blobs.appendAt(base + "-index", b("idx"), 0, 3, 0)); // shares the name as a prefix: not a segment
+        java.util.List<AzureBlobStore.Segment> segments = blobs.segments(base);
+        assertEquals(java.util.List.of(0, 1, 2), segments.stream().map(AzureBlobStore.Segment::index).toList());
+        assertEquals(1, segments.get(0).blocks());
+        assertEquals(14, blobs.segmentedSize(base));
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        assertTrue(blobs.downloadSegmented(base, out));
+        assertEquals("one\ntwo\nthree\n", out.toString(StandardCharsets.UTF_8));
+        assertEquals("o\nthree\n", new String(blobs.readSegmentedFrom(base, 6), StandardCharsets.UTF_8), "across a boundary");
+        blobs.deleteSegmented(base);
+        assertTrue(blobs.segments(base).isEmpty());
+        assertEquals(3, blobs.size(base + "-index"), "the index is left alone");
+    }
+
+    @Test
+    void movedLogsStayAppendable() throws Exception {
+        assertTrue(blobs.appendAt("jobs/old/builds/1/log", b("before\n"), 0, 7, 0));
+        put("jobs/old/builds/1/files.tgz", "snapshot");
+        blobs.move("jobs/old", "jobs/new");
+        assertTrue(blobs.appendAt("jobs/new/builds/1/log", b("after\n"), 0, 6, 7), "still an append blob, at its length");
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        blobs.download("jobs/new/builds/1/log", out);
+        assertEquals("before\nafter\n", out.toString(StandardCharsets.UTF_8));
+        assertEquals("snapshot", get("jobs/new/builds/1/files.tgz"));
     }
 }

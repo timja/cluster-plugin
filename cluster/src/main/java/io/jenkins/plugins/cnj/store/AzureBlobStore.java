@@ -20,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 import jenkins.persistence.BlobStore;
 
@@ -200,6 +201,103 @@ public class AzureBlobStore implements BlobStore {
         }
     }
 
+    // ------------------------------------------------------------------ segmented append blobs (Target 14)
+
+    /**
+     * Most blocks appended to one segment of a log before the next segment starts. An append blob takes at most
+     * 50,000 blocks: a build logging steadily for half a day reaches that (one block per shipment).
+     */
+    static final int MAX_SEGMENT_BLOCKS = Integer.getInteger(AzureBlobStore.class.getName() + ".maxSegmentBlocks", 49_000);
+
+    /** The blob holding segment {@code i} of a segmented blob: {@code base}, then {@code base.1}, {@code base.2}, … */
+    static String segment(String base, int i) {
+        return i == 0 ? base : base + "." + i;
+    }
+
+    /** One segment of a segmented blob: its index, size and committed block count. */
+    record Segment(int index, String key, long size, int blocks) {}
+
+    /** The segments of a segmented blob, in order (empty if there is none). */
+    @NonNull
+    List<Segment> segments(@NonNull String base) throws IOException {
+        java.util.TreeMap<Integer, String> names = new java.util.TreeMap<>();
+        try {
+            for (BlobItem item : container.listBlobs(new ListBlobsOptions().setPrefix(base), null)) {
+                String name = item.getName();
+                if (name.equals(base)) {
+                    names.put(0, name);
+                } else if (name.startsWith(base + ".") && name.substring(base.length() + 1).matches("[0-9]+")) {
+                    names.put(Integer.parseInt(name.substring(base.length() + 1)), name);
+                }
+            }
+            List<Segment> result = new ArrayList<>();
+            for (Map.Entry<Integer, String> e : names.entrySet()) {
+                com.azure.storage.blob.models.BlobProperties props = container.getBlobClient(e.getValue()).getProperties();
+                Integer blocks = props.getCommittedBlockCount();
+                result.add(new Segment(e.getKey(), e.getValue(), props.getBlobSize(), blocks == null ? 0 : blocks));
+            }
+            return result;
+        } catch (RuntimeException e) {
+            if (notFound(e)) {
+                return List.of(); // deleted while being listed
+            }
+            throw wrap("list segments of", base, e);
+        }
+    }
+
+    /** The total size of a segmented blob, or 0 if there is none. */
+    long segmentedSize(@NonNull String base) throws IOException {
+        long size = 0;
+        for (Segment s : segments(base)) {
+            size += s.size();
+        }
+        return size;
+    }
+
+    /** Copies a whole segmented blob to a stream; false if there is none. */
+    boolean downloadSegmented(@NonNull String base, @NonNull OutputStream out) throws IOException {
+        List<Segment> segments = segments(base);
+        if (segments.isEmpty()) {
+            return false;
+        }
+        for (Segment s : segments) {
+            download(s.key(), out);
+        }
+        return true;
+    }
+
+    /** Reads a segmented blob from an offset to its current end; null if there is none. */
+    @CheckForNull
+    byte[] readSegmentedFrom(@NonNull String base, long offset) throws IOException {
+        List<Segment> segments = segments(base);
+        if (segments.isEmpty()) {
+            return null;
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        long start = 0;
+        for (Segment s : segments) {
+            if (offset < start + s.size()) {
+                byte[] part = readFrom(s.key(), Math.max(0, offset - start));
+                if (part != null) {
+                    out.write(part, 0, part.length);
+                }
+            }
+            start += s.size();
+        }
+        return out.toByteArray();
+    }
+
+    /** Deletes every segment of a segmented blob (not other blobs sharing its name as a prefix). */
+    void deleteSegmented(@NonNull String base) throws IOException {
+        for (Segment s : segments(base)) {
+            try {
+                container.getBlobClient(s.key()).deleteIfExists();
+            } catch (RuntimeException e) {
+                throw wrap("delete", s.key(), e);
+            }
+        }
+    }
+
     /**
      * Names of the blob with this key and every blob below it, for cleanup and diagnostics.
      */
@@ -242,14 +340,40 @@ public class AzureBlobStore implements BlobStore {
                         continue;
                     }
                 }
-                try (InputStream in = Files.newInputStream(tmp)) {
-                    put(target, in, Files.size(tmp));
+                if (isAppendBlob(key)) {
+                    // a running build's log stays appendable under its new name (Target 14)
+                    copyAsAppendBlob(tmp, target);
+                } else {
+                    try (InputStream in = Files.newInputStream(tmp)) {
+                        put(target, in, Files.size(tmp));
+                    }
                 }
                 container.getBlobClient(key).deleteIfExists();
             } catch (RuntimeException e) {
                 throw wrap("move", key, e);
             } finally {
                 Files.deleteIfExists(tmp);
+            }
+        }
+    }
+
+    private boolean isAppendBlob(String key) {
+        try {
+            return container.getBlobClient(key).getProperties().getBlobType() == com.azure.storage.blob.models.BlobType.APPEND_BLOB;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private void copyAsAppendBlob(Path file, String target) throws IOException {
+        AppendBlobClient blob = container.getBlobClient(target).getAppendBlobClient();
+        blob.deleteIfExists();
+        blob.create();
+        byte[] buffer = new byte[MAX_APPEND_BLOCK];
+        try (InputStream in = Files.newInputStream(file)) {
+            int n;
+            while ((n = in.readNBytes(buffer, 0, buffer.length)) > 0) {
+                blob.appendBlock(new ByteArrayInputStream(buffer, 0, n), n);
             }
         }
     }
