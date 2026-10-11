@@ -89,7 +89,8 @@ n=$(segments_of chatty 1)
 info "1 log segments: $n"
 check "1 the log was rolled over into several segments" bash -c "[[ '$n' -gt 2 ]]"
 check "1 B shows the whole log, in order" eventually 60 console_whole_on $B /job/chatty/1 chatty-b 300
-check "1 after completion, B's API shows the completed build" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=lastBuild[number,building,result]') == *'\"building\":false,\"number\":1,\"result\":\"SUCCESS\"'* ]]"
+completed_on_b() { json $B '/job/chatty/api/json?tree=lastBuild[number,building,result]' | tee "$OUT/chatty-last-on-b.json" | grep -q '"building":false,"number":1,"result":"SUCCESS"'; }
+check "1 after completion, B's API shows the completed build" eventually 30 completed_on_b
 
 # ------------------------------------------------------------------ 2. rolled over, then adopted
 log "scenario 2: A killed after its build's log rolled over; B adopts and continues"
@@ -105,14 +106,25 @@ check "2 the whole log, in order, across the segments of both owners" eventually
 info "2 log segments: $(groovy $B "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/adopted/builds/1').findAll { it ==~ /.*\\/log(\\.[0-9]+)?/ }.size()" | tr -d '\r\n ')"
 restart_a
 
-# ------------------------------------------------------------------ 3. a job renamed while it runs
-log "scenario 3: a job renamed while its build runs"
-pipeline $A before "${CHATTY//COUNT/200}"
-post $A "/job/before/build?delay=0sec" >/dev/null
-eventually 60 console_has $A /job/before/1 "line 50"
+# ------------------------------------------------------------------ 3. a folder renamed while a build in it runs
+# (a job itself cannot be renamed while it builds; its folder can, which moves the running build's log blobs)
+log "scenario 3: a folder renamed while a build in it runs"
+groovy $A 'Jenkins.get().createProject(com.cloudbees.hudson.plugins.folder.Folder, "before")' >/dev/null
+eventually 15 exists $B /job/before
+python3 - "$OUT_DIR/inner.xml" "${CHATTY//COUNT/200}" <<'PY'
+import sys
+from xml.sax.saxutils import escape
+open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job"><definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps"><script>%s</script><sandbox>true</sandbox></definition></flow-definition>""" % escape(sys.argv[2]))
+PY
+curl -sf -u "$AUTH" -X POST "http://localhost:$A/job/before/createItem?name=inner" -H 'Content-Type: application/xml' --data-binary @"$OUT_DIR/inner.xml" >/dev/null
+eventually 15 exists $B /job/before/job/inner
+post $A "/job/before/job/inner/build?delay=0sec" >/dev/null
+eventually 60 console_has $A /job/before/job/inner/1 "line 50"
 post $A "/job/before/confirmRename?newName=after" >/dev/null || true
-check "3 the renamed build completes" eventually 180 is_result $A /job/after/1 SUCCESS
-check "3 its whole log, in order, on B" eventually 60 console_whole_on $B /job/after/1 after-b 200
+check "3 the folder was renamed while its build ran" eventually 15 exists $A /job/after/job/inner
+check "3 the build completes under its new name" eventually 180 is_result $A /job/after/job/inner/1 SUCCESS
+check "3 its whole log, in order, on B" eventually 60 console_whole_on $B /job/after/job/inner/1 after-b 200
 check "3 no failed appends after the rename" bash -c "[[ \$(docker logs et1-jenkins-a-1 2>&1 | grep -c 'Failed to ship the log of jobs/after') == 0 ]]"
 
 # ------------------------------------------------------------------ 4. failover time
