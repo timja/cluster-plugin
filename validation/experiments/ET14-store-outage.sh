@@ -30,7 +30,7 @@ ticks_once() { # job number count: the console has "tick 1".."tick N" once each,
   [[ "$(grep -o '^tick [0-9]*' "$OUT/console-$1-$2.txt" | tr '\n' ' ')" == "$(seq -f 'tick %g' 1 "$3" | tr '\n' ' ')" ]] \
     && grep -q '^the end' "$OUT/console-$1-$2.txt"
 }
-no_log() { ! et1 logs jenkins-a jenkins-b 2>&1 | grep -q -- "$1"; }
+no_log() { [[ "$(et1 logs jenkins-a jenkins-b 2>&1 | grep -c -- "$1")" == 0 ]]; }
 live_members() { psql_q "select count(*) from jenkins_members where heartbeat_at > now() - interval '20 seconds'"; }
 pipeline() { # name script
   python3 - "$OUT_DIR/$1.xml" "$2" <<'PY'
@@ -75,7 +75,7 @@ system_message_reaches_b() { [[ "$(groovy $B 'print Jenkins.get().systemMessage'
 no_takeovers() { ! et1 logs jenkins-a jenkins-b 2>&1 | grep -E 'Ownership of .* was lost|Adopting |closed as aborted|Reclaimed '; }
 no_reclaims() { ! et1 logs jenkins-a jenkins-b 2>&1 | grep -E 'queue item\(s\) claimed by gone controllers back'; }
 not_serving() { [[ "$(curl -gs -m 10 -o /dev/null -w '%{http_code}' -u "$AUTH" http://localhost:$A/api/json)" != 200 ]]; }
-logs_waiting() { et1 logs jenkins-a 2>&1 | grep -q 'Waiting for the persistence store'; }
+logs_waiting() { [[ "$(et1 logs jenkins-a 2>&1 | grep -c 'Waiting for the persistence store')" -gt 0 ]]; }
 a_up() { curl -gsf -m 5 -u "$AUTH" http://localhost:$A/api/json >/dev/null; }
 two_live() { [[ "$(live_members)" == 2 ]]; }
 history_on_a() { for j in p1 f1 p2 f2 p3 f3 q4 p5 f5; do [[ "$(result_on $A "/job/$j/1")" == SUCCESS ]] || return 1; done; }

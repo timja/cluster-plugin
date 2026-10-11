@@ -29,7 +29,7 @@ pipeline() { # port name script
 import sys
 from xml.sax.saxutils import escape
 open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
-<flow-definition plugin="workflow-job"><definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps"><script>%s</script><sandbox>true</sandbox></definition></flow-definition>""" % escape(sys.argv[3]))
+<flow-definition plugin="workflow-job"><definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps"><script>%s</script><sandbox>true</sandbox></definition></flow-definition>""" % escape(sys.argv[2]))
 PY
   create_job "$1" "$2" "$OUT_DIR/$2.xml"; eventually 15 exists $B "/job/$2"; eventually 15 exists $A "/job/$2"
 }
@@ -98,7 +98,7 @@ post $A "/job/adopted/build?delay=0sec" >/dev/null
 eventually 90 console_has $A /job/adopted/1 "line 150"
 sleep 3 # a save point
 kill_a; killed=$SECONDS
-check "2 B adopts within 30 s" eventually 30 bash -c "docker logs et1-jenkins-b-1 2>&1 | grep -q 'Adopting adopted #1'"
+check "2 B adopts within 30 s" eventually 30 bash -c "[[ \$(docker logs et1-jenkins-b-1 2>&1 | grep -c 'Adopting adopted #1') -gt 0 ]]"
 info "2 adopted $((SECONDS - killed)) s after the kill"
 check "2 completes on B" eventually 240 is_result $B /job/adopted/1 SUCCESS
 check "2 the whole log, in order, across the segments of both owners" eventually 60 console_whole_on $B /job/adopted/1 adopted-b 400
@@ -113,7 +113,7 @@ eventually 60 console_has $A /job/before/1 "line 50"
 post $A "/job/before/confirmRename?newName=after" >/dev/null || true
 check "3 the renamed build completes" eventually 180 is_result $A /job/after/1 SUCCESS
 check "3 its whole log, in order, on B" eventually 60 console_whole_on $B /job/after/1 after-b 200
-check "3 no failed appends after the rename" bash -c "! docker logs et1-jenkins-a-1 2>&1 | grep -q 'Failed to ship the log of jobs/after'"
+check "3 no failed appends after the rename" bash -c "[[ \$(docker logs et1-jenkins-a-1 2>&1 | grep -c 'Failed to ship the log of jobs/after') == 0 ]]"
 
 # ------------------------------------------------------------------ 4. failover time
 log "scenario 4: failover time (SIGKILL, three times)"
@@ -123,7 +123,7 @@ for i in 1 2 3; do
   eventually 60 console_has $A /job/fo$i/1 "line 5"
   sleep 3
   kill_a; killed=$SECONDS
-  eventually 60 bash -c "docker logs et1-jenkins-b-1 2>&1 | grep -q 'Adopting fo$i #1'" || true
+  eventually 60 bash -c "[[ \$(docker logs et1-jenkins-b-1 2>&1 | grep -c 'Adopting fo$i #1') -gt 0 ]]" || true
   t=$((SECONDS - killed)); echo "$t" >> "$OUT/failover-seconds.txt"
   info "4 run $i: adopted $t s after the kill"
   eventually 120 is_result $B /job/fo$i/1 SUCCESS || true
