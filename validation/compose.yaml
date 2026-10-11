@@ -33,7 +33,7 @@ services:
       POSTGRES_DB: jenkins
 
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:latest
+    image: mcr.microsoft.com/azure-storage/azurite:3.34.0
     command: azurite-blob --blobHost 0.0.0.0 --loose --skipApiVersionCheck
 
   jenkins-a:
