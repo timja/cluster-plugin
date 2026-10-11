@@ -69,13 +69,94 @@ public final class Handover {
                 if (target == null || RunningBuilds.ownedPlaceholder(run) == null) {
                     continue;
                 }
-                String key = PersistenceStores.keyFor(run.getParent().getRootDir()) + "/running/" + run.getNumber() + SUFFIX;
+                String reason = staysHere(run, item);
+                if (reason != null) {
+                    LOGGER.fine(() -> "Not handing " + run + " over for '" + label + "': " + reason);
+                    continue;
+                }
+                String base = PersistenceStores.keyFor(run.getParent().getRootDir()) + "/running/" + run.getNumber();
+                if (!countHop(store, base + HOPS)) {
+                    LOGGER.warning(() -> run + " waits for '" + label + "', which only another controller has, but it was handed over "
+                            + MAX_HOPS + " times already (node blocks needing agents of different controllers); it waits here");
+                    continue;
+                }
+                String key = base + SUFFIX;
                 LOGGER.info(() -> "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
                 SavePoints.flush(run);
                 store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
                 RunningBuilds.handOver(run);
             } catch (IOException | RuntimeException e) {
                 LOGGER.log(Level.WARNING, "Could not hand " + run + " over", e);
+            }
+        }
+    }
+
+    /** Stored count of a build's handovers. */
+    static final String HOPS = ".hops";
+    /** How many times one build may be handed over (Target 15): bounded, so it never moves back and forth forever. */
+    static final int MAX_HOPS = Integer.getInteger(Handover.class.getName() + ".maxHops", 4);
+
+    /**
+     * Why a build waiting for a label only another controller has must stay here anyway (Target 15), or null: it runs
+     * other {@code node} blocks on this controller's agents (handing it over would interrupt them), or waits for
+     * another one this controller can serve (nested or parallel blocks needing agents of different controllers would
+     * otherwise send it back and forth).
+     */
+    @CheckForNull
+    static String staysHere(Run<?, ?> run, Queue.Item waiting) {
+        for (Computer c : Jenkins.get().getComputers()) {
+            for (hudson.model.Executor e : c.getExecutors()) {
+                hudson.model.queue.WorkUnit w = e.getCurrentWorkUnit();
+                if (w != null && w.work.getOwnerExecutable() == run) {
+                    return "it runs a node block on " + (c.getName().isEmpty() ? "the built-in node" : c.getName());
+                }
+            }
+        }
+        for (Queue.Item other : Queue.getInstance().getItems()) {
+            if (other != waiting && other.task.getOwnerExecutable() == run) {
+                Label l = other.getAssignedLabel();
+                if (l == null || servableHere(l)) {
+                    return "it also waits for '" + l + "', which this controller has";
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Counts a handover of a build; false if it was handed over {@link #MAX_HOPS} times already. */
+    private static boolean countHop(PostgresPersistenceStore store, String key) throws IOException {
+        for (int attempt = 0; attempt < 10; attempt++) {
+            PersistenceStore.Entry e = store.read(key);
+            int hops = e == null ? 0 : Integer.parseInt(new String(e.content(), StandardCharsets.UTF_8).trim());
+            if (hops >= MAX_HOPS) {
+                return false;
+            }
+            try {
+                store.write(key, String.valueOf(hops + 1).getBytes(StandardCharsets.UTF_8), e == null ? PersistenceStore.ABSENT : e.version());
+                return true;
+            } catch (jenkins.persistence.ConflictException again) {
+                // counted by another at the same moment: count again
+            }
+        }
+        return false;
+    }
+
+    /** Forgets a build's handover count once it is done. */
+    @hudson.Extension
+    public static final class Done extends hudson.model.listeners.RunListener<Run<?, ?>> {
+        @Override
+        public void onFinalized(Run<?, ?> run) {
+            if (PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+                String job = PersistenceStores.keyFor(run.getParent().getRootDir());
+                if (job != null) {
+                    try {
+                        if (store.read(job + "/running/" + run.getNumber() + HOPS) != null) {
+                            store.delete(job + "/running/" + run.getNumber() + HOPS, PersistenceStore.ANY);
+                        }
+                    } catch (IOException | RuntimeException e) {
+                        LOGGER.log(Level.FINE, "Could not forget the handovers of " + run, e);
+                    }
+                }
             }
         }
     }

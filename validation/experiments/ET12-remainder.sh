@@ -72,6 +72,15 @@ check "1 on lin, by B (handed over from A)" bash -c "[[ \$(cd $VALIDATION_DIR &&
 check "1 lab2 (first on A's controller, then on lin) completes with both parts" eventually 180 bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/lab2/1/consoleText | grep -q 'first, on the controller' && curl -gsf -u '$AUTH' http://localhost:$B/job/lab2/1/consoleText | grep -q then-on-agent && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/lab2/1/api/json?tree=result') == *SUCCESS* ]]"
 info "1 A logged: $(et1 logs jenkins-a 2>&1 | grep -o 'Handing [^:]* over' | sort -u | tr '\n' ';')"
 
+# Target 15: parallel node blocks needing agents of different controllers do not bounce the build between them
+log "scenario 1b: parallel branches, one on A's built-in node, one on lin (B only)"
+pipeline lab3 'parallel here: { node("built-in") { sleep 25; echo "here-done" } }, there: { node("lin") { sh "echo there-done" } }'
+post $A "/job/lab3/build?delay=0sec" >/dev/null
+check "1b lab3 completes, with both branches" eventually 240 bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/lab3/1/consoleText | grep -q here-done && curl -gsf -u '$AUTH' http://localhost:$B/job/lab3/1/consoleText | grep -q there-done && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/lab3/1/api/json?tree=result') == *SUCCESS* ]]"
+hand=$(et1 logs jenkins-a 2>&1 | grep -c 'Handing jobs/lab3\|Handing lab3' || true)
+info "1b A handed lab3 over $hand time(s)"
+check "1b handed over once, after the branch on A's node finished (not back and forth)" test "$hand" -le 1
+
 # ------------------------------------------------------------------ 2. files added to a completed build
 log "scenario 2: a file added to a completed build on A"
 cat > "$OUT_DIR/late.xml" <<'XML'
