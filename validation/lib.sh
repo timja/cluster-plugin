@@ -29,22 +29,48 @@ reset_env() {
 wait_up() {
   local port=$1 timeout=${2:-300} start=$SECONDS
   until curl -gsf -u "$AUTH" "http://localhost:$port/api/json" >/dev/null 2>&1; do
-    (( SECONDS - start > timeout )) && { log "Jenkins on $port not up after ${timeout}s"; boot_diagnostics "$port"; return 1; }
+    (( SECONDS - start > timeout )) && {
+      # why: not answering at all, still starting (503), or up but the token is not accepted (401)
+      log "Jenkins on $port not up after ${timeout}s (/login $(curl -gs -m 5 -o /dev/null -w '%{http_code}' "http://localhost:$port/login"), authenticated /api/json $(curl -gs -m 5 -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$port/api/json"))"
+      boot_diagnostics "$port"; return 1; }
     sleep 2
   done
   log "Jenkins on $port is up ($((SECONDS - start))s)"
 }
 
-# On a boot timeout: the container's log and a thread dump of its JVM, to $RAW_DIR/boot-timeout-<port>-<time>.txt
+# wait_postgres [container]: until the harness's Postgres accepts connections (a fresh volume initialises, then restarts)
+wait_postgres() {
+  local c=${1:-et1-postgres-1} start=$SECONDS
+  until docker exec "$c" pg_isready -U jenkins >/dev/null 2>&1; do
+    (( SECONDS - start > 120 )) && { log "Postgres in $c not ready after 120s"; return 1; }
+    sleep 1
+  done
+  sleep 1 # pg_isready answers during the init restart too
+  until docker exec "$c" pg_isready -U jenkins >/dev/null 2>&1; do sleep 1; done
+}
+
+# thread_dump <container>: a thread dump of the Jenkins JVM in a container
+thread_dump() {
+  docker exec "$1" sh -c 'jcmd $(pgrep -f jenkins.war | head -1) Thread.print 2>/dev/null' 2>&1
+}
+
+# On a boot timeout: the container's log and a thread dump of its JVM, the other controllers' thread dumps, and what
+# Postgres is doing, to $RAW_DIR/boot-timeout-<port>-<time>.txt
 boot_diagnostics() {
-  local port=$1 c out
+  local port=$1 c out other
   c=$(docker ps --filter "publish=$port" --format '{{.Names}}' | head -1)
   [[ -n "$c" ]] || return 0
   out="$RAW_DIR/boot-timeout-$port-$(date +%H%M%S).txt"
   mkdir -p "$RAW_DIR"
-  { echo "== docker logs $c"; docker logs "$c" 2>&1 | tail -200
-    echo "== thread dump"; docker exec "$c" sh -c 'jcmd $(pgrep -f jenkins.war | head -1) Thread.print 2>/dev/null || kill -3 $(pgrep -f jenkins.war | head -1)' 2>&1
-    sleep 2; docker logs "$c" 2>&1 | tail -400 | grep -A400 'Full thread dump' | head -600; } > "$out" 2>&1
+  { echo "== docker logs $c"; docker logs "$c" 2>&1 | tail -300
+    echo "== thread dump of $c"; thread_dump "$c"
+    for other in $(docker ps --format '{{.Names}}' | grep -E 'jenkins-[a-z]-1$' | grep -v "^$c$"); do
+      echo "== thread dump of $other"; thread_dump "$other"
+    done
+    for pg in $(docker ps --format '{{.Names}}' | grep -E 'postgres-1$'); do
+      echo "== $pg activity"; docker exec "$pg" psql -U jenkins -At -c "select pid, state, wait_event_type, wait_event, now() - query_start, left(query, 200) from pg_stat_activity where datname = 'jenkins'" 2>&1
+      echo "== $pg locks"; docker exec "$pg" psql -U jenkins -At -c "select l.pid, l.locktype, l.mode, l.granted, left(a.query, 120) from pg_locks l join pg_stat_activity a on a.pid = l.pid where a.datname = 'jenkins' and not l.granted" 2>&1
+    done; } > "$out" 2>&1
   log "boot diagnostics in $out"
 }
 

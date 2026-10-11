@@ -66,7 +66,7 @@ JF
 )
 sed 's#file:///tmp/repo#file:///repo#' "$JOBS/multibranch.xml" > "$OUT_DIR/multibranch.xml"
 
-et1 up -d postgres >/dev/null 2>&1; sleep 3
+et1 up -d postgres >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
 r "## ET1 results ($(date -u +%Y-%m-%dT%H:%MZ))"

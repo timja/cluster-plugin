@@ -19,14 +19,20 @@ def ensure = {
             property.tokenStore.addFixedNewToken('harness', token, null)
         }
         user.save()
+        return true
     }
+    return false
 }
 ensure()
+// for five minutes: a rewrite of the shared admin user can land late (a slow boot, a merge), and losing the token makes
+// the controller look down to the harness (401 on every call) although it runs fine
 Thread.start('cnj-admin-token') {
-    for (int i = 0; i < 15; i++) {
-        sleep(2000)
+    for (int i = 0; i < 60; i++) {
+        sleep(5000)
         try {
-            ensure()
+            if (ensure()) {
+                println "cnj-admin-token: the harness token was missing (attempt ${i + 1}); added it again"
+            }
         } catch (Exception e) {
             println "cnj-admin-token: ${e}"
         }

@@ -68,7 +68,7 @@ docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so
 docker rm -f et1-seed >/dev/null
 [[ -s "$ET1/agent1.secret" ]] || { echo "no agent secret" >&2; exit 2; }
 
-et1 up -d postgres azurite >/dev/null 2>&1; sleep 3
+et1 up -d postgres azurite >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
 et1 up -d lb agent1 >/dev/null 2>&1

@@ -86,6 +86,37 @@ public final class OwnerRoutingFilter implements Filter {
         return n > Integer.MAX_VALUE ? null : new BuildPath(String.join("/", names), (int) n);
     }
 
+    /** A path through a job's {@code lastBuild} permalink: the job, and the path before and after the permalink. */
+    record LastBuildPath(String job, String before, String after) {}
+
+    /** The {@code lastBuild} permalink a path goes through, if it has the shape {@code [/view/v…]/job/a[/job/b…]/lastBuild[/…]}. */
+    @CheckForNull
+    static LastBuildPath lastBuildPath(@NonNull String path) {
+        String[] segments = path.split("/", -1);
+        int i = 0;
+        while (i < segments.length && segments[i].isEmpty()) {
+            i++;
+        }
+        while (i + 1 < segments.length && segments[i].equals("view")) {
+            i += 2;
+        }
+        List<String> names = new ArrayList<>();
+        while (i + 1 < segments.length && segments[i].equals("job")) {
+            names.add(decode(segments[i + 1]));
+            i += 2;
+        }
+        if (names.isEmpty() || i >= segments.length || !segments[i].equals("lastBuild")) {
+            return null;
+        }
+        String before = String.join("/", java.util.Arrays.copyOfRange(segments, 0, i));
+        String after = String.join("/", java.util.Arrays.copyOfRange(segments, i + 1, segments.length));
+        return new LastBuildPath(String.join("/", names), before, after);
+    }
+
+    private static int newerElsewhere(Job<?, ?> job) {
+        return RunningBuilds.newerElsewhere(job);
+    }
+
     /** The agent a path addresses, if it has the shape {@code /computer/<name>[/…]}. */
     @CheckForNull
     static String computerPath(@NonNull String path) {
@@ -130,6 +161,15 @@ public final class OwnerRoutingFilter implements Filter {
                         builds.incrementAndGet();
                         return;
                     }
+                } else if (lastBuildPath(path) instanceof LastBuildPath last
+                        && Jenkins.get().getItemByFullName(last.job(), Job.class) instanceof Job<?, ?> job
+                        && newerElsewhere(job) > 0) {
+                    int n = newerElsewhere(job);
+                    // the newest build runs on another controller (Target 14): send the permalink there
+                    String target = req.getContextPath() + last.before() + "/" + n + "/" + last.after()
+                            + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
+                    rsp.sendRedirect(target);
+                    return;
                 } else {
                     String agent = computerPath(path);
                     String[] holder = agent == null || isOnlineHere(agent) ? null : store.channelHolder(agent);

@@ -68,7 +68,7 @@ survived() {
   check "$1: the Pipeline completed SUCCESS" eventually 300 is_result "/job/p$1/1" SUCCESS
   check "$1: the freestyle build completed SUCCESS" eventually 300 is_result "/job/f$1/1" SUCCESS
   check "$1: both consoles are whole (every tick once, and the end)" eventually 60 both_whole "$1"
-  check "$1: each build was published by one controller only" one_writer_each "$1"
+  check "$1: each build was published, by one controller only" eventually 60 one_writer_each "$1"
   check "$1: and there is no second build" single_builds "$1"
 }
 system_message_reaches_b() { [[ "$(groovy $B 'print Jenkins.get().systemMessage')" == "after the outage" ]]; }
@@ -113,7 +113,14 @@ log "scenario 2: Postgres paused for 60 s while builds run"
 start_pair 2
 docker pause et1-postgres-1 >/dev/null
 sleep 30
-info "2 during the outage: /login on A $(code $A /login), on B $(code $B /login); the job page on A $(code $A /job/p2/)"
+for page in / /api/json /job/p2/ /login; do
+  for port in $A $B; do
+    t=$(curl -gs -m 30 -o /dev/null -w '%{http_code} %{time_total}' -u "$AUTH" "http://localhost:$port$page" || true)
+    echo "$port $page $t" >> "$OUT/pages-during-outage.txt"
+  done
+done
+info "2 pages during the outage (port, page, status, seconds): $(tr '\n' ';' < "$OUT/pages-during-outage.txt")"
+check "2 every page answered within 10 s during the outage (degraded, not hung)" bash -c "awk '\$3 != 200 || \$4 > 10 { bad = 1 } END { exit bad }' '$OUT/pages-during-outage.txt'"
 sleep 30
 docker unpause et1-postgres-1 >/dev/null
 survived 2
@@ -130,7 +137,7 @@ survived 3
 log "scenario 4: a build requested while Postgres is paused"
 freestyle q4 'echo queued during the outage'
 docker pause et1-postgres-1 >/dev/null
-post $B "/job/q4/build?delay=0sec" -m 20 >/dev/null 2>&1; qcode=$?
+qcode=0; post $B "/job/q4/build?delay=0sec" -m 20 >/dev/null 2>&1 || qcode=$?
 sleep 20
 docker unpause et1-postgres-1 >/dev/null
 info "4 the build request during the outage: curl exit $qcode"

@@ -89,7 +89,7 @@ done
 (cd "$ET1/repo/mb" && git branch feature)
 commit() { (cd "$ET1/repo/$1" && date +%s%N > stamp && git add stamp && git commit -qm "change $(date +%s)"); }
 
-et1 up -d postgres >/dev/null 2>&1; sleep 3
+et1 up -d postgres >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
 r "## ET2 results ($(date -u +%Y-%m-%dT%H:%MZ))"

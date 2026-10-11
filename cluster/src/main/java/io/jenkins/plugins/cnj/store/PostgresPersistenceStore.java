@@ -772,6 +772,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 stableSince = now;
             }
             lastHeartbeatOk = now;
+            unreachableUntil = 0; // the database answers again
         } catch (SQLException e) {
             throw new IOException("Failed to record heartbeat", e);
         }
@@ -1274,7 +1275,32 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     /** Runs work in a transaction on a connection from the {@link #work} pool. */
     private <T> T withTransaction(Work<T> w) throws SQLException {
-        return withTransaction(work, w);
+        long until = unreachableUntil;
+        if (until != 0 && System.nanoTime() < until) {
+            // fail fast while the database is unreachable, so that pages and the queue do not wait for it call after
+            // call (Target 14); the heartbeat keeps probing on its own pool and closes this as soon as it gets through
+            throw new java.sql.SQLTransientConnectionException("The persistence store is unreachable; retrying shortly");
+        }
+        try {
+            T result = withTransaction(work, w);
+            unreachableUntil = 0;
+            return result;
+        } catch (SQLException e) {
+            if (isConnectionFailure(e)) {
+                unreachableUntil = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(FAIL_FAST_MILLIS);
+            }
+            throw e;
+        }
+    }
+
+    /** {@link System#nanoTime} until which ordinary store calls fail at once (0: they do not). */
+    private volatile long unreachableUntil;
+    static final long FAIL_FAST_MILLIS = Long.getLong(PostgresPersistenceStore.class.getName() + ".failFastMillis", 5_000);
+
+    /** Whether the database was found unreachable lately (calls fail fast). */
+    boolean isUnreachable() {
+        long until = unreachableUntil;
+        return until != 0 && System.nanoTime() < until;
     }
 
     /** Runs work in a transaction on a connection from the {@link #control} pool. */
@@ -1310,7 +1336,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             } catch (Conflict e) {
                 throw e;
             } catch (SQLException e) {
-                if (attempt == 0 && !committing && isConnectionFailure(e)) {
+                if (attempt == 0 && !committing && isConnectionFailure(e) && !(e instanceof java.sql.SQLTransientConnectionException)) {
                     LOGGER.log(Level.FINE, "Retrying on another connection", e);
                     continue;
                 }
@@ -1379,7 +1405,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         config.setAutoCommit(false);
         config.setMaximumPoolSize(size);
         config.setMinimumIdle(1);
-        config.setConnectionTimeout(TimeUnit.SECONDS.toMillis(CONNECT_TIMEOUT_SECONDS * 2L)); // waiting for a connection
+        config.setConnectionTimeout(TimeUnit.SECONDS.toMillis(CONNECT_TIMEOUT_SECONDS)); // waiting for a connection
         config.setValidationTimeout(TimeUnit.SECONDS.toMillis(CONNECT_TIMEOUT_SECONDS));
         config.setInitializationFailTimeout(-1); // created even while the database is unreachable; calls fail until it is back
         config.setKeepaliveTime(TimeUnit.MINUTES.toMillis(1));

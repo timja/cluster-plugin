@@ -55,7 +55,7 @@ groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkins
 agent_secret 8089 agent1 > "$ET1/agent1.secret"
 docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -f et1-seed >/dev/null
-et1 up -d postgres azurite >/dev/null 2>&1; sleep 3
+et1 up -d postgres azurite >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
 et1 up -d lb agent1 >/dev/null 2>&1
