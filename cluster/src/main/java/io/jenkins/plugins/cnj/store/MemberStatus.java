@@ -37,8 +37,12 @@ public final class MemberStatus {
     static volatile long lastInstallAt;
 
     /** A member's report, as parsed back. */
-    record Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt) {
-        static final Info NONE = new Info(0, 0, Map.of(), 0, 0);
+    record Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt, long merged, long overwritten, long refused) {
+        static final Info NONE = new Info(0, 0, Map.of(), 0, 0, 0, 0, 0);
+
+        Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt) {
+            this(busy, total, agents, installing, installAt, 0, 0, 0);
+        }
 
         String toJson() {
             JSONObject o = new JSONObject();
@@ -49,6 +53,9 @@ public final class MemberStatus {
             o.put("agents", a);
             o.put("installing", installing);
             o.put("installAt", installAt);
+            o.put("merged", merged);
+            o.put("overwritten", overwritten);
+            o.put("refused", refused);
             return o.toString();
         }
 
@@ -68,7 +75,7 @@ public final class MemberStatus {
                     }
                 }
                 return new Info(o.optInt("busy"), o.optInt("total"), Collections.unmodifiableMap(agents),
-                        o.optInt("installing"), o.optLong("installAt"));
+                        o.optInt("installing"), o.optLong("installAt"), o.optLong("merged"), o.optLong("overwritten"), o.optLong("refused"));
             } catch (RuntimeException e) {
                 return NONE;
             }
@@ -109,7 +116,11 @@ public final class MemberStatus {
                 agents.put(c.getName().isEmpty() ? "(built-in)" : c.getName(), new int[] {b, t});
             }
         }
-        return new Info(busy, total, agents, activeInstalls(j.getUpdateCenter()), lastInstallAt);
+        // concurrent edits since this controller started (Target 15): merged, overwritten (lenient), refused (strict-ui)
+        long merged = jenkins.persistence.PersistenceStores.getMergeCount();
+        long refused = jenkins.persistence.PersistenceStores.getRefusedCount();
+        long overwritten = Math.max(0, jenkins.persistence.PersistenceStores.getConflictCount() - merged - refused);
+        return new Info(busy, total, agents, activeInstalls(j.getUpdateCenter()), lastInstallAt, merged, overwritten, refused);
     }
 
     /** Update-center downloads not finished yet. */
