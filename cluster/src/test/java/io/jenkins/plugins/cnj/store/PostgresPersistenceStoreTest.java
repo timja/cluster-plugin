@@ -239,6 +239,18 @@ class PostgresPersistenceStoreTest {
     }
 
     @Test
+    void prefixListingsTreatWildcardsLiterally() throws Exception {
+        a.write("jobs/a_b/config.xml", bytes("x"), PersistenceStore.ANY);
+        a.write("jobs/aXb/other.xml", bytes("y"), PersistenceStore.ANY);
+        a.write("jobs/a%b/third.xml", bytes("z"), PersistenceStore.ANY);
+        assertEquals(java.util.Set.of("config.xml"), a.children("jobs/a_b"), "_ is not a wildcard");
+        assertEquals(java.util.Set.of("third.xml"), a.children("jobs/a%b"), "nor is %");
+        a.move("jobs/a_b", "jobs/moved");
+        assertEquals(java.util.Set.of("config.xml"), a.children("jobs/moved"));
+        assertEquals(java.util.Set.of("other.xml"), a.children("jobs/aXb"), "untouched by the move");
+    }
+
+    @Test
     void membership() throws Exception {
         a.startHeartbeat();
         b.startHeartbeat();

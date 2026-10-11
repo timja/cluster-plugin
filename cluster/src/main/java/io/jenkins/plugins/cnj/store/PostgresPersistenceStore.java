@@ -83,6 +83,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("create table if not exists jenkins_store ("
                             + "key text primary key, content bytea not null, sha256 bytea not null, version bigint not null,"
                             + " updated_at timestamptz not null default now(), updated_by text not null)");
+                    // Target 14 (scale): prefix listings (children, moves) use this index instead of scanning every row
+                    s.execute("create index if not exists jenkins_store_key_prefix on jenkins_store (key text_pattern_ops)");
                     s.execute(
                             "create table if not exists jenkins_members ("
                                     + "origin text primary key, heartbeat_at timestamptz not null, started_at timestamptz not null default now())");
@@ -115,6 +117,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("create table if not exists jenkins_store_events ("
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
+                    s.execute("create index if not exists jenkins_store_events_at on jenkins_store_events (at)");
                 }
                 return null;
             });
@@ -250,9 +253,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             return withTransaction(c -> {
                 Set<String> names = new TreeSet<>();
                 try (PreparedStatement ps = c.prepareStatement(
-                        "select distinct split_part(substr(key, ?), '/', 1) from jenkins_store where starts_with(key, ?)")) {
+                        "select distinct split_part(substr(key, ?), '/', 1) from jenkins_store where key like ? escape '\\'")) {
                     ps.setInt(1, prefix.length() + 1);
-                    ps.setString(2, prefix);
+                    ps.setString(2, likePrefix(prefix));
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
                             names.add(rs.getString(1));
@@ -271,9 +274,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         try {
             withTransaction(c -> {
                 try (PreparedStatement ps = c.prepareStatement(
-                        "select 1 from jenkins_store where key = ? or starts_with(key, ?) limit 1")) {
+                        "select 1 from jenkins_store where key = ? or key like ? escape '\\' limit 1")) {
                     ps.setString(1, toPrefix);
-                    ps.setString(2, toPrefix + "/");
+                    ps.setString(2, likePrefix(toPrefix + "/"));
                     try (ResultSet rs = ps.executeQuery()) {
                         if (rs.next()) {
                             throw new Conflict(new ConflictException(toPrefix, ABSENT, -1));
@@ -282,9 +285,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 }
                 List<String> keys = new ArrayList<>();
                 try (PreparedStatement ps = c.prepareStatement(
-                        "select key from jenkins_store where key = ? or starts_with(key, ?) order by length(key), key for update")) {
+                        "select key from jenkins_store where key = ? or key like ? escape '\\' order by length(key), key for update")) {
                     ps.setString(1, fromPrefix);
-                    ps.setString(2, fromPrefix + "/");
+                    ps.setString(2, likePrefix(fromPrefix + "/"));
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
                             keys.add(rs.getString(1));
@@ -1455,6 +1458,11 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     /** A dedicated connection (the listener's), with the same limits as the pools. */
     private Connection connect() throws SQLException {
         return dataSource().getConnection();
+    }
+
+    /** A {@code LIKE} pattern matching keys starting with a prefix ({@code %}, {@code _} and {@code \\} escaped). */
+    static String likePrefix(String prefix) {
+        return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
     }
 
     private static byte[] sha256(byte[] content) {
