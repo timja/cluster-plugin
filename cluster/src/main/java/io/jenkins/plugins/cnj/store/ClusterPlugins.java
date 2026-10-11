@@ -215,15 +215,8 @@ public final class ClusterPlugins {
                 Timer.get().submit(ClusterPlugins::reconcile); // the lock is free: maybe it is our turn
             }
         });
-        Timer.get().scheduleWithFixedDelay(ClusterPlugins::reconcile, PERIOD_SECONDS, PERIOD_SECONDS, TimeUnit.SECONDS);
-    }
-
-    /** Once up: a controller starting with an empty home (or after missing events) catches up with the cluster's set. */
-    @Initializer(after = InitMilestone.COMPLETED)
-    public static void catchUp() {
-        if (active()) {
-            Timer.get().submit(ClusterPlugins::reconcile);
-        }
+        // the first run catches up with the cluster's set (e.g. a fresh home); it waits until startup is complete
+        Timer.get().scheduleWithFixedDelay(ClusterPlugins::reconcile, 10, PERIOD_SECONDS, TimeUnit.SECONDS);
     }
 
     // ------------------------------------------------------------------ capture (where the admin acts)
@@ -313,7 +306,8 @@ public final class ClusterPlugins {
             PluginManager pm = Jenkins.get().getPluginManager();
             boolean restart = false;
             if (Jenkins.get().getInitLevel() != InitMilestone.COMPLETED) {
-                return; // started again once up
+                Timer.get().schedule(ClusterPlugins::reconcile, 5, TimeUnit.SECONDS); // again once up
+                return;
             }
             for (Map.Entry<String, Entry> e : overlay.plugins().entrySet()) {
                 String name = e.getKey();

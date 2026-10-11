@@ -50,7 +50,7 @@ PY
 # probe <file>: every 2 s, "epoch up0 up1" (1 when the pod answers), until killed
 probe() {
   while true; do
-    a=$(code_on "$REL-0" /api/json); b=$(code_on "$REL-1" /api/json)
+    a=$(code_on "$REL-0" /api/json || true); b=$(code_on "$REL-1" /api/json || true)
     echo "$(date +%s) $([[ $a == 200 ]] && echo 1 || echo 0) $([[ $b == 200 ]] && echo 1 || echo 0)" >> "$1"
     sleep 2
   done
@@ -92,7 +92,7 @@ check "neither controller has $P or $DEP to begin with" neither_has_them
 log "scenario 1: upload $P $OLD on $REL-0"
 k cp "$OUT_DIR/$P-$OLD.hpi" "$REL-0:/tmp/$P.hpi" -c jenkins
 s0=$(started_of "$REL-0"); s1=$(started_of "$REL-1")
-on "$REL-0" /pluginManager/uploadPlugin -X POST -F "name=@/tmp/$P.hpi" >/dev/null || true
+on "$REL-0" /pluginManager/uploadPlugin -X POST -F "name=@/tmp/$P.hpi" -F "pluginUrl=" >/dev/null || true
 check "1 $P $OLD is active on $REL-0" eventually 120 has_version "$REL-0" "$P" "$OLD"
 check "1 ... and on $REL-1, live" eventually 120 has_version "$REL-1" "$P" "$OLD"
 check "1 its dependency $DEP is active on both" eventually 60 dep_everywhere
@@ -107,8 +107,8 @@ on "$REL-0" "/job/during/build?delay=0sec" -X POST >/dev/null
 sleep 10
 : > "$OUT/probe-upgrade.txt"; probe "$OUT/probe-upgrade.txt" & PROBE=$!
 on "$REL-1" /pluginManager/installPlugins -X POST -H 'Content-Type: application/json' --data "{\"dynamicLoad\":true,\"plugins\":[\"$P\"]}" >/dev/null || true
-eventually 600 upgraded_everywhere
-sleep 20; kill $PROBE 2>/dev/null; wait $PROBE 2>/dev/null
+eventually 600 upgraded_everywhere || true
+sleep 20; kill $PROBE 2>/dev/null || true; wait $PROBE 2>/dev/null || true
 NEW=$(version_on "$REL-0" "$P")
 check "2 both controllers run the upgraded $P ($NEW)" bash -c "[[ '$NEW' != '$OLD' && '$NEW' != - && '$(version_on "$REL-1" "$P")' == '$NEW' ]]"
 check "2 both restarted for it" both_were_down "$OUT/probe-upgrade.txt"
@@ -121,7 +121,7 @@ info "2 members: $(psql_q "select name || ' ' || to_char(started_at, 'HH24:MI:SS
 # ------------------------------------------------------------------ 3. a fresh controller (empty home)
 log "scenario 3: replace $REL-1 with a fresh pod"
 k delete pod "$REL-1" --wait=true >/dev/null
-eventually 400 ready 2
+eventually 400 ready 2 || true
 until on "$REL-1" /api/json >/dev/null 2>&1; do sleep 3; done
 check "3 the fresh $REL-1 has $P $NEW" eventually 240 has_version "$REL-1" "$P" "$NEW"
 check "3 and the same plugins as $REL-0" eventually 120 same_plugins
@@ -132,7 +132,7 @@ log "scenario 4: uninstall $P on $REL-0"
 : > "$OUT/probe-uninstall.txt"; probe "$OUT/probe-uninstall.txt" & PROBE=$!
 on "$REL-0" "/manage/pluginManager/plugin/$P/doUninstall" -X POST >/dev/null || true
 check "4 $P is gone from both controllers" eventually 600 gone_everywhere
-sleep 20; kill $PROBE 2>/dev/null; wait $PROBE 2>/dev/null
+sleep 20; kill $PROBE 2>/dev/null || true; wait $PROBE 2>/dev/null || true
 check "4 one at a time again: a controller answered throughout" never_both_down "$OUT/probe-uninstall.txt"
 
 # ------------------------------------------------------------------ 5. guards
