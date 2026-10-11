@@ -68,7 +68,11 @@ r "|---|---|"
 
 # ------------------------------------------------------------------ 1. a base backup, work, a restore point, more work
 log "scenario 1: base backup, then work"
+et1 exec -T -u root postgres chown postgres:postgres /archive # the archiver runs as postgres (it retries what failed)
 et1 exec -T postgres bash -c 'rm -rf /archive/base && pg_basebackup -U jenkins -D /archive/base -Ft -z -X stream' >/dev/null
+psql_q "select pg_switch_wal()" >/dev/null
+archived() { [[ $(psql_q "select failed_count = 0 or last_archived_time > last_failed_time from pg_stat_archiver") == t ]]; }
+check "1 the WAL is archived" eventually 60 archived
 freestyle kept 'echo kept-build-ran'
 freestyle doomed 'echo doomed-build-ran'
 freestyle edited 'echo edited-build-ran'
