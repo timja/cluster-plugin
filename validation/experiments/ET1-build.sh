@@ -50,7 +50,7 @@ fi
 
 # Target 5: lockable-resources with cluster locks (skipped if the checkout is absent)
 LR=${LR:-/Users/timja/code/jenkins/lockable-resources-plugin}
-LR_REF=${LR_REF:-cnj/t5-m4-cluster-locks}
+LR_REF=${LR_REF:-cnj/t15-cluster-ui}
 if [[ -d "$LR" ]]; then
   echo "lockable-resources $LR_REF ($(git -C "$LR" rev-parse --short "$LR_REF"))"
   git -C "$LR" checkout -q "$LR_REF"
@@ -88,6 +88,16 @@ if [[ -d "$JSQL" ]]; then
   cp "$JSQL/target/junit-sql-storage.hpi" "$ET1/plugins/"
 fi
 
+# Target 15: configuration-as-code with keepUndeclaredNodes (skipped if the worktree is absent)
+CASC=${CASC:-/Users/timja/code/jenkins/configuration-as-code-plugin-cnj}
+CASC_REF=${CASC_REF:-cnj/t15-keep-undeclared-nodes}
+if [[ -d "$CASC" ]]; then
+  echo "configuration-as-code $CASC_REF ($(git -C "$CASC" rev-parse --short "$CASC_REF"))"
+  git -C "$CASC" checkout -q "$CASC_REF"
+  (cd "$CASC" && $MVN -pl plugin -am package)
+  cp "$CASC/plugin/target/configuration-as-code.hpi" "$ET1/plugins/"
+fi
+
 echo "persistence-store-postgresql"
 (cd "$HERE/../impl/persistence-store-postgresql" && $MVN package)
 cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgresql.hpi" "$ET1/plugins/"
@@ -100,6 +110,7 @@ cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgres
   [[ -d "$CREDS" ]] && echo "credentials $CREDS_REF $(git -C "$CREDS" rev-parse "$CREDS_REF")"
   [[ -d "$PBS" ]] && echo "pipeline-build-step $PBS_REF $(git -C "$PBS" rev-parse "$PBS_REF")"
   [[ -d "$JSQL" ]] && echo "junit-sql-storage $JSQL_REF $(git -C "$JSQL" rev-parse "$JSQL_REF")"
+  [[ -d "$CASC" ]] && echo "configuration-as-code $CASC_REF $(git -C "$CASC" rev-parse "$CASC_REF")"
   echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
 

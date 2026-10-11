@@ -25,6 +25,7 @@ x-jenkins: &jenkins
       -Djava.awt.headless=true
       -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true
       -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true
+      -Dio.jenkins.plugins.casc.core.JenkinsConfigurator.keepUndeclaredNodes=true
       ${CNJ_JAVA_OPTS:-}
     CNJ_STORE_URL: jdbc:postgresql://postgres:5432/jenkins
     CNJ_STORE_USER: jenkins
