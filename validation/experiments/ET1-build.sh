@@ -68,6 +68,26 @@ if [[ -d "$CREDS" ]]; then
   cp "$CREDS/target/credentials.hpi" "$ET1/plugins/"
 fi
 
+# Target 15: pipeline-build-step with downstream outcomes delivered across controllers (skipped if the worktree is absent)
+PBS=${PBS:-/Users/timja/code/jenkins/pipeline-build-step-plugin-cnj}
+PBS_REF=${PBS_REF:-cnj/t15-remote-completion}
+if [[ -d "$PBS" ]]; then
+  echo "pipeline-build-step $PBS_REF ($(git -C "$PBS" rev-parse --short "$PBS_REF"))"
+  git -C "$PBS" checkout -q "$PBS_REF"
+  (cd "$PBS" && $MVN package)
+  cp "$PBS/target/pipeline-build-step.hpi" "$ET1/plugins/"
+fi
+
+# Target 15: junit-sql-storage whose results follow renamed jobs (skipped if the worktree is absent)
+JSQL=${JSQL:-/Users/timja/code/jenkins/junit-sql-storage-plugin-cnj}
+JSQL_REF=${JSQL_REF:-cnj/t15-follow-renames}
+if [[ -d "$JSQL" ]]; then
+  echo "junit-sql-storage $JSQL_REF ($(git -C "$JSQL" rev-parse --short "$JSQL_REF"))"
+  git -C "$JSQL" checkout -q "$JSQL_REF"
+  (cd "$JSQL" && $MVN package)
+  cp "$JSQL/target/junit-sql-storage.hpi" "$ET1/plugins/"
+fi
+
 echo "persistence-store-postgresql"
 (cd "$HERE/../impl/persistence-store-postgresql" && $MVN package)
 cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgresql.hpi" "$ET1/plugins/"
@@ -78,6 +98,8 @@ cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgres
   [[ -d "$LR" ]] && echo "lockable-resources $LR_REF $(git -C "$LR" rev-parse "$LR_REF")"
   [[ -d "$STAPLER" ]] && echo "stapler $STAPLER_REF $(git -C "$STAPLER" rev-parse "$STAPLER_REF")"
   [[ -d "$CREDS" ]] && echo "credentials $CREDS_REF $(git -C "$CREDS" rev-parse "$CREDS_REF")"
+  [[ -d "$PBS" ]] && echo "pipeline-build-step $PBS_REF $(git -C "$PBS" rev-parse "$PBS_REF")"
+  [[ -d "$JSQL" ]] && echo "junit-sql-storage $JSQL_REF $(git -C "$JSQL" rev-parse "$JSQL_REF")"
   echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
 

@@ -81,6 +81,25 @@ hand=$(et1 logs jenkins-a 2>&1 | grep -c 'Handing jobs/lab3\|Handing lab3' || tr
 info "1b A handed lab3 over $hand time(s)"
 check "1b handed over once, after the branch on A's node finished (not back and forth)" test "$hand" -le 1
 
+# Target 15: build(wait: true) with the downstream build on another controller, also with the upstream adopted
+log "scenario 1c: a Pipeline on A waits for a downstream build that runs on B (lin)"
+cat > "$OUT_DIR/down.xml" <<'XML'
+<?xml version='1.1' encoding='UTF-8'?>
+<project><assignedNode>lin</assignedNode><canRoam>false</canRoam><builders><hudson.tasks.Shell><command>sleep 15; echo down-ran-on-$(hostname)</command></hudson.tasks.Shell></builders></project>
+XML
+create_job $A down "$OUT_DIR/down.xml"; eventually 15 exists $B /job/down
+pipeline up1 'pipeline { agent none; stages { stage("call") { steps { script { def b = build job: "down", wait: true; echo "down result ${b.result} #${b.number}" } } } } }'
+post $A "/job/up1/build?delay=0sec" >/dev/null
+check "1c up1 completes with the downstream result" eventually 240 bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/up1/1/consoleText | grep -q 'down result SUCCESS' && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$A/job/up1/1/api/json?tree=result') == *SUCCESS* ]]"
+check "1c ... the downstream build ran on B, not pinned to A" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = 'jobs/down/builds/1/build.xml' and e.kind = 'WRITTEN' order by seq desc limit 1\") == jenkins-b ]]"
+log "scenario 1d: ... and A is killed while it waits"
+pipeline up2 'pipeline { agent none; stages { stage("call") { steps { script { def b = build job: "down", wait: true; echo "down result ${b.result} #${b.number}" } } } } }'
+post $A "/job/up2/build?delay=0sec" >/dev/null
+eventually 120 bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/up2/1/consoleText | grep -q 'Starting building'" || true
+docker kill -s KILL et1-jenkins-a-1 >/dev/null
+check "1d B adopts up2, which completes with the downstream result" eventually 300 bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/up2/1/consoleText | grep -q 'down result SUCCESS' && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/up2/1/api/json?tree=result') == *SUCCESS* ]]"
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+
 # ------------------------------------------------------------------ 2. files added to a completed build
 log "scenario 2: a file added to a completed build on A"
 cat > "$OUT_DIR/late.xml" <<'XML'
