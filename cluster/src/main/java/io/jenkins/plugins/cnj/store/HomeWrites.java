@@ -38,6 +38,8 @@ public final class HomeWrites {
             "jenkins\\.install\\..*|queue\\.xml|nodeMonitors\\.xml|hudson\\.model\\.UpdateCenter\\.xml|.*FlowExecutionList\\.xml",
             "org\\.jenkins\\.plugins\\.lockableresources\\.LockableResourcesManager\\.xml",
             "users/users\\.xml",
+            "users/[^/]+/apiTokenStats\\.xml", // each controller's own usage statistics of API tokens
+            "userContent/readme\\.txt", // written by core at every boot
             "(jobs/[^/]+/)*jobs/[^/]+/(builds|workspace[^/]*|running)(/.*)?",
             ".*\\.(tmp|log|lock)"));
 
