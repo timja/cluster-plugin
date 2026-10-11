@@ -420,17 +420,35 @@ public final class BlobLogStorage {
         @Override
         public void onStarted(Run<?, ?> run, TaskListener listener) {
             AzureBlobStore blobs = blobs();
-            String key = blobs == null || !(run instanceof FlowExecutionOwner.Executable)
+            String key = blobs == null || !(run instanceof FlowExecutionOwner.Executable || SHIP_OTHER_LOGS)
                     ? null
                     : buildKey(run.getRootDir());
             if (key != null) {
+                // Pipelines: the log lives in blobs. Other builds (Target 15): shipped too while they run, so that a
+                // build closed as aborted after its controller died keeps what it printed (LostLogs); their log still
+                // travels in the snapshot once they complete
                 Shipper.track(blobs, key, new File(run.getRootDir(), LOG), run);
             }
         }
 
         @Override
         public void onFinalized(Run<?, ?> run) {
-            String key = run instanceof FlowExecutionOwner.Executable ? buildKey(run.getRootDir()) : null;
+            if (!(run instanceof FlowExecutionOwner.Executable)) {
+                String key = buildKey(run.getRootDir());
+                AzureBlobStore blobs = blobs();
+                if (key != null && blobs != null) {
+                    Shipper.drop(key); // complete in the snapshot: the shipped copy is not needed any more
+                    jenkins.util.Timer.get().submit(() -> {
+                        try {
+                            blobs.deleteSegmented(key + "/" + LOG);
+                        } catch (IOException e) {
+                            LOGGER.log(Level.FINE, "Could not delete the shipped log of " + run, e);
+                        }
+                    });
+                }
+                return;
+            }
+            String key = buildKey(run.getRootDir());
             if (key != null) {
                 if (!RunningBuilds.owns(run)) {
                     Shipper.drop(key); // taken over by another controller, which ships the log from now on
@@ -438,6 +456,23 @@ public final class BlobLogStorage {
                 }
                 Shipper.finish(key);
             }
+        }
+    }
+
+    /** Whether logs of builds other than Pipelines are shipped while they run (Target 15); on by default. */
+    static final boolean SHIP_OTHER_LOGS = !"false".equals(System.getProperty(BlobLogStorage.class.getName() + ".shipOtherLogs"));
+
+    /** What a build that cannot be resumed printed before its controller died (Target 15). */
+    @Extension
+    public static final class LostLogs implements BuildRecords.LostLog {
+        @Override
+        public java.io.InputStream shippedLog(@NonNull String base) throws IOException {
+            AzureBlobStore blobs = blobs();
+            if (blobs == null) {
+                return null;
+            }
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            return blobs.downloadSegmented(base + "/" + LOG, out) ? new java.io.ByteArrayInputStream(out.toByteArray()) : null;
         }
     }
 

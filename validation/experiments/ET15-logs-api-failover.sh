@@ -173,6 +173,25 @@ sleep 10
 check "4 a 12 s pause is not taken for a death (no adoption)" bash -c "! docker logs et1-jenkins-b-1 2>&1 | grep -q 'Adopting fp #1'"
 check "4 ... and the build completes on A" eventually 120 is_result $A /job/fp/1 SUCCESS
 
+# Target 15: a freestyle build's log is shipped while it runs, so closing it as aborted after its controller died
+# keeps what it printed
+log "scenario 5: a freestyle build on A printing a line a second; A killed"
+cat > "$OUT_DIR/ticker.xml" <<'XML'
+<?xml version='1.1' encoding='UTF-8'?>
+<project><assignedNode>built-in</assignedNode><canRoam>false</canRoam><builders><hudson.tasks.Shell><command>for i in $(seq 1 120); do echo "tick $i"; sleep 1; done</command></hudson.tasks.Shell></builders></project>
+XML
+create_job $A ticker "$OUT_DIR/ticker.xml"
+post $A "/job/ticker/build?delay=0sec" >/dev/null
+eventually 60 console_has $A /job/ticker/1 "tick 15"
+kill_a
+check "5 the build is closed as aborted on B" eventually 120 is_result $B /job/ticker/1 ABORTED
+json $B /job/ticker/1/consoleText > "$OUT/console-ticker-b.txt" 2>/dev/null || true
+last=$(grep -o 'tick [0-9]*' "$OUT/console-ticker-b.txt" | tail -1 | awk '{print $2}')
+info "5 B's console of the closed build ends at tick ${last:-none}"
+check "5 ... and keeps what it printed (ticks 1 to at least 12, in order)" bash -c "[[ \$(grep -c '^tick ' '$OUT/console-ticker-b.txt') -ge 12 ]] && grep -o 'tick [0-9]*' '$OUT/console-ticker-b.txt' | awk '{ if (\$2 != NR) exit 1 }'"
+check "5 ... then why it ended" grep -q "Finished: ABORTED" "$OUT/console-ticker-b.txt"
+restart_a
+
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true
 r ""
