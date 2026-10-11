@@ -1,0 +1,9 @@
+# ET18: Postgres started from the restored data directory (recovering to the restore point, then promoted).
+services:
+  postgres:
+    command: ["postgres", "-c", "wal_level=replica", "-c", "archive_mode=off"]
+    volumes:
+      - et18-archive:/archive
+      - et18-pgrestore:/var/lib/postgresql/data
+volumes:
+  et18-pgrestore: {}

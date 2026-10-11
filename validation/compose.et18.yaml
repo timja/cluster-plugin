@@ -1,0 +1,17 @@
+# ET18 (point-in-time recovery): an overlay on compose.et1.yaml. Postgres archives its WAL (for recovery to a named
+# point) and keeps its data and Azurite's in volumes. ET18 swaps in compose.et18-restore.yaml to start from the restore.
+services:
+  postgres:
+    command: ["postgres", "-c", "wal_level=replica", "-c", "archive_mode=on",
+              "-c", "archive_command=test ! -f /archive/%f && cp %p /archive/%f", "-c", "archive_timeout=5"]
+    volumes:
+      - et18-archive:/archive
+      - et18-pgdata:/var/lib/postgresql/data
+  azurite:
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --location /data
+    volumes:
+      - et18-blobs:/data
+volumes:
+  et18-archive: {}
+  et18-pgdata: {}
+  et18-blobs: {}
