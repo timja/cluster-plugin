@@ -53,7 +53,7 @@ public final class HomeImporter {
     private HomeImporter() {}
 
     /** Configuration and fingerprints: before anything is loaded, so that Jenkins loads them from the store. */
-    @Initializer(after = InitMilestone.PLUGINS_STARTED, before = InitMilestone.EXTENSIONS_AUGMENTED)
+    @Initializer(after = InitMilestone.EXTENSIONS_AUGMENTED, before = InitMilestone.SYSTEM_CONFIG_LOADED) // the store exists from EXTENSIONS_AUGMENTED
     public static void importFiles() throws IOException {
         if (!IMPORT || !(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
             return;

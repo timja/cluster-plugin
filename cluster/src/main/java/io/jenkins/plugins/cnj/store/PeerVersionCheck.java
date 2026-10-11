@@ -18,7 +18,7 @@ public final class PeerVersionCheck {
 
     private PeerVersionCheck() {}
 
-    @Initializer(after = InitMilestone.PLUGINS_STARTED, before = InitMilestone.EXTENSIONS_AUGMENTED)
+    @Initializer(after = InitMilestone.EXTENSIONS_AUGMENTED, before = InitMilestone.SYSTEM_CONFIG_LOADED) // the store exists from EXTENSIONS_AUGMENTED
     public static void check() throws IOException {
         int minimum = PostgresPersistenceStore.MINIMUM_PEER_PROTOCOL;
         if (minimum <= 0 || !(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
