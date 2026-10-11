@@ -6,6 +6,10 @@ resources:
   requests: {cpu: 250m, memory: 1Gi}
   limits: {memory: 2Gi}
 javaOpts: ""
+updateSites:
+  # Each controller downloads update-site and tool-installer metadata at startup and then daily, as on one controller,
+  # so the Plugins page can install (cluster-wide, Target 13) as soon as a controller is up. false for air-gapped clusters.
+  fetch: true
 
 # The Service browsers, API clients and agents use (no session affinity).
 service:

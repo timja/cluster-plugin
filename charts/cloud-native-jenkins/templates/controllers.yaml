@@ -30,8 +30,8 @@ spec:
             - {name: CNJ_SEED_TGZ, value: /seed/seed.tgz}
             - name: JAVA_OPTS
               value: >-
-                -Djenkins.install.runSetupWizard=false -Dhudson.model.UpdateCenter.never=true
-                -Dhudson.model.DownloadService.never=true -Djava.awt.headless=true
+                -Djenkins.install.runSetupWizard=false -Djava.awt.headless=true
+                {{- if not .Values.updateSites.fetch }} -Dhudson.model.UpdateCenter.never=true -Dhudson.model.DownloadService.never=true{{ end }}
                 -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true {{ .Values.javaOpts }}
           readinessProbe:
             httpGet: {path: /login, port: 8080}
