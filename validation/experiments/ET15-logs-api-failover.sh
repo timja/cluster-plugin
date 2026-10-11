@@ -130,21 +130,48 @@ check "3 the build completes, with its whole log on B" eventually 180 is_result 
 check "3 ... in order" eventually 60 console_whole_on $B /job/before/job/inner/1 inner-b 200
 
 # ------------------------------------------------------------------ 4. failover time
-log "scenario 4: failover time (SIGKILL, three times)"
-for i in 1 2 3; do
-  pipeline $A fo$i 'for (int i = 1; i <= 40; i++) { echo "line ${i}"; sleep 1 }; echo "done"'
-  post $A "/job/fo$i/build?delay=0sec" >/dev/null
-  eventually 60 console_has $A /job/fo$i/1 "line 5"
+log "scenario 4: failover time (SIGKILL three times, a clean stop, and a pause shorter than the timeout)"
+now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
+adopted_ms() { # job: when B logged adopting it, by its log's clock (the host's), or empty
+  docker logs et1-jenkins-b-1 2>&1 | grep -m1 "Adopting $1 #1" | grep -o '20[0-9-]* [0-9:.]*+0000' | head -1 \
+    | python3 -c "import datetime,sys; l=sys.stdin.read().strip(); print(int(datetime.datetime.strptime(l, '%Y-%m-%d %H:%M:%S.%f%z').timestamp()*1000) if l else '')"
+}
+adopted() { [[ -n "$(adopted_ms "$1")" ]]; }
+run_on_a() { # job
+  pipeline $A "$1" 'for (int i = 1; i <= 40; i++) { echo "line ${i}"; sleep 1 }; echo "done"'
+  post $A "/job/$1/build?delay=0sec" >/dev/null
+  eventually 60 console_has $A "/job/$1/1" "line 5"
   sleep 3
-  kill_a; killed=$SECONDS
-  eventually 60 bash -c "[[ \$(docker logs et1-jenkins-b-1 2>&1 | grep -c 'Adopting fo$i #1') -gt 0 ]]" || true
-  t=$((SECONDS - killed)); echo "$t" >> "$OUT/failover-seconds.txt"
-  info "4 run $i: adopted $t s after the kill"
+}
+: > "$OUT/failover-seconds.txt"
+for i in 1 2 3; do
+  run_on_a fo$i
+  killed=$(now_ms); kill_a
+  eventually 60 adopted fo$i || true
+  t=$(adopted_ms fo$i); ms=$(( ${t:-$((killed + 99000))} - killed ))
+  echo "kill $ms" >> "$OUT/failover-seconds.txt"
+  info "4 SIGKILL run $i: adopted $(( ms / 1000 )).$(( ms % 1000 / 100 )) s after the kill"
   eventually 120 is_result $B /job/fo$i/1 SUCCESS || true
   restart_a
 done
-check "4 every adoption within 30 s (worst case was ~50 s)" bash -c "awk '\$1 > 30 { bad = 1 } END { exit bad }' '$OUT/failover-seconds.txt'"
+check "4 every adoption after a SIGKILL within 12 s (the session lock is freed with the process)" bash -c "awk '\$1 == \"kill\" && \$2 > 12000 { bad = 1 } END { exit bad }' '$OUT/failover-seconds.txt'"
 check "4 every adopted build completed" bash -c "for i in 1 2 3; do [[ \$(curl -gsf -u '$AUTH' http://localhost:$B/job/fo\$i/1/api/json?tree=result) == *SUCCESS* ]] || exit 1; done"
+# a clean stop (SIGTERM, as a pod deletion): the controller leaves and says so
+run_on_a fs
+stopped=$(now_ms); docker stop -t 30 et1-jenkins-a-1 >/dev/null
+eventually 60 adopted fs || true
+t=$(adopted_ms fs); ms=$(( ${t:-$((stopped + 99000))} - stopped ))
+echo "stop $ms" >> "$OUT/failover-seconds.txt"
+info "4 clean stop: adopted $(( ms / 1000 )).$(( ms % 1000 / 100 )) s after docker stop began"
+check "4 after a clean stop, adopted within 30 s of the stop beginning (shutdown included)" test "$ms" -le 30000
+check "4 ... and completed" eventually 120 is_result $B /job/fs/1 SUCCESS
+restart_a
+# a pause shorter than the timeout (GC, a slow disk): the session lives on, nobody takes over
+run_on_a fp
+docker pause et1-jenkins-a-1 >/dev/null; sleep 12; docker unpause et1-jenkins-a-1 >/dev/null
+sleep 10
+check "4 a 12 s pause is not taken for a death (no adoption)" bash -c "! docker logs et1-jenkins-b-1 2>&1 | grep -q 'Adopting fp #1'"
+check "4 ... and the build completes on A" eventually 120 is_result $A /job/fp/1 SUCCESS
 
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true

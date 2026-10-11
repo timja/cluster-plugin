@@ -98,13 +98,39 @@ check "3 listing a job's builds uses the key index" grep -q "Index" "$OUT/explai
 info "3 a job's builds listed in $(grep -o 'Execution Time: [0-9.]* ms' "$OUT/explain-children.txt")"
 
 # ------------------------------------------------------------------ 4. startup with all that
-log "scenario 4: B restarted"
-et1 rm -sf jenkins-b >/dev/null 2>&1; start=$SECONDS; et1 up -d jenkins-b >/dev/null 2>&1
-check "4 B is up within 180 s" wait_up $B 180
-info "4 B was up after $((SECONDS - start)) s"
+# A controller replaced by a fresh one (empty home, as a new pod): every plugin comes with the image (here the harness
+# image plus the cnj plugins copied in by its entrypoint), everything else from the stores. Three times; then once
+# more after a plugin was installed at runtime, which a fresh controller fetches from blob storage.
+log "scenario 4: B replaced by a fresh controller (empty home), three times"
+ms_of() { python3 -c "import datetime,sys; print(int(datetime.datetime.strptime(sys.argv[1], '%Y-%m-%d %H:%M:%S.%f%z').timestamp()*1000))" "$1"; }
+log_time() { et1 logs jenkins-b 2>&1 | grep -m1 "$1" | grep -o '20[0-9-]* [0-9:.]*+0000' | head -1; }
+restart_b() { # label
+  et1 rm -sf jenkins-b >/dev/null 2>&1
+  local t0; t0=$(python3 -c 'import time; print(int(time.time()*1000))')
+  et1 up -d --no-deps jenkins-b >/dev/null 2>&1
+  wait_up $B 180 || return 1
+  local t_api; t_api=$(python3 -c 'import time; print(int(time.time()*1000))')
+  local cold; cold=$(seconds $B /)
+  local init up; init=$(log_time "Started initialization"); up=$(log_time "Jenkins is fully up and running")
+  local jvm=$(( $(ms_of "$init") - t0 )) boot=$(( $(ms_of "$up") - $(ms_of "$init") )) api=$(( t_api - t0 ))
+  echo "$1 $api $jvm $boot $cold" >> "$OUT/startup.txt"
+  info "4 $1: serving the API $(( api / 1000 )).$(( api % 1000 / 100 )) s after the container started (container and JVM start to initialization $(( jvm / 1000 )).$(( jvm % 1000 / 100 )) s, initialization $(( boot / 1000 )).$(( boot % 1000 / 100 )) s); first / then $cold s"
+}
+: > "$OUT/startup.txt"
+for i in 1 2 3; do check "4 fresh B #$i is up within 180 s" restart_b "fresh-$i"; done
 check "4 and lists every job" bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $B 'println Jenkins.get().allItems(hudson.model.Job).size()' | tr -d '\r\n ') -ge $JOBS ]]"
-cold=$(seconds $B /); warm=$(seconds $B /)
-info "4 B's / after the restart: cold $cold s, warm $warm s"
+warm=$(seconds $B /)
+info "4 median time to serving: $(sort -n -k2 "$OUT/startup.txt" | sed -n 2p | awk '{printf "%.1f s", $2/1000}'); warm / afterwards $warm s"
+# a plugin installed at runtime (cluster plugin set): a fresh controller fetches it from blob storage and loads it
+RP=${RUNTIME_PLUGIN:-next-build-number}
+if curl -gsfL -o "$OUT_DIR/$RP.hpi" "https://updates.jenkins.io/latest/$RP.hpi"; then
+  curl -gs -u "$AUTH" -o /dev/null -X POST "http://localhost:$A/pluginManager/uploadPlugin" -F "name=@$OUT_DIR/$RP.hpi" -F "pluginUrl="
+  sleep 20
+  check "4 fresh B with $RP installed at runtime is up within 180 s" restart_b "runtime-plugin"
+  check "4 ... and has $RP" eventually 60 bash -c "curl -gsf -u '$AUTH' 'http://localhost:$B/pluginManager/api/json?tree=plugins[shortName,active]' | grep -q '\"$RP\"'"
+else
+  info "4 skipped the runtime plugin case: cannot download $RP"
+fi
 
 # ------------------------------------------------------------------ 5. adoption at scale
 log "scenario 5: $RUNNING Pipelines running on A, then A killed"
