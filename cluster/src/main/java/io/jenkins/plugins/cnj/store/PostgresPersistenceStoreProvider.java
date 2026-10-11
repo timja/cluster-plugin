@@ -65,6 +65,21 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
                         setting("user", "CNJ_STORE_USER"),
                         setting("password", "CNJ_STORE_PASSWORD"),
                         PostgresPersistenceStoreProvider::owns);
+                PostgresPersistenceStore created = store;
+                // a controller leaving: its builds are adopted (or closed) and its queue items put back now (Target 14)
+                store.onMembersLeft(left -> {
+                    jenkins.persistence.RunningBuilds.sweepSoon();
+                    jenkins.util.Timer.get().submit(() -> {
+                        try {
+                            int n = created.reclaimAndPrune();
+                            if (n > 0) {
+                                LOGGER.info(() -> "Put " + n + " queue item(s) of controllers which left back into the queue");
+                            }
+                        } catch (IOException | RuntimeException e) {
+                            LOGGER.log(Level.WARNING, "Could not put back the queue items of controllers which left", e);
+                        }
+                    });
+                });
                 store.startHeartbeat();
                 HomeImporter.importFiles(store); // only with -D…importHome=true
                 return store;

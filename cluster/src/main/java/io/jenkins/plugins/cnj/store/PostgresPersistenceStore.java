@@ -719,6 +719,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                             try {
                                 Thread.sleep(HEARTBEAT_MILLIS);
                                 heartbeat();
+                                watchMembers();
                                 if (System.currentTimeMillis() - lastPrune > 3_600_000) {
                                     pruneClaims();
                                     lastPrune = System.currentTimeMillis();
@@ -737,6 +738,45 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     private volatile long lastMemberPrune = System.nanoTime() - TimeUnit.HOURS.toNanos(1);
+
+    /** The other controllers alive at the last heartbeat, to notice one leaving. */
+    private Set<String> lastAlive = Set.of();
+    /** Called with the origins of controllers which have just left the cluster (died, or stopped). */
+    private final List<Consumer<Set<String>>> leaveListeners = new CopyOnWriteArrayList<>();
+
+    /** Calls the listener, on the heartbeat thread, with the controllers that have just left the cluster. */
+    void onMembersLeft(Consumer<Set<String>> listener) {
+        leaveListeners.add(listener);
+    }
+
+    /**
+     * Compares the live members with those at the last heartbeat (Target 14): a controller that has just left (its
+     * heartbeat older than the timeout, or its row gone on a clean stop) has its builds adopted and its queue items put
+     * back right away, instead of at the next periodic sweep.
+     */
+    private void watchMembers() {
+        if (!canJudgeLiveness()) {
+            return;
+        }
+        try {
+            Set<String> alive = aliveMembers();
+            Set<String> left = new java.util.HashSet<>(lastAlive);
+            left.removeAll(alive);
+            lastAlive = alive;
+            if (!left.isEmpty()) {
+                LOGGER.info(() -> left.size() + " controller(s) left the cluster: " + left);
+                for (Consumer<Set<String>> l : leaveListeners) {
+                    try {
+                        l.accept(left);
+                    } catch (RuntimeException e) {
+                        LOGGER.log(Level.WARNING, "Failed to react to controllers leaving", e);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            LOGGER.log(Level.FINE, "Could not compare members", e);
+        }
+    }
 
     void heartbeat() throws IOException {
         try {
