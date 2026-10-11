@@ -25,8 +25,8 @@ test('a job configured in the browser is saved for every controller', async ({ p
 
 test('the cluster page shows both controllers with their executors', async ({ page }) => {
   await page.goto(`/manage/cluster/`);
-  await expect(page.getByRole('cell', { name: 'jenkins-a' })).toBeVisible();
-  await expect(page.getByRole('cell', { name: 'jenkins-b' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'jenkins-a', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'jenkins-b', exact: true })).toBeVisible();
   await expect(page.getByText(/of 4 busy/).first()).toBeVisible();
 });
 
