@@ -84,7 +84,7 @@ log "scenario 2: 10 builds on A and 10 on B record the same file at once"
 for i in $(seq 1 10); do build_on $A fpa & build_on $B fpb & done; wait
 eventually 300 idle
 u=$(usages $A $md5)
-info "2 usages after: $u"
+info "2 usages after: $u; builds: fpa [$(builds_of $A fpa)] fpb [$(builds_of $A fpb)]"
 check "2 all 20 new usages are recorded (fpa:1-11 fpb:1-11)" test "$u" = "fpa:1-11 fpb:1-11"
 check "2 B agrees" test "$(usages $B $md5)" = "$u"
 
@@ -112,16 +112,18 @@ freestyle keep 'echo kept' '' "$KEEP3"
 create_both keep
 for i in $(seq 1 8); do if (( i % 2 )); then p=$A; else p=$B; fi; build_on $p keep; eventually 60 result_is $p /job/keep/$i SUCCESS; done
 eventually 120 idle
+sleep 5; info "4 keep builds: A [$(builds_of $A keep)] B [$(builds_of $B keep)]"
 check "4 A keeps exactly the last 3 (6 7 8)" eventually 20 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$A/job/keep/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[6, 7, 8]' ]]"
 check "4 B keeps exactly the last 3 (6 7 8)" eventually 20 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/job/keep/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[6, 7, 8]' ]]"
 check "4 no discarder errors in the logs" bash -c "! (cd $VALIDATION_DIR && docker compose -f compose.et1.yaml logs jenkins-a jenkins-b 2>&1 | grep -iE 'Failed to (rotate|delete)|discard.*(failed|exception)')"
-log "scenario 4b: numToKeep=1; a long build on A, a short one on B"
-KEEP1=${KEEP3/<numToKeep>3</<numToKeep>1<}
+log "scenario 4b: numToKeep=2; a long build on A, then two short ones on B"
+KEEP1=${KEEP3/<numToKeep>3</<numToKeep>2<}
 freestyle dk 'if [ "$BUILD_NUMBER" = 1 ]; then sleep 40; fi; echo done' '' "$KEEP1"
 create_both dk
 build_on $A dk
 eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" http://localhost:$A/job/dk/1/api/json?tree=building) == *true* ]]"
 build_on $B dk; eventually 60 result_is $B /job/dk/2 SUCCESS
+build_on $B dk; eventually 60 result_is $B /job/dk/3 SUCCESS # B's discarder now sees 2 completed builds; #1 is running on A
 
 # ------------------------------------------------------------------ 5. cluster view (while dk#1 runs on A)
 log "scenario 5: the cluster view"
@@ -134,8 +136,9 @@ import json
 a, b = (json.load(open(\"$OUT/cluster-%s.json\" % p)) for p in ($A, $B))
 strip = lambda d: {\"members\": sorted(m[\"name\"] for m in d[\"members\"]), \"runningBuilds\": d[\"runningBuilds\"], \"channels\": d[\"channels\"]}
 exit(0 if strip(a) == strip(b) else 1)'"
-check "4b B's discarder did not touch dk #1 running on A: it completes" eventually 90 result_is $A /job/dk/1 SUCCESS
-sleep 5; info "4b dk builds after: A [$(builds_of $A dk)] B [$(builds_of $B dk)] (LogRotator also keeps the last successful build)"
+check "4b dk #1, running on A while B discarded, completed: its record was published" eventually 90 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store_events where key = 'jobs/dk/builds/1/build.xml' and kind = 'WRITTEN'\") -ge 1 ]]"
+check "4b then, the oldest of three, it was discarded: both keep [2 3]" eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$A/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' && \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' ]]"
+sleep 5; info "4b dk builds after: A [$(builds_of $A dk)] B [$(builds_of $B dk)]"
 docker kill -s KILL et1-jenkins-a-1 >/dev/null
 alive_only_b() { [[ "$(json $B /manage/cluster/api/json?depth=1 | jq_ '",".join(sorted(m["name"] for m in d["members"] if m["alive"]))')" == jenkins-b ]]; }
 check "5 after A dies, B's view shows only B alive (within the membership timeout)" eventually 40 alive_only_b

@@ -15,7 +15,6 @@ import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.fingerprints.FileFingerprintStorage;
@@ -45,8 +44,11 @@ public final class StoreFingerprintStorage extends FingerprintStorage {
     private static final int MAX_ATTEMPTS = 20;
     private static final String HEADER = "<?xml version='1.1' encoding='UTF-8'?>\n";
 
-    /** What this controller last read or wrote, per fingerprint: the base of the next merge. */
-    private final Map<String, Base> bases = new ConcurrentHashMap<>();
+    /**
+     * What each fingerprint object in memory was last read or written as: the base of its next merge. Per object, not
+     * per id: Jenkins may hold several objects for one fingerprint (its cache is weak), each with its own history.
+     */
+    private final Map<Fingerprint, Base> bases = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     private record Base(long version, Map<String, String> usages) {}
 
@@ -133,7 +135,7 @@ public final class StoreFingerprintStorage extends FingerprintStorage {
             Map<String, String> usages;
             synchronized (fp) {
                 Map<String, String> mine = usagesOf(fp);
-                Base base = bases.get(id);
+                Base base = bases.get(fp);
                 if (stored != null && (base == null || base.version() != stored.version())) {
                     // changed elsewhere since we read it: merge, and let the in-memory fingerprint see the result
                     Map<String, String> theirs = usagesOf(parse(stored.content()));
@@ -150,7 +152,7 @@ public final class StoreFingerprintStorage extends FingerprintStorage {
             }
             try {
                 long version = store.write(key, content, stored == null ? PersistenceStore.ABSENT : stored.version());
-                bases.put(id, new Base(version, usages));
+                bases.put(fp, new Base(version, usages));
                 return;
             } catch (ConflictException e) {
                 if (attempt >= MAX_ATTEMPTS) {
@@ -166,18 +168,16 @@ public final class StoreFingerprintStorage extends FingerprintStorage {
     public Fingerprint load(String id) throws IOException {
         PersistenceStore.Entry stored = store().read(key(id));
         if (stored == null) {
-            bases.remove(id);
             return null;
         }
         Fingerprint fp = parse(stored.content());
-        bases.put(id, new Base(stored.version(), usagesOf(fp)));
+        bases.put(fp, new Base(stored.version(), usagesOf(fp)));
         return fp;
     }
 
     @Override
     public void delete(String id) throws IOException {
         store().delete(key(id), PersistenceStore.ANY);
-        bases.remove(id);
     }
 
     @Override
@@ -213,6 +213,45 @@ public final class StoreFingerprintStorage extends FingerprintStorage {
             }
         }
         listener.getLogger().println("Cleaned up " + deleted + " fingerprints in the store");
+    }
+
+    /** A fingerprint changed by another controller: the object Jenkins holds for it takes the stored usages. */
+    void changedElsewhere(String id) throws IOException {
+        Fingerprint fp = jenkins.model.Jenkins.get().getFingerprintMap().get(id); // loads it if not held
+        PersistenceStore.Entry stored = store().read(key(id));
+        if (fp == null || stored == null) {
+            return;
+        }
+        synchronized (fp) {
+            Base base = bases.get(fp);
+            if (base != null && base.version() >= stored.version()) {
+                return; // already has it (e.g. just loaded)
+            }
+            Map<String, String> theirs = usagesOf(parse(stored.content()));
+            Map<String, String> usages = base == null ? theirs : merge(base.usages(), usagesOf(fp), theirs);
+            Hashtable<String, Fingerprint.RangeSet> live = fp.getUsages();
+            if (live != null) {
+                live.clear();
+                usages.forEach((job, ranges) -> live.put(job, ranges(ranges)));
+            }
+            bases.put(fp, new Base(stored.version(), theirs));
+        }
+    }
+
+    /** Applies fingerprints changed by other controllers ({@code fingerprints/<md5>.xml}). */
+    @Extension
+    public static final class Changes implements jenkins.persistence.RemoteChangeHandler {
+        @Override
+        public boolean handles(@NonNull String key) {
+            return key.startsWith(PREFIX + "/") && key.endsWith(".xml");
+        }
+
+        @Override
+        public void changed(@NonNull String key, boolean deleted) throws Exception {
+            if (!deleted && FingerprintStorage.get() instanceof StoreFingerprintStorage s) {
+                s.changedElsewhere(key.substring(PREFIX.length() + 1, key.length() - ".xml".length()));
+            }
+        }
     }
 
     @Extension
