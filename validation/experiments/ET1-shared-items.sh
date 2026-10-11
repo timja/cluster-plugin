@@ -111,6 +111,7 @@ create_job $A props "$OUT_DIR/props.xml"
 build $A props >/dev/null; wait_build $A props 1 >/dev/null
 check "2a parameter defined by a build on A is seen on B" eventually 15 bash -c "curl -gsf -u $AUTH 'http://localhost:$B/job/props/api/json?tree=property[parameterDefinitions[name]]' | grep -q GREETING"
 check "2b cron trigger defined by a build on A is in B's config" bash -c "curl -gsf -u $AUTH http://localhost:$B/job/props/config.xml | grep -q 'H H \* \* \*'"
+et1 exec -T jenkins-a sh -c 'find /var/jenkins_home/jobs -name config.xml -exec ls -l --full-time {} +' > "$OUT/local-configs.txt" 2>&1
 local_configs=$(et1 exec -T jenkins-a sh -c 'find /var/jenkins_home/jobs -name config.xml | wc -l' | tr -d ' \r')
 check "2c no item config.xml written to A's local JENKINS_HOME (found: $local_configs)" test "$local_configs" = 0
 

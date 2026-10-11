@@ -27,7 +27,7 @@ container_of() { [[ $1 == "$A" ]] && echo jenkins-a || echo jenkins-b; }
 # ran_on <job key> <number>: the port of the controller that first wrote the build's record (builds are shared since T3,
 # so every controller lists every build; the writer is the one that ran it)
 ran_on() {
-  local n; n=$(psql_q "select m.name from jenkins_store_events e left join jenkins_members m on m.origin = e.origin where e.key = '$1/builds/$2/build.xml' and e.kind = 'WRITTEN' order by e.seq limit 1")
+  local n; n=$(psql_q "select m.name from jenkins_store_events e left join jenkins_members m on m.origin = e.origin where e.key = '$1/builds/$2/build.xml' and e.kind = 'WRITTEN' order by e.seq limit 1" </dev/null)
   case "$n" in jenkins-a) echo $A ;; jenkins-b) echo $B ;; *) echo "?" ;; esac
 }
 # snap <job path, e.g. /job/x or /job/mb/job/main> <ports...>: record every build the controllers know about, with the controller that ran it
@@ -41,7 +41,8 @@ d=json.load(sys.stdin)
 for b in d.get("builds", []):
     print(b["number"], b["timestamp"])' | while read -r num ts; do
         grep -q "\"job\": \"$path\", \"number\": $num," "$OUT/builds.jsonl" && continue
-        echo "{\"job\": \"$path\", \"number\": $num, \"controller\": \"$(ran_on "$key" "$num")\", \"ts\": $ts}" >> "$OUT/builds.jsonl"
+        c=$(ran_on "$key" "$num"); [[ $c == "?" ]] && continue # still running: no record yet; the next snap gets it
+        echo "{\"job\": \"$path\", \"number\": $num, \"controller\": \"$c\", \"ts\": $ts}" >> "$OUT/builds.jsonl"
       done || true
   done
 }

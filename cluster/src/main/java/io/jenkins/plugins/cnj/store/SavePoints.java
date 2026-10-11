@@ -74,6 +74,8 @@ public final class SavePoints {
         long seq;
         String committed;
         volatile boolean stopped;
+        /** Held while a save point ships, so that the cleanup at completion never runs in the middle of one. */
+        final Object shipping = new Object();
 
         State(Run<?, ?> run, String base) {
             this.run = run;
@@ -178,6 +180,12 @@ public final class SavePoints {
     }
 
     private static void ship(State st) throws IOException {
+        synchronized (st.shipping) {
+            shipLocked(st);
+        }
+    }
+
+    private static void shipLocked(State st) throws IOException {
         AzureBlobStore blobs = BlobLogStorage.blobs();
         Pending p;
         synchronized (st) {
@@ -289,6 +297,9 @@ public final class SavePoints {
             State st = states.remove(base);
             if (st != null) {
                 st.stopped = true;
+                synchronized (st.shipping) {
+                    // wait for a save point shipping meanwhile (e.g. a build adopted moments before it completed)
+                }
             }
             AzureBlobStore blobs = BlobLogStorage.blobs();
             if (blobs != null && RunningBuilds.owns(run)) { // a new owner still needs them otherwise

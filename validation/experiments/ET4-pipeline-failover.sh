@@ -185,7 +185,7 @@ eventually 60 console_has $A /job/fast/1 "fast 3"
 eventually 10 has_placeholder $B /job/fast 1@jenkins-a
 kill_a; killed=$SECONDS
 check "6 B removes its placeholder" eventually 120 no_placeholders $B /job/fast
-check "6 B does not run it" bash -c "! [[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gs -o /dev/null -w '%{http_code}' -u \"\$AUTH\" http://localhost:$B/job/fast/1/api/json) == 200 ]]"
+check "6 B does not run it: it is closed as aborted (Target 12)" eventually 60 bash -c "curl -gsf -u '$AUTH' 'http://localhost:$B/job/fast/1/api/json?tree=result' | grep -q ABORTED && curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q 'closed as aborted' && ! curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q 'fast 1'"
 restart jenkins-a; wait_up $A
 
 # ------------------------------------------------------------------ 7. cost of save points
