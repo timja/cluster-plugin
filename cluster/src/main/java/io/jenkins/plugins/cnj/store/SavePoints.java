@@ -167,6 +167,15 @@ public final class SavePoints {
         }
     }
 
+    /** Ships the latest save point of a build now, if one is pending (e.g. before handing the build over). */
+    static void flush(@NonNull Run<?, ?> run) throws IOException {
+        String base = base(run);
+        State st = base == null ? null : states.get(base);
+        if (st != null) {
+            ship(st);
+        }
+    }
+
     private static void ship(State st) throws IOException {
         AzureBlobStore blobs = BlobLogStorage.blobs();
         Pending p;

@@ -121,8 +121,11 @@ public final class OwnerRoutingFilter implements Filter {
             try {
                 BuildPath build = buildPath(path);
                 if (build != null) {
-                    String owner = ownerOf(build);
-                    String url = owner == null ? null : store.urlOf(owner);
+                    RunningBuilds.Placeholder p = ownerOf(build);
+                    // by origin: a controller replacing the owner under the same name (a restarted pod, a restored
+                    // cluster) does not have the build
+                    String url = p == null ? null : store.urlOfOrigin(p.getOrigin());
+                    String owner = p == null ? null : p.getController();
                     if (url != null && Forwarding.forward(req, rsp, owner, url)) {
                         builds.incrementAndGet();
                         return;
@@ -142,16 +145,16 @@ public final class OwnerRoutingFilter implements Filter {
         chain.doFilter(request, response);
     }
 
-    /** The controller running a build this one does not have, or null. */
+    /** The placeholder of a build running on another controller, which this one does not have, or null. */
     @CheckForNull
-    private static String ownerOf(BuildPath build) {
+    private static RunningBuilds.Placeholder ownerOf(BuildPath build) {
         Job<?, ?> job = Jenkins.get().getItemByFullName(build.job(), Job.class); // null unless the user may read it
         if (job == null || job.getBuildByNumber(build.number()) != null) {
             return null;
         }
         for (RunningBuilds.Placeholder p : RunningBuilds.elsewhere(job)) {
             if (p.getNumber() == build.number()) {
-                return p.getController();
+                return p;
             }
         }
         return null;

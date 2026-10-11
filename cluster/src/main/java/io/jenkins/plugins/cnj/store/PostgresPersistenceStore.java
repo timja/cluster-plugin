@@ -948,7 +948,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     @CheckForNull
     String[] channelHolder(@NonNull String agent) throws IOException {
         return run("look up the channel of " + agent, c -> {
-            try (PreparedStatement ps = c.prepareStatement("select m.name, m.url from jenkins_channels ch"
+            try (PreparedStatement ps = c.prepareStatement("select m.name, m.url, m.origin from jenkins_channels ch"
                     + " join jenkins_members m on m.origin = ch.origin"
                     + " where ch.agent = ? and ch.origin <> ? and m.url is not null"
                     + " and m.heartbeat_at > now() - ? * interval '1 millisecond'")) {
@@ -956,7 +956,27 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 ps.setString(2, origin);
                 ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? new String[] {rs.getString(1), rs.getString(2)} : null;
+                    return rs.next() ? new String[] {rs.getString(1), rs.getString(2), rs.getString(3)} : null;
+                }
+            }
+        });
+    }
+
+    /**
+     * The internal URL of a live controller, by origin: unlike its name, which a replacement (a restarted pod, a restored
+     * cluster) reuses, an origin is one JVM's.
+     *
+     * @return null if that controller is not alive
+     */
+    @CheckForNull
+    String urlOfOrigin(@NonNull String memberOrigin) throws IOException {
+        return run("look up controller " + memberOrigin, c -> {
+            try (PreparedStatement ps = c.prepareStatement("select url from jenkins_members where origin = ?"
+                    + " and heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                ps.setString(1, memberOrigin);
+                ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    return rs.next() ? rs.getString(1) : null;
                 }
             }
         });

@@ -29,10 +29,23 @@ reset_env() {
 wait_up() {
   local port=$1 timeout=${2:-300} start=$SECONDS
   until curl -gsf -u "$AUTH" "http://localhost:$port/api/json" >/dev/null 2>&1; do
-    (( SECONDS - start > timeout )) && { log "Jenkins on $port not up after ${timeout}s"; return 1; }
+    (( SECONDS - start > timeout )) && { log "Jenkins on $port not up after ${timeout}s"; boot_diagnostics "$port"; return 1; }
     sleep 2
   done
   log "Jenkins on $port is up ($((SECONDS - start))s)"
+}
+
+# On a boot timeout: the container's log and a thread dump of its JVM, to $RAW_DIR/boot-timeout-<port>-<time>.txt
+boot_diagnostics() {
+  local port=$1 c out
+  c=$(docker ps --filter "publish=$port" --format '{{.Names}}' | head -1)
+  [[ -n "$c" ]] || return 0
+  out="$RAW_DIR/boot-timeout-$port-$(date +%H%M%S).txt"
+  mkdir -p "$RAW_DIR"
+  { echo "== docker logs $c"; docker logs "$c" 2>&1 | tail -200
+    echo "== thread dump"; docker exec "$c" sh -c 'jcmd $(pgrep -f jenkins.war | head -1) Thread.print 2>/dev/null || kill -3 $(pgrep -f jenkins.war | head -1)' 2>&1
+    sleep 2; docker logs "$c" 2>&1 | tail -400 | grep -A400 'Full thread dump' | head -600; } > "$out" 2>&1
+  log "boot diagnostics in $out"
 }
 
 # post <port> <path> [curl args...]: authenticated POST (API token, so no crumb).

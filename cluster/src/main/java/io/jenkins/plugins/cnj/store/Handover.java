@@ -1,0 +1,140 @@
+package io.jenkins.plugins.cnj.store;
+
+import edu.umd.cs.findbugs.annotations.CheckForNull;
+import hudson.init.InitMilestone;
+import hudson.init.Initializer;
+import hudson.model.Computer;
+import hudson.model.Job;
+import hudson.model.Label;
+import hudson.model.Node;
+import hudson.model.Queue;
+import hudson.model.Run;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import jenkins.model.Jenkins;
+import jenkins.persistence.PersistenceStore;
+import jenkins.persistence.PersistenceStores;
+import jenkins.persistence.RunningBuilds;
+import jenkins.util.Timer;
+
+/**
+ * Moves a Pipeline to the controller holding the agent it waits for (Target 12). A {@code node('label')} step whose label
+ * no executor or cloud of this controller can serve, while an agent with that label is connected to another live
+ * controller, waits forever where it is; after {@link #WAIT_SECONDS} the build is handed over: its latest save point is
+ * shipped, a request {@code .../running/<N>.handover} naming the target is written, and its lease released
+ * ({@link RunningBuilds#handOver}). The target takes it over ({@link RunningBuilds#takeOver}) and resumes it from that
+ * save point, where the {@code node} step asks for an executor again, now one it has.
+ */
+public final class Handover {
+
+    private static final Logger LOGGER = Logger.getLogger(Handover.class.getName());
+    static final String SUFFIX = ".handover";
+    static final long WAIT_SECONDS = Long.getLong(Handover.class.getName() + ".waitSeconds", 15);
+    private static final String PLACEHOLDER_TASK = "org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution$PlaceholderTask";
+
+    private Handover() {}
+
+    @Initializer(after = InitMilestone.JOB_LOADED)
+    public static void start() {
+        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+            return;
+        }
+        store.subscribe(e -> {
+            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN && e.key().endsWith(SUFFIX) && !store.getOrigin().equals(e.origin())) {
+                Timer.get().submit(() -> takeOver(store, e.key()));
+            }
+        });
+        Timer.get().scheduleWithFixedDelay(Handover::offer, 5, 5, TimeUnit.SECONDS);
+    }
+
+    /** Hands over builds waiting for a label only another controller has. */
+    static void offer() {
+        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        for (Queue.Item item : Queue.getInstance().getItems()) {
+            if (!item.task.getClass().getName().equals(PLACEHOLDER_TASK) || now - item.getInQueueSince() < TimeUnit.SECONDS.toMillis(WAIT_SECONDS)) {
+                continue;
+            }
+            Label label = item.getAssignedLabel();
+            if (label == null || servableHere(label) || !(item.task.getOwnerExecutable() instanceof Run<?, ?> run)) {
+                continue;
+            }
+            try {
+                String target = holderOf(store, label);
+                if (target == null || RunningBuilds.ownedPlaceholder(run) == null) {
+                    continue;
+                }
+                String key = PersistenceStores.keyFor(run.getParent().getRootDir()) + "/running/" + run.getNumber() + SUFFIX;
+                LOGGER.info(() -> "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
+                SavePoints.flush(run);
+                store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
+                RunningBuilds.handOver(run);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not hand " + run + " over", e);
+            }
+        }
+    }
+
+    /** Whether some executor or cloud of this controller can (eventually) run work with this label. */
+    private static boolean servableHere(Label label) {
+        if (!label.getClouds().isEmpty()) {
+            return true;
+        }
+        for (Node n : label.getNodes()) {
+            Computer c = n.toComputer();
+            if (c != null && c.isOnline() && c.getNumExecutors() > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The origin of a live controller holding the channel of an agent with this label, or null. */
+    @CheckForNull
+    private static String holderOf(PostgresPersistenceStore store, Label label) throws IOException {
+        for (Node n : label.getNodes()) {
+            String[] holder = store.channelHolder(n.getNodeName());
+            if (holder != null) {
+                return holder[2];
+            }
+        }
+        return null;
+    }
+
+    /** The target side: take over a build handed over to this controller, retrying until its lease is free. */
+    static void takeOver(PostgresPersistenceStore store, String key) {
+        try {
+            PersistenceStore.Entry e = store.read(key);
+            if (e == null || !store.getOrigin().equals(new String(e.content(), StandardCharsets.UTF_8))) {
+                return; // not for us
+            }
+            String path = key.substring(0, key.length() - SUFFIX.length());
+            int slash = path.lastIndexOf('/');
+            int number = Integer.parseInt(path.substring(slash + 1));
+            String jobKey = path.substring(0, path.lastIndexOf("/running/"));
+            String fullName = jobKey.replaceFirst("^jobs/", "").replace("/jobs/", "/");
+            Job<?, ?> job = Jenkins.get().getItemByFullName(fullName, Job.class);
+            if (job == null) {
+                return;
+            }
+            for (int attempt = 0; attempt < 30; attempt++) {
+                if (RunningBuilds.takeOver(job, number)) {
+                    LOGGER.info(() -> "Took over " + fullName + " #" + number);
+                    store.delete(key, PersistenceStore.ANY);
+                    return;
+                }
+                Thread.sleep(1000);
+            }
+            LOGGER.warning(() -> "Could not take over " + fullName + " #" + number + " handed over to this controller");
+        } catch (InterruptedException x) {
+            Thread.currentThread().interrupt();
+        } catch (IOException | RuntimeException x) {
+            LOGGER.log(Level.WARNING, "Could not take over " + key, x);
+        }
+    }
+}
