@@ -26,12 +26,26 @@ public class AzureBlobStoreProvider implements BlobStoreProvider {
             return null;
         }
         String container = setting("blobContainer", "CNJ_BLOB_CONTAINER");
-        try {
-            return new AzureBlobStore(connectionString, container == null ? "jenkins" : container);
-        } catch (RuntimeException e) {
-            // as for the persistence store: refuse to run with history silently unshared
-            LOGGER.log(Level.SEVERE, "Cannot connect to blob store", e);
-            throw new IllegalStateException(e);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(PostgresPersistenceStoreProvider.STARTUP_WAIT_SECONDS);
+        long delay = 1000;
+        while (true) {
+            try {
+                return new AzureBlobStore(connectionString, container == null ? "jenkins" : container);
+            } catch (RuntimeException e) {
+                if (System.nanoTime() > deadline) {
+                    // as for the persistence store: refuse to run with history silently unshared
+                    LOGGER.log(Level.SEVERE, "Cannot connect to blob store", e);
+                    throw new IllegalStateException(e);
+                }
+                LOGGER.log(Level.WARNING, "Waiting for the blob store: " + e.getMessage());
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException x) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(x);
+                }
+                delay = Math.min(delay * 2, 10_000);
+            }
         }
     }
 

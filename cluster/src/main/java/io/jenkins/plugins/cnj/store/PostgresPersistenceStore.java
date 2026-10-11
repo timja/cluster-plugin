@@ -53,7 +53,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     private final String password;
     private final Predicate<String> owns;
     private final String origin = UUID.randomUUID().toString();
-    private Connection connection;
+    /** Ordinary store traffic. */
+    private final com.zaxxer.hikari.HikariDataSource work;
+    /**
+     * Heartbeats, leases and membership: a pool of their own, so that a busy or slow {@link #work} pool never makes
+     * this controller look gone to the others (Target 14).
+     */
+    private final com.zaxxer.hikari.HikariDataSource control;
 
     private final List<Consumer<ChangeEvent>> listeners = new CopyOnWriteArrayList<>();
     private Thread listenerThread;
@@ -65,6 +71,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         this.user = user;
         this.password = password;
         this.owns = owns;
+        this.work = pool("work", WORK_POOL_SIZE);
+        this.control = pool("control", 2);
         try {
             withTransaction(c -> {
                 try (Statement s = c.createStatement()) {
@@ -336,11 +344,53 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         return System.nanoTime() - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS);
     }
 
+    /** {@link System#nanoTime} since when this controller's heartbeats have reached the database without a lapse. */
+    private volatile long stableSince = System.nanoTime();
+
+    /**
+     * Whether this controller may judge other controllers gone (and take over their builds and queue items).
+     * Only after its own heartbeats have reached the database without a lapse for longer than the member timeout:
+     * right after a database outage every heartbeat is stale, including the live controllers' own, and those must
+     * get the chance to heartbeat again first (Target 14).
+     */
+    /** For tests: as if this controller had been steadily connected for long. */
+    void steadyForTests() {
+        stableSince = System.nanoTime() - TimeUnit.HOURS.toNanos(1);
+    }
+
+    boolean canJudgeLiveness() {
+        return !mayHaveLapsed()
+                && System.nanoTime() - stableSince > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS + HEARTBEAT_MILLIS);
+    }
+
     private final BuildLeases leases = new BuildLeases() {
         @Override
         public long acquire(@NonNull String key) throws IOException {
             try {
-                return withTransaction(c -> {
+                boolean judge = canJudgeLiveness();
+                return withControl(c -> {
+                    if (!judge) {
+                        // a new build's lease only: taking one from a controller that looks gone waits until this one
+                        // has been steadily connected (right after an outage they all look gone)
+                        try (PreparedStatement ps = c.prepareStatement(
+                                "insert into jenkins_build_leases (key, owner, epoch) values (?, ?, nextval('jenkins_store_version'))"
+                                        + " on conflict (key) do nothing returning epoch")) {
+                            ps.setString(1, key);
+                            ps.setString(2, origin);
+                            try (ResultSet rs = ps.executeQuery()) {
+                                if (rs.next()) {
+                                    return rs.getLong(1);
+                                }
+                            }
+                        }
+                        try (PreparedStatement ps =
+                                c.prepareStatement("select owner, epoch from jenkins_build_leases where key = ?")) {
+                            ps.setString(1, key);
+                            try (ResultSet rs = ps.executeQuery()) {
+                                return rs.next() && rs.getString(1).equals(origin) ? rs.getLong(2) : 0L;
+                            }
+                        }
+                    }
                     try (PreparedStatement ps = c.prepareStatement(
                             "insert into jenkins_build_leases (key, owner, epoch) values (?, ?, nextval('jenkins_store_version'))"
                                     + " on conflict (key) do update set owner = excluded.owner, epoch = excluded.epoch, acquired_at = now()"
@@ -372,11 +422,10 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
         @Override
         public boolean holds(@NonNull String key, long epoch) throws IOException {
-            if (mayHaveLapsed()) {
-                return false;
-            }
+            // only the database can tell that the lease was lost: while it cannot be reached this fails (unknown),
+            // and the build carries on; its log and save points wait (mayHaveLapsed) until the heartbeat is back
             try {
-                return withTransaction(c -> {
+                return withControl(c -> {
                     try (PreparedStatement ps = c.prepareStatement(
                             "select 1 from jenkins_build_leases where key = ? and owner = ? and epoch = ?")) {
                         ps.setString(1, key);
@@ -395,7 +444,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         @Override
         public void release(@NonNull String key, long epoch) throws IOException {
             try {
-                withTransaction(c -> {
+                withControl(c -> {
                     try (PreparedStatement ps = c.prepareStatement(
                             "delete from jenkins_build_leases where key = ? and owner = ? and epoch = ?")) {
                         ps.setString(1, key);
@@ -632,9 +681,10 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * @return how many items were put back
      */
     int reclaimAndPrune() throws IOException {
+        boolean judge = canJudgeLiveness();
         return run("reclaim queue items", c -> {
             List<Long> ids = new ArrayList<>();
-            try (PreparedStatement ps = c.prepareStatement(
+            if (judge) try (PreparedStatement ps = c.prepareStatement(
                     "update jenkins_queue set state = 'WAITING', claimed_by = null, updated_at = now()"
                             + " where state = 'CLAIMED' and claimed_by not in (select origin from jenkins_members"
                             + " where heartbeat_at > now() - ? * interval '1 millisecond') returning id")) {
@@ -690,7 +740,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     void heartbeat() throws IOException {
         try {
-            withTransaction(c -> {
+            withControl(c -> {
                 try (PreparedStatement ps = c.prepareStatement(
                         "insert into jenkins_members (origin, heartbeat_at, name, url, version, protocol, plugins) values (?, now(), ?, ?, ?, ?, ?)"
                                 + " on conflict (origin) do update set heartbeat_at = now(), name = excluded.name, url = excluded.url,"
@@ -716,6 +766,11 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             if (now - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS)) {
                 lapses.incrementAndGet(); // others may have taken over our builds meanwhile
             }
+            if (now - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(2 * HEARTBEAT_MILLIS)) {
+                // a missed heartbeat (the database was unreachable or slow, or this JVM paused): the others may have
+                // missed theirs too, so this controller does not judge them until heartbeats have been steady again
+                stableSince = now;
+            }
             lastHeartbeatOk = now;
         } catch (SQLException e) {
             throw new IOException("Failed to record heartbeat", e);
@@ -737,6 +792,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             if (heartbeatThread == null) {
                 return null; // not taking part in membership, so cannot tell
             }
+        }
+        if (!canJudgeLiveness()) {
+            return null; // cannot tell yet (just started, or the database was unreachable): nobody is taken for gone
         }
         return aliveMembers();
     }
@@ -1004,7 +1062,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     @NonNull
     public Set<String> aliveMembers() throws IOException {
         try {
-            return withTransaction(c -> {
+            return withControl(c -> {
                 Set<String> members = new TreeSet<>();
                 members.add(origin);
                 try (PreparedStatement ps = c.prepareStatement(
@@ -1107,13 +1165,42 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
+    /**
+     * Sequence numbers skipped so far, with when they were first skipped. A number is taken when an event is
+     * inserted, not when its transaction commits, so a later event can become visible before an earlier one; the
+     * earlier one is then delivered late, once it commits (or forgotten after {@link #HOLE_MILLIS}: its transaction
+     * rolled back). Consumers compare versions, so a late event never undoes a newer change (Target 14).
+     */
+    private final java.util.NavigableMap<Long, Long> holes = new java.util.concurrent.ConcurrentSkipListMap<>();
+    static final long HOLE_MILLIS = 60_000;
+
     private long drain(Connection c, long lastSeq) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
-                "select seq, kind, key, old_key, version, origin from jenkins_store_events where seq > ? order by seq")) {
+        long now = System.currentTimeMillis();
+        holes.values().removeIf(since -> now - since > HOLE_MILLIS);
+        StringBuilder sql = new StringBuilder("select seq, kind, key, old_key, version, origin from jenkins_store_events where seq > ?");
+        List<Long> waiting = List.copyOf(holes.keySet());
+        if (!waiting.isEmpty()) {
+            sql.append(" or seq = any (?)");
+        }
+        sql.append(" order by seq");
+        try (PreparedStatement ps = c.prepareStatement(sql.toString())) {
             ps.setLong(1, lastSeq);
+            if (!waiting.isEmpty()) {
+                ps.setArray(2, c.createArrayOf("bigint", waiting.toArray()));
+            }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    lastSeq = rs.getLong(1);
+                    long seq = rs.getLong(1);
+                    if (seq > lastSeq) {
+                        for (long missing = lastSeq + 1; missing < seq && lastSeq >= 0; missing++) {
+                            if (holes.size() < 10_000) {
+                                holes.put(missing, now);
+                            }
+                        }
+                        lastSeq = seq;
+                    } else if (holes.remove(seq) == null) {
+                        continue; // delivered already
+                    }
                     ChangeEvent e = new ChangeEvent(
                             ChangeEvent.Kind.valueOf(rs.getString(2)),
                             rs.getString(3),
@@ -1138,7 +1225,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         closed = true;
         try {
             // leave the cluster promptly so others take over our items without waiting for the timeout
-            withTransaction(c -> {
+            withControl(c -> {
                 try (PreparedStatement ps = c.prepareStatement("delete from jenkins_members where origin = ?")) {
                     ps.setString(1, origin);
                     ps.executeUpdate();
@@ -1152,15 +1239,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             if (heartbeatThread != null) {
                 heartbeatThread.interrupt();
             }
-            if (connection != null) {
-                try {
-                    connection.close();
-                } catch (SQLException e) {
-                    LOGGER.log(Level.FINE, null, e);
-                }
-                connection = null;
-            }
         }
+        work.close();
+        control.close();
     }
 
     private void event(Connection c, ChangeEvent.Kind kind, String key, String oldKey, long version)
@@ -1191,28 +1272,46 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         T run(Connection c) throws SQLException;
     }
 
+    /** Runs work in a transaction on a connection from the {@link #work} pool. */
+    private <T> T withTransaction(Work<T> w) throws SQLException {
+        return withTransaction(work, w);
+    }
+
+    /** Runs work in a transaction on a connection from the {@link #control} pool. */
+    private <T> T withControl(Work<T> w) throws SQLException {
+        return withTransaction(control, w);
+    }
+
     /**
-     * Runs work in a transaction on the shared connection, reconnecting once if the connection was lost.
+     * Runs work in a transaction on a pooled connection. If the connection broke before the commit was sent (nothing
+     * can have been written), it is retried once on another connection; never after, so that work is not done twice
+     * when only the commit's acknowledgement was lost.
      */
-    private synchronized <T> T withTransaction(Work<T> work) throws SQLException {
+    private <T> T withTransaction(com.zaxxer.hikari.HikariDataSource pool, Work<T> w) throws SQLException {
         for (int attempt = 0; ; attempt++) {
-            Connection c = connection();
-            try {
-                T result = work.run(c);
-                c.commit();
-                return result;
+            boolean committing = false;
+            try (Connection c = pool.getConnection()) {
+                try {
+                    T result = w.run(c);
+                    committing = true;
+                    c.commit();
+                    return result;
+                } catch (Conflict e) {
+                    c.rollback();
+                    throw e;
+                } catch (SQLException | RuntimeException e) {
+                    try {
+                        c.rollback();
+                    } catch (SQLException x) {
+                        e.addSuppressed(x);
+                    }
+                    throw e;
+                }
             } catch (Conflict e) {
-                c.rollback();
                 throw e;
             } catch (SQLException e) {
-                try {
-                    c.rollback();
-                } catch (SQLException x) {
-                    e.addSuppressed(x);
-                }
-                if (attempt == 0 && !c.isValid(2)) {
-                    LOGGER.log(Level.INFO, "Reconnecting to persistence store", e);
-                    connection = null;
+                if (attempt == 0 && !committing && isConnectionFailure(e)) {
+                    LOGGER.log(Level.FINE, "Retrying on another connection", e);
                     continue;
                 }
                 throw e;
@@ -1220,24 +1319,76 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
-    private Connection connection() throws SQLException {
-        if (connection == null) {
-            connection = connect();
-            connection.setAutoCommit(false);
+    /** SQL state class 08 (connection exception), or a timeout reaching the database. */
+    static boolean isConnectionFailure(SQLException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException se && se.getSQLState() != null && se.getSQLState().startsWith("08")) {
+                return true;
+            }
+            if (t instanceof java.sql.SQLTransientConnectionException || t instanceof java.net.SocketTimeoutException) {
+                return true;
+            }
         }
-        return connection;
+        return false;
     }
 
+    /** Connection limits, so that an unreachable or stalled database fails calls instead of hanging them. */
+    static final int SOCKET_TIMEOUT_SECONDS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".socketTimeoutSeconds", 30);
+    static final int CONNECT_TIMEOUT_SECONDS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".connectTimeoutSeconds", 5);
+    static final int STATEMENT_TIMEOUT_MILLIS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".statementTimeoutMillis", 25_000);
+    static final int LOCK_TIMEOUT_MILLIS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".lockTimeoutMillis", 10_000);
+    static final int WORK_POOL_SIZE = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".poolSize", 8);
+
     /** Uses the driver directly: {@code DriverManager} does not see drivers loaded by a plugin class loader. */
-    private Connection connect() throws SQLException {
-        Properties props = new Properties();
-        props.setProperty("user", user);
-        props.setProperty("password", password);
-        Connection c = new org.postgresql.Driver().connect(url, props);
-        if (c == null) {
-            throw new SQLException("Not a PostgreSQL JDBC URL: " + url);
+    private static final class DirectDataSource extends org.postgresql.ds.PGSimpleDataSource {
+        @Override
+        public Connection getConnection(String user, String password) throws SQLException {
+            Properties props = new Properties();
+            if (user != null) {
+                props.setProperty("user", user);
+            }
+            if (password != null) {
+                props.setProperty("password", password);
+            }
+            Connection c = new org.postgresql.Driver().connect(getUrl(), props); // getUrl() carries every property set
+            if (c == null) {
+                throw new SQLException("Not a PostgreSQL JDBC URL: " + getUrl());
+            }
+            return c;
         }
-        return c;
+    }
+
+    private org.postgresql.ds.PGSimpleDataSource dataSource() {
+        org.postgresql.ds.PGSimpleDataSource ds = new DirectDataSource();
+        ds.setUrl(url);
+        ds.setUser(user);
+        ds.setPassword(password);
+        ds.setSocketTimeout(SOCKET_TIMEOUT_SECONDS);
+        ds.setConnectTimeout(CONNECT_TIMEOUT_SECONDS);
+        ds.setLoginTimeout(CONNECT_TIMEOUT_SECONDS * 2);
+        ds.setTcpKeepAlive(true);
+        ds.setOptions("-c statement_timeout=" + STATEMENT_TIMEOUT_MILLIS + " -c lock_timeout=" + LOCK_TIMEOUT_MILLIS
+                + " -c idle_in_transaction_session_timeout=60000");
+        return ds;
+    }
+
+    private com.zaxxer.hikari.HikariDataSource pool(String name, int size) {
+        com.zaxxer.hikari.HikariConfig config = new com.zaxxer.hikari.HikariConfig();
+        config.setDataSource(dataSource());
+        config.setPoolName("cnj-store-" + name);
+        config.setAutoCommit(false);
+        config.setMaximumPoolSize(size);
+        config.setMinimumIdle(1);
+        config.setConnectionTimeout(TimeUnit.SECONDS.toMillis(CONNECT_TIMEOUT_SECONDS * 2L)); // waiting for a connection
+        config.setValidationTimeout(TimeUnit.SECONDS.toMillis(CONNECT_TIMEOUT_SECONDS));
+        config.setInitializationFailTimeout(-1); // created even while the database is unreachable; calls fail until it is back
+        config.setKeepaliveTime(TimeUnit.MINUTES.toMillis(1));
+        return new com.zaxxer.hikari.HikariDataSource(config);
+    }
+
+    /** A dedicated connection (the listener's), with the same limits as the pools. */
+    private Connection connect() throws SQLException {
+        return dataSource().getConnection();
     }
 
     private static byte[] sha256(byte[] content) {

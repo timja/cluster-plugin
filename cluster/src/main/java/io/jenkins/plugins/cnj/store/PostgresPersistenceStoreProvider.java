@@ -55,21 +55,43 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
         if (url == null) {
             return null;
         }
-        try {
-            PostgresPersistenceStore store = new PostgresPersistenceStore(
-                    url,
-                    setting("user", "CNJ_STORE_USER"),
-                    setting("password", "CNJ_STORE_PASSWORD"),
-                    PostgresPersistenceStoreProvider::owns);
-            store.startHeartbeat();
-            HomeImporter.importFiles(store); // only with -D…importHome=true
-            return store;
-        } catch (IOException e) {
-            // Refusing to start without the store is safer than silently diverging from other controllers.
-            LOGGER.log(Level.SEVERE, "Cannot connect to persistence store " + url, e);
-            throw new IllegalStateException(e);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(STARTUP_WAIT_SECONDS);
+        long delay = 1000;
+        while (true) {
+            PostgresPersistenceStore store = null;
+            try {
+                store = new PostgresPersistenceStore(
+                        url,
+                        setting("user", "CNJ_STORE_USER"),
+                        setting("password", "CNJ_STORE_PASSWORD"),
+                        PostgresPersistenceStoreProvider::owns);
+                store.startHeartbeat();
+                HomeImporter.importFiles(store); // only with -D…importHome=true
+                return store;
+            } catch (IOException e) {
+                if (store != null) {
+                    store.close();
+                }
+                if (System.nanoTime() > deadline) {
+                    // Refusing to start without the store is safer than silently diverging from other controllers.
+                    LOGGER.log(Level.SEVERE, "Cannot connect to persistence store " + url, e);
+                    throw new IllegalStateException(e);
+                }
+                // the database may be starting, or briefly unreachable: Jenkins waits (it is not ready meanwhile)
+                LOGGER.log(Level.WARNING, "Waiting for the persistence store " + url + ": " + e.getMessage());
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException x) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(x);
+                }
+                delay = Math.min(delay * 2, 10_000);
+            }
         }
     }
+
+    /** How long a starting controller waits for its persistence store (and blob store) before failing to start. */
+    static final long STARTUP_WAIT_SECONDS = Long.getLong(PostgresPersistenceStoreProvider.class.getPackageName() + ".startupWaitSeconds", 600);
 
     @CheckForNull
     private static String setting(String property, String env) {

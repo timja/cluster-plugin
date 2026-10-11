@@ -83,6 +83,19 @@
       <version>42.7.8</version>
     </dependency>
     <dependency>
+      <!-- Target 14: pooled connections with timeouts, so a slow or unreachable database does not serialize or hang
+           the controller (Jenkins core provides slf4j-api) -->
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <version>6.3.0</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.slf4j</groupId>
+          <artifactId>slf4j-api</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
       <groupId>org.testcontainers</groupId>
       <artifactId>junit-jupiter</artifactId>
       <version>1.21.4</version>

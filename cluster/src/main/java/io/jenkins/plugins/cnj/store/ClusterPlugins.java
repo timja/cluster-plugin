@@ -523,7 +523,7 @@ public final class ClusterPlugins {
                 }
             } else {
                 Set<String> live = store.liveOrigins();
-                boolean holderAlive = live != null && live.contains(holder.optString("origin"));
+                boolean holderAlive = live == null || live.contains(holder.optString("origin")); // cannot tell: assume alive
                 if (lockExpired(holder.optLong("since"), System.currentTimeMillis(), holderAlive)) {
                     LOGGER.warning(() -> "Breaking the plugin restart lock of " + holder.optString("name") + ", held since "
                             + new java.util.Date(holder.optLong("since")));

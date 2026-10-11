@@ -34,10 +34,21 @@ public class AzureBlobStore implements BlobStore {
 
     private final BlobContainerClient container;
 
+    /** Per try of one blob request (large snapshots and artifacts included). */
+    static final int TRY_TIMEOUT_SECONDS = Integer.getInteger(AzureBlobStore.class.getName() + ".tryTimeoutSeconds", 120);
+
     public AzureBlobStore(@NonNull String connectionString, @NonNull String containerName) {
         // the SDK discovers its HTTP client through the context class loader
         this.container = withPluginClassLoader(() -> new BlobServiceClientBuilder()
                 .connectionString(connectionString)
+                // bounded tries (Target 14): a stalled blob store fails calls, retried by their callers, instead of
+                // hanging the threads that ship logs and save points
+                .retryOptions(new com.azure.storage.common.policy.RequestRetryOptions(
+                        com.azure.storage.common.policy.RetryPolicyType.EXPONENTIAL, 3, TRY_TIMEOUT_SECONDS, 500L, 4000L, null))
+                .clientOptions(new com.azure.core.util.HttpClientOptions()
+                        .setConnectTimeout(java.time.Duration.ofSeconds(10))
+                        .setResponseTimeout(java.time.Duration.ofSeconds(TRY_TIMEOUT_SECONDS))
+                        .setReadTimeout(java.time.Duration.ofSeconds(TRY_TIMEOUT_SECONDS)))
                 .buildClient()
                 .getBlobContainerClient(containerName));
         withPluginClassLoader(container::createIfNotExists);

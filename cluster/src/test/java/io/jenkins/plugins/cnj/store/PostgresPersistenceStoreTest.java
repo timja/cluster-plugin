@@ -212,6 +212,33 @@ class PostgresPersistenceStoreTest {
     }
 
     @Test
+    void eventCommittedAfterALaterOneIsStillDelivered() throws Exception {
+        List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
+        try (AutoCloseable sub = b.subscribe(seen::add)) {
+            Thread.sleep(1500);
+            try (var slow = POSTGRES.createConnection("")) {
+                slow.setAutoCommit(false);
+                try (var s = slow.createStatement()) {
+                    // takes a sequence number now, commits later (as a slow transaction would)
+                    s.execute("insert into jenkins_store_events (kind, key, old_key, version, origin)"
+                            + " values ('WRITTEN', 'jobs/slow/config.xml', null, 1, 'elsewhere')");
+                }
+                a.write("jobs/fast/config.xml", bytes("fast"), PersistenceStore.ANY); // a later number, committed first
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                while (seen.stream().noneMatch(e -> e.key().equals("jobs/fast/config.xml")) && System.nanoTime() < deadline) {
+                    Thread.sleep(100);
+                }
+                slow.commit();
+            }
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (seen.stream().noneMatch(e -> e.key().equals("jobs/slow/config.xml")) && System.nanoTime() < deadline) {
+                Thread.sleep(100);
+            }
+            assertTrue(seen.stream().anyMatch(e -> e.key().equals("jobs/slow/config.xml")), "delivered late: " + seen);
+        }
+    }
+
+    @Test
     void membership() throws Exception {
         a.startHeartbeat();
         b.startHeartbeat();
@@ -259,6 +286,9 @@ class PostgresPersistenceStoreTest {
             s.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '"
                     + a.getOrigin() + "'");
         }
+        assertEquals(0, b.leases().acquire(key), "b only just connected: it does not judge a gone yet (as after an outage)");
+        assertNull(b.liveOrigins(), "cannot tell yet");
+        b.steadyForTests();
         long second = b.leases().acquire(key);
         assertTrue(second > first);
         assertFalse(a.leases().holds(key, first), "fenced");
@@ -327,6 +357,8 @@ class PostgresPersistenceStoreTest {
                 st.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '"
                         + a.getOrigin() + "'");
             }
+            assertEquals(0, b.reclaimAndPrune(), "b only just connected: no reclaim yet (as after an outage)");
+            b.steadyForTests();
             assertEquals(1, b.reclaimAndPrune());
             assertEquals(
                     jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id4).state());

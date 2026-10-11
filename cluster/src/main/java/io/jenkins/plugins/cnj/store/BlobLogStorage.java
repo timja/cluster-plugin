@@ -174,6 +174,14 @@ public final class BlobLogStorage {
             long logOffset;
             long indexOffset;
             long lapses;
+            /** The build completed: stop tracking once everything is shipped (Target 14). */
+            volatile boolean finishing;
+            /** Its record was published before the tail of its log was shipped. */
+            volatile boolean publishedEarly;
+
+            boolean shippedAll() {
+                return logOffset >= log.length() && indexOffset >= (index.exists() ? index.length() : 0);
+            }
 
             Tracked(AzureBlobStore blobs, String key, File log, Run<?, ?> run) throws IOException {
                 this.blobs = blobs;
@@ -213,8 +221,24 @@ public final class BlobLogStorage {
             for (Tracked t : tracked.values()) {
                 try {
                     ship(t);
+                    if (t.finishing && t.shippedAll()) {
+                        done(t);
+                    }
                 } catch (IOException | RuntimeException e) {
                     LOGGER.log(Level.WARNING, "Failed to ship the log of " + t.key + "; will retry", e);
+                }
+            }
+        }
+
+        /** A completed build's whole log is shipped: stop tracking it, and republish it if its record went out first. */
+        private static void done(Tracked t) {
+            tracked.remove(t.key, t);
+            if (t.publishedEarly && t.run != null) {
+                LOGGER.info(() -> "Shipped the rest of the log of " + t.run + "; republishing it");
+                try {
+                    jenkins.persistence.BuildRecords.republishFiles(t.run);
+                } catch (IOException | RuntimeException e) {
+                    LOGGER.log(Level.WARNING, "Could not republish " + t.run + " after shipping its log", e);
                 }
             }
         }
@@ -297,11 +321,26 @@ public final class BlobLogStorage {
             return PersistenceStores.get() instanceof PostgresPersistenceStore p ? p.lapseCount() : 0;
         }
 
-        /** Ships the rest of a build's log and stops tracking it. */
-        static void finish(String key) throws IOException {
-            Tracked t = tracked.remove(key);
-            if (t != null) {
+        /**
+         * Ships the rest of a build's log and stops tracking it; if that cannot be done now (the store or the blob store
+         * is unreachable), it is shipped later, and the build republished then, so that no controller keeps a log
+         * without its end (Target 14).
+         */
+        static void finish(String key) {
+            Tracked t = tracked.get(key);
+            if (t == null) {
+                return;
+            }
+            t.finishing = true;
+            try {
                 ship(t);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Failed to ship the end of the log of " + key + "; will retry", e);
+            }
+            if (t.shippedAll()) {
+                tracked.remove(key, t);
+            } else {
+                t.publishedEarly = true; // the record is published right after this
             }
         }
     }
@@ -328,11 +367,7 @@ public final class BlobLogStorage {
                     Shipper.drop(key); // taken over by another controller, which ships the log from now on
                     return;
                 }
-                try {
-                    Shipper.finish(key);
-                } catch (IOException | RuntimeException e) {
-                    LOGGER.log(Level.WARNING, "Failed to ship the end of the log of " + run, e);
-                }
+                Shipper.finish(key);
             }
         }
     }
