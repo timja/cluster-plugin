@@ -5,7 +5,11 @@
 set -euo pipefail
 image=$1 ns=$2 name=${3:-cnj-seed} work=$(mktemp -d)
 docker rm -f cnj-seed-maker >/dev/null 2>&1 || true
-docker run -d --name cnj-seed-maker -p 18089:8080 -e JAVA_OPTS=-Djenkins.install.runSetupWizard=false "$image" >/dev/null
+# an admin user, so that the image's API token authenticates (no store: this controller only makes keys)
+printf 'jenkins:\n  securityRealm:\n    local:\n      users: [{id: admin, password: admin}]\n  authorizationStrategy: loggedInUsersCanDoAnything\n' > "$work/casc.yaml"
+chmod 644 "$work/casc.yaml"
+docker run -d --name cnj-seed-maker -p 18089:8080 -e JAVA_OPTS=-Djenkins.install.runSetupWizard=false \
+  -e CASC_JENKINS_CONFIG=/casc/casc.yaml -v "$work/casc.yaml:/casc/casc.yaml:ro" "$image" >/dev/null
 trap 'docker rm -f cnj-seed-maker >/dev/null 2>&1; rm -rf "$work"' EXIT
 token=admin:1100000000000000000000000000c0ffee
 until curl -gsf -u "$token" http://localhost:18089/api/json >/dev/null 2>&1; do sleep 2; done
