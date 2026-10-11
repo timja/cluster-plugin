@@ -65,6 +65,7 @@ public final class ClusterPlugins {
     /** In {@code plugins/}: the generation this home last restarted for, so that a restart is never repeated in a loop. */
     static final String RESTARTED_FOR = ".cluster-restarted-for";
     static final long LOCK_TIMEOUT_MILLIS = Long.getLong(ClusterPlugins.class.getName() + ".lockTimeoutMinutes", 10) * 60_000;
+    static final long IDLE_TIMEOUT_MINUTES = Long.getLong(ClusterPlugins.class.getName() + ".idleTimeoutMinutes", 60);
     static final long PERIOD_SECONDS = Long.getLong(ClusterPlugins.class.getName() + ".periodSeconds", 60);
 
     enum State { installed, uninstalled, disabled }
@@ -514,23 +515,55 @@ public final class ClusterPlugins {
         }
         Files.writeString(guard.toPath(), String.valueOf(generation));
         restarting = true;
-        LOGGER.info(() -> "Restarting to apply the cluster's plugin set (generation " + generation + ") once idle");
-        try {
-            Jenkins.get().safeRestart("Restarting to apply the cluster's plugin changes");
-        } catch (RestartNotSupportedException e) {
-            // e.g. no in-place restart: quiet down, then exit and let the container restart (the home survives that)
-            Thread t = new Thread(() -> {
-                try {
-                    Jenkins.get().doQuietDown(true, 0, "Restarting to apply the cluster's plugin changes", true);
-                    LOGGER.info("Exiting to apply the cluster's plugin set");
-                    System.exit(0);
-                } catch (Exception x) {
-                    LOGGER.log(Level.WARNING, "Could not restart to apply the cluster's plugin set", x);
-                }
-            }, "cluster plugins restart");
-            t.setDaemon(true);
-            t.start();
+        LOGGER.info(() -> "Restarting to apply the cluster's plugin set (generation " + generation + ") once no build runs here");
+        Thread t = new Thread(ClusterPlugins::restartWhenIdle, "cluster plugins restart");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * Quiets down, waits until no build runs here (Pipelines included, unlike a safe restart: a Pipeline resumed from
+     * this home after the restart would be adopted elsewhere too), then restarts in place, or exits for the container to
+     * restart (the home survives that). After {@link #IDLE_TIMEOUT_MINUTES} it restarts anyway.
+     */
+    static void restartWhenIdle() {
+        Jenkins j = Jenkins.get();
+        String message = "Restarting to apply the cluster's plugin changes once the builds running here are done";
+        try (hudson.security.ACLContext ignored = hudson.security.ACL.as2(hudson.security.ACL.SYSTEM2)) {
+            j.doQuietDown(false, 0, message, false); // not "safe restart": that pauses Pipelines, which then never finish
+            long deadline = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(IDLE_TIMEOUT_MINUTES);
+            while (!idle(j) && System.currentTimeMillis() < deadline) {
+                Thread.sleep(2000);
+            }
+            if (!j.isQuietingDown()) {
+                LOGGER.info("Quiet down was cancelled; not restarting for the cluster's plugin set now");
+                restarting = false;
+                return;
+            }
+            LOGGER.info(() -> idle(j) ? "No build runs here: restarting for the cluster's plugin set"
+                    : "Builds still run here after " + IDLE_TIMEOUT_MINUTES + " minutes: restarting for the cluster's plugin set anyway");
+            try {
+                j.restart();
+            } catch (RestartNotSupportedException e) {
+                LOGGER.info("Exiting to apply the cluster's plugin set");
+                System.exit(0);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Could not restart to apply the cluster's plugin set", e);
+            restarting = false;
         }
+    }
+
+    /** Whether no executor here is busy, flyweight ones (Pipelines) included. */
+    private static boolean idle(Jenkins j) {
+        for (hudson.model.Computer c : j.getComputers()) {
+            if (!c.isIdle()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void releaseLock(PostgresPersistenceStore store) throws IOException {

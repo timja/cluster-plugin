@@ -114,7 +114,13 @@ check "2 both controllers run the upgraded $P ($NEW)" bash -c "[[ '$NEW' != '$OL
 check "2 both restarted for it" both_were_down "$OUT/probe-upgrade.txt"
 check "2 one at a time: a controller answered throughout" never_both_down "$OUT/probe-upgrade.txt"
 check "2 one at a time: the second went down only after the first was back" one_at_a_time "$OUT/probe-upgrade.txt"
-check "2 the Pipeline running meanwhile completed" eventually 300 completed_somewhere
+check "2 the Pipeline running meanwhile completed, with its whole console" eventually 300 completed_somewhere
+for pod in "$REL-0" "$REL-1"; do
+  { echo "== $pod build"; on "$pod" "/job/during/1/api/json?tree=result,building" || true; echo; echo "== $pod console"; on "$pod" /job/during/1/consoleText || true; } > "$OUT/during-$pod.txt" 2>&1
+  k logs "$pod" -c jenkins --previous > "$OUT/$pod-before-restart.log" 2>&1 || true
+  k logs "$pod" -c jenkins > "$OUT/$pod-after-upgrade.log" 2>&1 || true
+done
+check "2 its controller waited for it before restarting" bash -c "grep -q survived '$OUT/during-$REL-0.txt' && ! grep -q 'Pausing (Preparing for shutdown)' '$OUT/during-$REL-0.txt'"
 check "2 the restart lock was released" bash -c "[[ -z '$(psql_q "select key from jenkins_store where key = 'cluster/plugins.restart'")' ]]"
 info "2 members: $(psql_q "select name || ' ' || to_char(started_at, 'HH24:MI:SS') || ' ' || coalesce(plugins, '') from jenkins_members where heartbeat_at > now() - interval '30 seconds' order by name" | tr '\n' ';')"
 
