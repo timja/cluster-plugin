@@ -186,7 +186,7 @@ eventually 60 console_has $A /job/ticker/1 "tick 15"
 kill_a
 check "5 the build is closed as aborted on B" eventually 120 is_result $B /job/ticker/1 ABORTED
 json $B /job/ticker/1/consoleText > "$OUT/console-ticker-b.txt" 2>/dev/null || true
-last=$(grep -o 'tick [0-9]*' "$OUT/console-ticker-b.txt" | tail -1 | awk '{print $2}')
+last=$(grep -o 'tick [0-9]*' "$OUT/console-ticker-b.txt" | tail -1 | awk '{print $2}' || true)
 info "5 B's console of the closed build ends at tick ${last:-none}"
 check "5 ... and keeps what it printed (ticks 1 to at least 12, in order)" bash -c "[[ \$(grep -c '^tick ' '$OUT/console-ticker-b.txt') -ge 12 ]] && grep -o 'tick [0-9]*' '$OUT/console-ticker-b.txt' | awk '{ if (\$2 != NR) exit 1 }'"
 check "5 ... then why it ended" grep -q "Finished: ABORTED" "$OUT/console-ticker-b.txt"
