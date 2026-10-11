@@ -104,7 +104,7 @@ pipeline_job ask 'def r = input(message: "go?", id: "Go", parameters: [string(na
 pipeline_job ask2 'input message: "go?", id: "Go"; echo "approved 2"'
 create_both ask; create_both ask2
 start_on_a ask; start_on_a ask2
-check "3 ask is waiting for input (seen from B)" eventually 30 console_has $B /job/ask/1 'go?'
+check "3 ask is waiting for input (seen from B)" eventually 30 console_has $B /job/ask/1 'Input requested'
 # the input form's submit, form-encoded, as the browser posts it (with a cluster crumb through rr)
 crumb_json=$(curl -gsf -c "$OUT/rr.cookies" -u "$AUTH" "http://localhost:$RR/crumbIssuer/api/json")
 crumb=$(jq_ 'd["crumb"]' <<<"$crumb_json")
@@ -156,7 +156,7 @@ check "6 and grows" eventually 10 console_has $B /job/fstick/1 'fs tick 7'
 log "scenario 7: agent1 (on A) from B"
 check "7 on B, agent1's page says online (answered by A)" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/computer/agent1/api/json?tree=offline') == *'\"offline\":false'* ]]"
 check "7 forwarded to A" test "$(header $B /computer/agent1/api/json X-CNJ-Forwarded-From)" = jenkins-a
-check "7 its log answers on B" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/computer/agent1/log | grep -qi 'connected\|remoting'"
+check "7 its log answers on B" bash -c "curl -gsf -u '$AUTH' 'http://localhost:$B/computer/agent1/logText/progressiveText?start=0' | grep -qi 'connected\|remoting'"
 check "7 its script console works from B" bash -c "[[ \$(curl -gsf -u '$AUTH' --data-urlencode 'script=println(\"agent says \" + hudson.remoting.Channel.current().getName())' http://localhost:$B/computer/agent1/scriptText) == *'agent says'* ]]"
 check "7 the channel table names A" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select m.name from jenkins_channels c join jenkins_members m on m.origin = c.origin where c.agent = 'agent1'\") == jenkins-a ]]"
 
