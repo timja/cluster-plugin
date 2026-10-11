@@ -97,7 +97,7 @@ check "3 build -s -v on B waits for the build A ran, with its log" bash -c "grep
 log "scenario 4: a controller started against the store without the cluster's seeded keys"
 docker rm -f et20-noseed >/dev/null 2>&1 || true
 et1 run -d --no-deps --name et20-noseed -e CNJ_SEED_DIR= -e CNJ_NAME=noseed -e CNJ_INTERNAL_URL=http://et20-noseed:8080/ jenkins-a >/dev/null 2>&1 || true
-refuses() { docker logs et20-noseed 2>&1 | grep -q "does not have the key material of the cluster"; }
+refuses() { local l; l=$(docker logs et20-noseed 2>&1); grep -q "does not have the key material of the cluster" <<<"$l"; }
 check "4 it refuses to start, saying why" eventually 180 refuses
 check "4 ... and never became a member" bash -c "! curl -gsf -u '$AUTH' http://localhost:$A/manage/cluster/api/json | grep -q '\"noseed\"'"
 docker logs et20-noseed > "$OUT/noseed.log" 2>&1 || true
