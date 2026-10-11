@@ -4,7 +4,8 @@
 # 2 controllers, in-chart Postgres and Azurite, and the kubernetes cloud with a container cap of 4.
 # The Service is a NodePort mapped to localhost:8095. Exits non-zero if any check fails.
 #
-# Prerequisites: CORE_REF=cnj/t9-m1-provisioning-demand experiments/ET1-build.sh; experiments/ET9-build-image.sh
+# Prerequisites: CORE_REF=cnj/t10-m1-import-api experiments/ET1-build.sh (the top of the core stack, with the T11 merge:
+# controllers booting at once all write the shared admin user); experiments/ET9-build-image.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj REL=cnj SVC=8095 OUT="$RAW_DIR/ET9" CHART="$ROOT_DIR/charts/cloud-native-jenkins"
@@ -28,12 +29,16 @@ alive_members() { svc /manage/cluster/api/json?depth=1 | jq_ '",".join(sorted(m[
 # which controller wrote a completed build's record (the store's events, by origin → member name)
 ran_on() { psql_q "select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = 'jobs/$1/builds/$2/build.xml' and e.kind = 'WRITTEN' order by e.seq desc limit 1"; }
 result_is() { [[ "$(svc "/job/$1/$2/api/json?tree=result" 2>/dev/null | jq_ 'd["result"]')" == "$3" ]]; }
-pipeline() { # name script
-  python3 - "$OUT_DIR/$1.xml" "$2" <<'PY'
+pipeline() { # name script [string parameter]
+  python3 - "$OUT_DIR/$1.xml" "$2" "${3:-}" <<'PY'
 import sys
 from xml.sax.saxutils import escape
+param = sys.argv[3]
+props = ("<properties><hudson.model.ParametersDefinitionProperty><parameterDefinitions><hudson.model.StringParameterDefinition>"
+         "<name>%s</name><defaultValue>0</defaultValue></hudson.model.StringParameterDefinition></parameterDefinitions>"
+         "</hudson.model.ParametersDefinitionProperty></properties>" % param) if param else "<properties/>"
 open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
-<flow-definition plugin="workflow-job"><properties/>
+<flow-definition plugin="workflow-job">""" + props + """
 <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps"><script>%s</script><sandbox>true</sandbox></definition></flow-definition>""" % escape(sys.argv[2]))
 PY
   svc_post "/createItem?name=$1" -H 'Content-Type: application/xml' --data-binary "@$OUT_DIR/$1.xml" >/dev/null
@@ -79,7 +84,15 @@ spread=$(for i in $(seq 1 10); do ran_on flyweight "$i"; done | sort | uniq -c |
 info "2 10 builds through the Service ran on: $spread"
 check "2 builds through the Service ran on both controllers" test "$(wc -w <<<"$spread" | tr -d ' ')" = 2
 g_on "$REL-0" 'Jenkins.get().securityRealm.createAccount("u9", "u9-password-1")' >/dev/null
-(cd "$VALIDATION_DIR/journey" && mvn -B -ntp -q compile exec:java -Dexec.args="http://localhost:$SVC/ u9 u9-password-1 u9-password-2 flyweight") > "$OUT/journey.txt" 2>&1 || true
+# the journey's job: freestyle (HtmlUnit cannot submit a Pipeline's configure form), built once, on a Kubernetes agent
+cat > "$OUT_DIR/fs9.xml" <<'XML'
+<?xml version='1.1' encoding='UTF-8'?>
+<project><assignedNode>k8s</assignedNode><canRoam>false</canRoam><builders><hudson.tasks.Shell><command>echo journey</command></hudson.tasks.Shell></builders></project>
+XML
+svc_post "/createItem?name=fs9" -H 'Content-Type: application/xml' --data-binary "@$OUT_DIR/fs9.xml" >/dev/null
+svc_post "/job/fs9/build?delay=0sec" >/dev/null
+check "2 a freestyle build on a Kubernetes agent completes" eventually 300 result_is fs9 1 SUCCESS
+(cd "$VALIDATION_DIR/journey" && mvn -B -ntp -q compile exec:java -Dexec.args="http://localhost:$SVC/ u9 u9-password-1 u9-password-2 fs9") > "$OUT/journey.txt" 2>&1 || true
 while read -r kind ok rest; do
   case "$kind" in
     RESULT) if [[ "$rest" == "requests reached both controllers"* ]]; then info "2 journey: $ok $rest (kube-proxy balances connections, and HtmlUnit keeps them alive)"; else check "2 journey: $rest" test "$ok" = ok; fi ;;
@@ -89,12 +102,12 @@ done < <(grep -E '^(RESULT|INFO) ' "$OUT/journey.txt")
 
 # ------------------------------------------------------------------ 3. Kubernetes agents, cap 4, 6 builds at once
 log "scenario 3: 6 Pipelines on Kubernetes agents at once, container cap 4"
-pipeline kagent 'node("k8s") { sh "echo on-pod-$(hostname); sleep 25" }'
+pipeline kagent 'node("k8s") { sh '"'"'echo on-pod-$(hostname); sleep 25'"'"' }' N
 sampler() { while [[ ! -f "$OUT/stop-sampling" ]]; do
   k get pods -l jenkins/label=k8s -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.labels.kubernetes\.jenkins\.io/controller} {.status.phase}{"\n"}{end}' 2>/dev/null \
     | awk -v t="$(date +%s)" 'NF {print t, $0}' >> "$OUT/pods.txt"; sleep 2; done; }
 rm -f "$OUT/stop-sampling"; : > "$OUT/pods.txt"; sampler & sampler_pid=$!
-posts=(); for i in $(seq 1 6); do svc_post "/job/kagent/build?delay=0sec" >/dev/null & posts+=($!); done; wait "${posts[@]}"
+posts=(); for i in $(seq 1 6); do svc_post "/job/kagent/buildWithParameters?N=$i&delay=0sec" >/dev/null & posts+=($!); done; wait "${posts[@]}"
 check "3 all 6 builds complete" eventually 400 bash -c "for i in 1 2 3 4 5 6; do [[ \$(curl -gsf -u '$AUTH' http://localhost:$SVC/job/kagent/\$i/api/json?tree=result) == *SUCCESS* ]] || exit 1; done"
 touch "$OUT/stop-sampling"; wait $sampler_pid 2>/dev/null
 max=$(awk '$4 != "Succeeded" && $4 != "Failed" {n[$1]++} END {m = 0; for (t in n) if (n[t] > m) m = n[t]; print m}' "$OUT/pods.txt")
@@ -115,7 +128,7 @@ check "3 no pod was created for an item another controller ran (6 builds, $creat
 
 # ------------------------------------------------------------------ 4. losing a controller with a build on a Kubernetes agent
 log "scenario 4: delete a controller pod while it runs a Pipeline on a Kubernetes agent"
-pipeline survive 'retry(count: 2, conditions: [kubernetesAgent(), nonresumable()]) { node("k8s") { sh "echo attempt-on-$(hostname); sleep 45" } }; echo "survived"'
+pipeline survive 'retry(count: 2, conditions: [kubernetesAgent(), nonresumable()]) { node("k8s") { sh '"'"'echo attempt-on-$(hostname); sleep 45'"'"' } }; echo "survived"'
 on "$REL-0" "/job/survive/build?delay=0sec" -X POST >/dev/null
 eventually 120 bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/survive/1/consoleText 2>/dev/null | grep -q attempt-on" || true
 first_pod=$(svc /job/survive/1/consoleText | grep -o 'attempt-on-[a-z0-9-]*' | head -1 | sed 's/^attempt-on-//')
@@ -147,7 +160,7 @@ helm --kube-context "kind-$CLUSTER" -n "$NS" upgrade "$REL" "$CHART" --reuse-val
 check "6 three controllers ready" eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 3 ]]"
 check "6 the third is a live member" eventually 60 bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$SVC/manage/cluster/api/json?depth=1' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len([m for m in d[\"members\"] if m[\"alive\"]]))') == 3 ]]"
 jobs_2=$(on "$REL-2" '/api/json?tree=jobs[name]' | jq_ '",".join(sorted(j["name"] for j in d["jobs"]))')
-check "6 it sees every job ($jobs_2)" test "$jobs_2" = "flyweight,kagent,survive"
+check "6 it sees every job ($jobs_2)" test "$jobs_2" = "flyweight,fs9,kagent,survive"
 check "6 and the history (kagent: 6 builds)" test "$(on "$REL-2" '/job/kagent/api/json?tree=builds[number]' | jq_ 'len(d["builds"])')" = 6
 on "$REL-2" "/job/flyweight/build?delay=0sec" -X POST >/dev/null
 check "6 and runs builds" eventually 120 result_is flyweight 11 SUCCESS
