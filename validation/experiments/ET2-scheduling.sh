@@ -163,7 +163,8 @@ check "3 no further builds without commits (still 2)" test "$(count /job/poll)" 
 commit poll
 check "3 second commit → exactly one more build" eventually 180 pollcount 3
 # Target 15: the polling log is where polling ran (one controller per tick); both controllers show it
-pollog() { curl -gsf -u "$AUTH" "http://localhost:$1/job/poll/scmPollLog/pollingLog" 2>/dev/null; }
+pollog() { # the log part of the job's polling log page (the page itself has per-request values such as crumbs)
+  curl -gsf -u "$AUTH" "http://localhost:$1/job/poll/scmPollLog/" 2>/dev/null | python3 -c "import re,sys; m=re.search(r'<pre[^>]*>(.*?)</pre>', sys.stdin.read(), re.S); print(m.group(1) if m else '')"; }
 pollog $A > "$OUT/polling-log-a.txt" || true; pollog $B > "$OUT/polling-log-b.txt" || true
 check "3 the polling log reads the same on both controllers (served by the one that polled)" bash -c "grep -q 'Started on' '$OUT/polling-log-a.txt' && cmp -s '$OUT/polling-log-a.txt' '$OUT/polling-log-b.txt'"
 sleep 90; snap /job/poll $A $B
