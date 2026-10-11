@@ -157,7 +157,7 @@ public final class OwnerRoutingFilter implements Filter {
                     // cluster) does not have the build
                     String url = p == null ? null : store.urlOfOrigin(p.getOrigin());
                     String owner = p == null ? null : p.getController();
-                    if (url != null && Forwarding.forward(req, rsp, owner, url)) {
+                    if (url != null && relay(req, rsp, owner, url)) {
                         builds.incrementAndGet();
                         return;
                     }
@@ -173,7 +173,7 @@ public final class OwnerRoutingFilter implements Filter {
                 } else {
                     String agent = computerPath(path);
                     String[] holder = agent == null || isOnlineHere(agent) ? null : store.channelHolder(agent);
-                    if (holder != null && Forwarding.forward(req, rsp, holder[0], holder[1])) {
+                    if (holder != null && relay(req, rsp, holder[0], holder[1])) {
                         computers.incrementAndGet();
                         return;
                     }
@@ -183,6 +183,11 @@ public final class OwnerRoutingFilter implements Filter {
             }
         }
         chain.doFilter(request, response);
+    }
+
+    /** Forwards a request to its owner: a WebSocket through {@link WebSocketProxy} (Target 15), anything else through {@link Forwarding}. */
+    private static boolean relay(HttpServletRequest req, HttpServletResponse rsp, String owner, String url) throws IOException, ServletException {
+        return WebSocketProxy.isUpgrade(req) ? WebSocketProxy.proxy(req, rsp, owner, url) : Forwarding.forward(req, rsp, owner, url);
     }
 
     /** The placeholder of a build running on another controller, which this one does not have, or null. */

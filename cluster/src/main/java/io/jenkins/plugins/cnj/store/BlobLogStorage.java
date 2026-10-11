@@ -476,6 +476,25 @@ public final class BlobLogStorage {
         }
     }
 
+    /** The log of a build running on another controller, for the CLI (Target 15): from the blobs its owner ships it to. */
+    @Extension
+    public static final class RemoteLogs implements RunningBuilds.RemoteLog {
+        @Override
+        public long copy(@NonNull hudson.model.Job<?, ?> job, int number, long offset, @NonNull java.io.OutputStream out) throws IOException {
+            AzureBlobStore blobs = blobs();
+            String key = blobs == null ? null : buildKey(new File(job.getBuildDir(), String.valueOf(number)));
+            if (key == null) {
+                return -1;
+            }
+            byte[] data = blobs.readSegmentedFrom(key + "/" + LOG, offset);
+            if (data == null) {
+                return -1;
+            }
+            out.write(data);
+            return offset + data.length;
+        }
+    }
+
     /** Pipeline logs are in blobs, not in the snapshot. */
     @Extension
     public static final class Exclusion implements BuildRecords.Exclusion {
