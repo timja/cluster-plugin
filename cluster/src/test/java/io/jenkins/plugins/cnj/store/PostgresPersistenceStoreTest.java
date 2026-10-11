@@ -45,6 +45,60 @@ class PostgresPersistenceStoreTest {
         b = store();
     }
 
+    /** How long until {@code observer} takes {@code other} for gone, at most {@code limitMillis} (then -1). */
+    private static long goneAfter(PostgresPersistenceStore observer, PostgresPersistenceStore other, long limitMillis) throws Exception {
+        long start = System.nanoTime();
+        while (System.nanoTime() - start < java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(limitMillis)) {
+            if (!observer.aliveMembers().contains(other.getOrigin())) {
+                return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            }
+            Thread.sleep(100);
+        }
+        return -1;
+    }
+
+    @Test
+    void aDeadProcessIsGoneSoonButAPausedOneOnlyAfterTheTimeout() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(PostgresPersistenceStore.SESSION_LOCKS);
+        a.startHeartbeat();
+        b.startHeartbeat();
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (!b.holdsLivenessLockForTests() && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
+        b.heartbeat(); // its row names the lock
+        b.stopHeartbeatForTests(true); // the process died: its connections close, freeing the lock
+        long dead = goneAfter(a, b, PostgresPersistenceStore.MEMBER_TIMEOUT_MILLIS + 5000);
+        assertTrue(dead >= 0 && dead < PostgresPersistenceStore.FAST_DEAD_MILLIS + 1500, "gone after " + dead + " ms");
+        b.close();
+        b = store();
+        b.startHeartbeat();
+        deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (!b.holdsLivenessLockForTests() && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
+        b.heartbeat();
+        b.stopHeartbeatForTests(false); // paused, or cut off: its session (and lock) lives on
+        long paused = goneAfter(a, b, PostgresPersistenceStore.MEMBER_TIMEOUT_MILLIS + 5000);
+        assertTrue(paused >= PostgresPersistenceStore.MEMBER_TIMEOUT_MILLIS - PostgresPersistenceStore.HEARTBEAT_MILLIS - 500,
+                "a paused controller is not taken for gone early: " + paused + " ms");
+    }
+
+    @Test
+    void aControllerWhoseLockIsGoneStopsActingForItsLeasesFirst() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(PostgresPersistenceStore.SESSION_LOCKS);
+        b.startHeartbeat();
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (!b.holdsLivenessLockForTests() && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
+        b.heartbeat();
+        b.stopHeartbeatForTests(true);
+        assertFalse(b.mayHaveLapsed(), "just heartbeated");
+        Thread.sleep(PostgresPersistenceStore.FAST_DEAD_MILLIS - PostgresPersistenceStore.HEARTBEAT_MILLIS + 300);
+        assertTrue(b.mayHaveLapsed(), "before the others can take it for gone");
+    }
+
     @AfterEach
     void tearDown() {
         a.close();

@@ -44,6 +44,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     private static final Logger LOGGER = Logger.getLogger(PostgresPersistenceStore.class.getName());
     static final String CHANNEL = "jenkins_store";
+    /** Notified when a controller leaves the cluster cleanly (Target 15). */
+    static final String MEMBERS_CHANNEL = "jenkins_members";
     /** Advisory lock serializing schema creation between controllers. */
     private static final long SCHEMA_LOCK = 0x6a656e6b696e73L;
     private static final long COUNTERS_LOCK = 0x636e6a636e7472L;
@@ -103,6 +105,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     s.execute("alter table jenkins_members add column if not exists plugins text");
                     // Target 15: what else each member reports (executors, update-center jobs), as JSON
                     s.execute("alter table jenkins_members add column if not exists info text");
+                    // Target 15: the key of the session lock each member holds while its process lives
+                    s.execute("alter table jenkins_members add column if not exists lock_key int");
                     s.execute("create sequence if not exists jenkins_queue_ids");
                     s.execute("create table if not exists jenkins_queue ("
                             + "id bigint primary key, task text not null, dedup_key text not null, actions text not null,"
@@ -322,10 +326,35 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     /** How often a controller records that it is alive. */
     static final long HEARTBEAT_MILLIS =
-            Long.getLong(PostgresPersistenceStore.class.getName() + ".heartbeatMillis", 5_000);
+            Long.getLong(PostgresPersistenceStore.class.getName() + ".heartbeatMillis", 2_000);
     /** How long after its last heartbeat a controller is considered gone. */
     static final long MEMBER_TIMEOUT_MILLIS =
-            Long.getLong(PostgresPersistenceStore.class.getName() + ".memberTimeoutMillis", 20_000);
+            Long.getLong(PostgresPersistenceStore.class.getName() + ".memberTimeoutMillis", 15_000);
+
+    /**
+     * Session locks for liveness (Target 15): each controller holds a Postgres advisory lock on a connection of its own,
+     * and names it in its membership row. A controller whose process died loses its connection, so the database frees
+     * the lock at once; it is then taken for gone {@link #FAST_DEAD_MILLIS} after its last heartbeat instead of after
+     * the {@link #MEMBER_TIMEOUT_MILLIS}. A paused or partitioned controller keeps its connection (TCP), so its lock,
+     * and is judged by the timeout as before: pauses never make a controller look dead sooner. Off with
+     * {@code -Dio.jenkins.plugins.cnj.store.PostgresPersistenceStore.sessionLocks=false}, e.g. behind a pooler in
+     * transaction mode, which does not keep sessions.
+     */
+    static final boolean SESSION_LOCKS = !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".sessionLocks"));
+    /** How long after its last heartbeat a controller whose session lock is free is taken for gone. */
+    static final long FAST_DEAD_MILLIS = 3 * HEARTBEAT_MILLIS;
+    /** The first key of the advisory locks (the second is the member's {@code lock_key}). */
+    static final int LOCK_CLASS = 0x434a;
+
+    /** The liveness condition beyond the heartbeat timeout, for a members table alias ({@code "m."} or {@code ""}). */
+    static String fast(String alias) {
+        if (!SESSION_LOCKS) {
+            return "";
+        }
+        return " and (" + alias + "heartbeat_at > now() - interval '" + FAST_DEAD_MILLIS + " milliseconds' or " + alias + "lock_key is null"
+                + " or exists (select 1 from pg_locks l where l.locktype = 'advisory' and l.granted and l.classid = " + LOCK_CLASS
+                + " and l.objid = " + alias + "lock_key::oid and l.objsubid = 2))";
+    }
 
     private Thread heartbeatThread;
     /** {@link System#nanoTime} of the last heartbeat that reached the database. */
@@ -346,7 +375,63 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     boolean mayHaveLapsed() {
-        return System.nanoTime() - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS);
+        long since = System.nanoTime() - lastHeartbeatOk;
+        if (since > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS)) {
+            return true;
+        }
+        // our row names a session lock we no longer hold: the others take us for gone FAST_DEAD_MILLIS after our last
+        // heartbeat, so stop acting for our leases a heartbeat before that
+        return lockNamed && !lockHeld && since > TimeUnit.MILLISECONDS.toNanos(FAST_DEAD_MILLIS - HEARTBEAT_MILLIS);
+    }
+
+    /** The second key of this controller's session lock. */
+    final int LOCK_KEY = origin.hashCode() & 0x7fffffff;
+    /** Whether this controller holds its session lock now. */
+    private volatile boolean lockHeld;
+    /** Whether this controller's membership row (as last written) names its session lock. */
+    private volatile boolean lockNamed;
+    private Thread lockThread;
+    /** Woken to compare members at once: a controller announced it left. */
+    private final java.util.concurrent.Semaphore wake = new java.util.concurrent.Semaphore(0);
+
+    /** Holds the session lock on a connection of its own, checking it every second and taking it again if lost. */
+    private void holdLock() {
+        while (!closed) {
+            try (Connection c = dataSource().getConnection()) {
+                c.setAutoCommit(true);
+                try (PreparedStatement ps = c.prepareStatement("select pg_try_advisory_lock(?, ?)")) {
+                    ps.setInt(1, LOCK_CLASS);
+                    ps.setInt(2, LOCK_KEY);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        if (!rs.getBoolean(1)) {
+                            LOGGER.warning("Another session holds this controller's liveness lock key; going by heartbeats only");
+                            return;
+                        }
+                    }
+                }
+                lockHeld = true;
+                while (!closed) {
+                    Thread.sleep(1000);
+                    if (!c.isValid(2)) {
+                        throw new SQLException("liveness lock connection lost");
+                    }
+                }
+            } catch (InterruptedException e) {
+                return;
+            } catch (SQLException | RuntimeException e) {
+                if (lockHeld) {
+                    LOGGER.log(Level.WARNING, "Lost the liveness lock; taking it again", e);
+                }
+            } finally {
+                lockHeld = false;
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                return;
+            }
+        }
     }
 
     /** {@link System#nanoTime} since when this controller's heartbeats have reached the database without a lapse. */
@@ -358,6 +443,25 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * right after a database outage every heartbeat is stale, including the live controllers' own, and those must
      * get the chance to heartbeat again first (Target 14).
      */
+    /**
+     * For tests: stops heartbeating without leaving, as a process that died ({@code releaseLock}: its connections close)
+     * or one that is paused or cut off ({@code !releaseLock}: its session, so its lock, lives on).
+     */
+    synchronized void stopHeartbeatForTests(boolean releaseLock) throws InterruptedException {
+        if (heartbeatThread != null) {
+            heartbeatThread.interrupt();
+            heartbeatThread.join();
+        }
+        if (releaseLock && lockThread != null) {
+            lockThread.interrupt();
+            lockThread.join();
+        }
+    }
+
+    boolean holdsLivenessLockForTests() {
+        return lockHeld;
+    }
+
     /** For tests: as if this controller had been steadily connected for long. */
     void steadyForTests() {
         stableSince = System.nanoTime() - TimeUnit.HOURS.toNanos(1);
@@ -400,7 +504,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                             "insert into jenkins_build_leases (key, owner, epoch) values (?, ?, nextval('jenkins_store_version'))"
                                     + " on conflict (key) do update set owner = excluded.owner, epoch = excluded.epoch, acquired_at = now()"
                                     + " where jenkins_build_leases.owner <> excluded.owner and not exists (select 1 from jenkins_members m"
-                                    + " where m.origin = jenkins_build_leases.owner and m.heartbeat_at > now() - ? * interval '1 millisecond')"
+                                    + " where m.origin = jenkins_build_leases.owner and m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + ")"
                                     + " returning epoch")) {
                         ps.setString(1, key);
                         ps.setString(2, origin);
@@ -692,7 +796,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             if (judge) try (PreparedStatement ps = c.prepareStatement(
                     "update jenkins_queue set state = 'WAITING', claimed_by = null, updated_at = now()"
                             + " where state = 'CLAIMED' and claimed_by not in (select origin from jenkins_members"
-                            + " where heartbeat_at > now() - ? * interval '1 millisecond') returning id")) {
+                            + " where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ") returning id")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
@@ -715,14 +819,29 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * Starts recording this controller as a live member every {@link #HEARTBEAT_MILLIS}.
      */
     public synchronized void startHeartbeat() throws IOException {
+        if (SESSION_LOCKS && lockThread == null) {
+            lockThread = new Thread(this::holdLock, "PostgresPersistenceStore liveness lock");
+            lockThread.setDaemon(true);
+            lockThread.start();
+        }
         heartbeat();
         if (heartbeatThread == null) {
             heartbeatThread = new Thread(
                     () -> {
                         long lastPrune = 0;
+                        long nextBeat = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HEARTBEAT_MILLIS);
                         while (!closed) {
                             try {
-                                Thread.sleep(HEARTBEAT_MILLIS);
+                                // wake for the next heartbeat, the next member due to expire, or a member leaving
+                                long untilBeat = Math.max(0, TimeUnit.NANOSECONDS.toMillis(nextBeat - System.nanoTime()));
+                                long untilExpiry = millisUntilNextExpiry();
+                                wake.drainPermits();
+                                boolean woken = wake.tryAcquire(Math.min(untilBeat, untilExpiry), TimeUnit.MILLISECONDS);
+                                if (woken || System.nanoTime() - nextBeat < 0) {
+                                    watchMembers(); // a member left, or one may have just expired
+                                    continue;
+                                }
+                                nextBeat = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HEARTBEAT_MILLIS);
                                 heartbeat();
                                 watchMembers();
                                 if (System.currentTimeMillis() - lastPrune > 3_600_000) {
@@ -783,13 +902,44 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
+    /** Milliseconds until the next other live member would expire if it stopped heartbeating now (at most a heartbeat). */
+    private long millisUntilNextExpiry() {
+        if (!canJudgeLiveness()) {
+            return HEARTBEAT_MILLIS;
+        }
+        try {
+            return run("next member expiry", c -> {
+                try (PreparedStatement ps = c.prepareStatement("select coalesce(min(extract(epoch from (m.heartbeat_at + case when "
+                        + (SESSION_LOCKS ? "m.lock_key is not null and not exists (select 1 from pg_locks l where l.locktype = 'advisory'"
+                                + " and l.granted and l.classid = " + LOCK_CLASS + " and l.objid = m.lock_key::oid and l.objsubid = 2)" : "false")
+                        + " then ? else ? end * interval '1 millisecond' - now())) * 1000), ?) from jenkins_members m"
+                        + " where m.origin <> ? and m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m."))) {
+                    ps.setLong(1, FAST_DEAD_MILLIS);
+                    ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
+                    ps.setLong(3, HEARTBEAT_MILLIS);
+                    ps.setString(4, origin);
+                    ps.setLong(5, MEMBER_TIMEOUT_MILLIS);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        // a little after it expires, by the database's clock
+                        return Math.max(50, Math.min(HEARTBEAT_MILLIS, (long) rs.getDouble(1) + 50));
+                    }
+                }
+            });
+        } catch (IOException | RuntimeException e) {
+            return HEARTBEAT_MILLIS;
+        }
+    }
+
     void heartbeat() throws IOException {
         try {
             withControl(c -> {
                 try (PreparedStatement ps = c.prepareStatement(
-                        "insert into jenkins_members (origin, heartbeat_at, name, url, version, protocol, plugins, info) values (?, now(), ?, ?, ?, ?, ?, ?)"
+                        "insert into jenkins_members (origin, heartbeat_at, name, url, version, protocol, plugins, info, lock_key)"
+                                + " values (?, now(), ?, ?, ?, ?, ?, ?, ?)"
                                 + " on conflict (origin) do update set heartbeat_at = now(), name = excluded.name, url = excluded.url,"
-                                + " version = excluded.version, protocol = excluded.protocol, plugins = excluded.plugins, info = excluded.info")) {
+                                + " version = excluded.version, protocol = excluded.protocol, plugins = excluded.plugins, info = excluded.info,"
+                                + " lock_key = excluded.lock_key")) {
                     ps.setString(1, origin);
                     ps.setString(2, NAME);
                     ps.setString(3, INTERNAL_URL);
@@ -797,6 +947,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     ps.setInt(5, PROTOCOL);
                     ps.setString(6, pluginsStatus);
                     ps.setString(7, memberInfo);
+                    Integer key = lockHeld ? LOCK_KEY : null;
+                    if (key == null) {
+                        ps.setNull(8, java.sql.Types.INTEGER);
+                    } else {
+                        ps.setInt(8, key);
+                    }
+                    lockNamed = key != null;
                     ps.executeUpdate();
                 }
                 if (System.nanoTime() - lastMemberPrune > TimeUnit.MINUTES.toNanos(10)) {
@@ -809,7 +966,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 return null;
             });
             long now = System.nanoTime();
-            if (now - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS)) {
+            if (mayHaveLapsed()) {
                 lapses.incrementAndGet(); // others may have taken over our builds meanwhile
             }
             if (now - lastHeartbeatOk > TimeUnit.MILLISECONDS.toNanos(2 * HEARTBEAT_MILLIS)) {
@@ -878,7 +1035,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         return run("check peer versions", c -> {
             List<String> result = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("select coalesce(name, origin), coalesce(protocol, 0) from jenkins_members"
-                    + " where origin <> ? and coalesce(protocol, 0) < ? and heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                    + " where origin <> ? and coalesce(protocol, 0) < ? and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + "")) {
                 ps.setString(1, origin);
                 ps.setInt(2, minimum);
                 ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
@@ -914,7 +1071,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     String urlOf(@NonNull String name) throws IOException {
         return run("look up controller " + name, c -> {
             try (PreparedStatement ps = c.prepareStatement("select url from jenkins_members where name = ?"
-                    + " and heartbeat_at > now() - ? * interval '1 millisecond' order by heartbeat_at desc limit 1")) {
+                    + " and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + " order by heartbeat_at desc limit 1")) {
                 ps.setString(1, name);
                 ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
@@ -934,7 +1091,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         return run("list members", c -> {
             List<Member> result = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("select origin, name, url, heartbeat_at, started_at,"
-                    + " heartbeat_at > now() - ? * interval '1 millisecond', version, coalesce(protocol, 0), plugins, info from jenkins_members"
+                    + " heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ", version, coalesce(protocol, 0), plugins, info from jenkins_members"
                     + " order by started_at desc")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
@@ -988,7 +1145,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             Map<String, String> result = new TreeMap<>();
             try (PreparedStatement ps = c.prepareStatement("select ch.agent, coalesce(m.name, ch.origin) from jenkins_channels ch"
                     + " left join jenkins_members m on m.origin = ch.origin"
-                    + " where m.heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                    + " where m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + "")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
@@ -1015,7 +1172,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             for (Map.Entry<String, Integer> cap : caps.entrySet()) {
                 try (PreparedStatement ps = c.prepareStatement("select coalesce(sum(k.count), 0) from jenkins_counters k"
                         + " join jenkins_members m on m.origin = k.origin"
-                        + " where k.scope = ? and (k.origin = ? or m.heartbeat_at > now() - ? * interval '1 millisecond')")) {
+                        + " where k.scope = ? and (k.origin = ? or m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + ")")) {
                     ps.setString(1, cap.getKey());
                     ps.setString(2, origin);
                     ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
@@ -1091,7 +1248,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             try (PreparedStatement ps = c.prepareStatement("select m.name, m.url, m.origin from jenkins_channels ch"
                     + " join jenkins_members m on m.origin = ch.origin"
                     + " where ch.agent = ? and ch.origin <> ? and m.url is not null"
-                    + " and m.heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                    + " and m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + "")) {
                 ps.setString(1, agent);
                 ps.setString(2, origin);
                 ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
@@ -1112,7 +1269,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     String urlOfOrigin(@NonNull String memberOrigin) throws IOException {
         return run("look up controller " + memberOrigin, c -> {
             try (PreparedStatement ps = c.prepareStatement("select url from jenkins_members where origin = ?"
-                    + " and heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                    + " and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + "")) {
                 ps.setString(1, memberOrigin);
                 ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
@@ -1132,7 +1289,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 Set<String> members = new TreeSet<>();
                 members.add(origin);
                 try (PreparedStatement ps = c.prepareStatement(
-                        "select origin from jenkins_members where heartbeat_at > now() - ? * interval '1 millisecond'")) {
+                        "select origin from jenkins_members where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + "")) {
                     ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
@@ -1205,6 +1362,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             try (Connection c = connect()) {
                 try (Statement s = c.createStatement()) {
                     s.execute("listen " + CHANNEL);
+                    s.execute("listen " + MEMBERS_CHANNEL);
                 }
                 if (lastSeq < 0) {
                     try (Statement s = c.createStatement();
@@ -1216,7 +1374,14 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 PGConnection pg = c.unwrap(PGConnection.class);
                 while (!closed) {
                     lastSeq = drain(c, lastSeq);
-                    pg.getNotifications(1000); // wake up on NOTIFY, or poll every second
+                    org.postgresql.PGNotification[] notes = pg.getNotifications(1000); // wake up on NOTIFY, or poll every second
+                    if (notes != null) {
+                        for (org.postgresql.PGNotification n : notes) {
+                            if (MEMBERS_CHANNEL.equals(n.getName())) {
+                                wake.release(); // a controller left: the heartbeat thread compares members now
+                            }
+                        }
+                    }
                 }
             } catch (SQLException | RuntimeException e) {
                 if (!closed) {
@@ -1296,6 +1461,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     ps.setString(1, origin);
                     ps.executeUpdate();
                 }
+                try (Statement st = c.createStatement()) {
+                    st.execute("notify " + MEMBERS_CHANNEL); // the others compare members at once
+                }
                 return null;
             });
         } catch (SQLException | RuntimeException e) {
@@ -1304,6 +1472,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         synchronized (this) {
             if (heartbeatThread != null) {
                 heartbeatThread.interrupt();
+            }
+            if (lockThread != null) {
+                lockThread.interrupt();
             }
         }
         work.close();
