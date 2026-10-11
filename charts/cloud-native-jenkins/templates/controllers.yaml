@@ -21,7 +21,7 @@ spec:
           image: {{ .Values.image }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports: [{containerPort: 8080, name: http}]
-          envFrom: [{secretRef: {name: {{ include "cnj.fullname" . }}-store}}]
+          envFrom: [{secretRef: {name: {{ .Values.store.existingSecret | default (printf "%s-store" (include "cnj.fullname" .)) }}}}]
           env:
             - {name: CNJ_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
             - {name: CNJ_INTERNAL_URL, value: "http://$(CNJ_NAME).{{ include "cnj.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:8080/"}
@@ -32,6 +32,8 @@ spec:
               value: >-
                 -Djenkins.install.runSetupWizard=false -Djava.awt.headless=true
                 -Dio.jenkins.plugins.casc.core.JenkinsConfigurator.keepUndeclaredNodes=true
+                -Dio.jenkins.plugins.cnj.store.PostgresPersistenceStore.poolSize={{ .Values.store.poolSize }}
+                -Dio.jenkins.plugins.cnj.store.PostgresPersistenceStore.sessionLocks={{ .Values.store.sessionLocks }}
                 {{- if not .Values.updateSites.fetch }} -Dhudson.model.UpdateCenter.never=true -Dhudson.model.DownloadService.never=true{{ end }}
                 -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true {{ .Values.javaOpts }}
           readinessProbe:

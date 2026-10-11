@@ -45,10 +45,21 @@ kubernetesCloud:
   agentImage: jenkins/inbound-agent:latest-jdk21
 
 # Shared state. In-chart Postgres and Azurite are for development; point at managed services in production.
+# The stores' connection settings (Target 15: managed services). existingSecret names a Secret with
+# CNJ_STORE_URL, CNJ_STORE_USER, CNJ_STORE_PASSWORD, CNJ_BLOB_CONNECTION_STRING and CNJ_BLOB_CONTAINER, used instead
+# of postgres.url/user/password and blob.connectionString/container (which then need not be in values at all).
+store:
+  existingSecret: ""
+  poolSize: 8            # database connections per controller for ordinary work (plus 2 for heartbeats and leases)
+  # Session-lock liveness (a dead controller's builds are adopted ~6 s after its death): needs a direct connection to
+  # Postgres; turn off behind a pooler in transaction mode (PgBouncer), which does not keep sessions.
+  sessionLocks: true
 postgres:
   inChart: true
   image: postgres:16
   url: ""                # e.g. jdbc:postgresql://db.example.com:5432/jenkins when not in-chart
+  # appended to the URL, e.g. sslmode=verify-full&sslrootcert=/etc/cnj-db/root.crt (mount it with extraVolumes)
+  urlParameters: ""
   user: jenkins
   password: jenkins
 # Persistent volumes for the in-chart Postgres and Azurite (kind: the local-path provisioner)
