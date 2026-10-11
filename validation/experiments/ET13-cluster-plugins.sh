@@ -120,7 +120,7 @@ for pod in "$REL-0" "$REL-1"; do
   k logs "$pod" -c jenkins --previous > "$OUT/$pod-before-restart.log" 2>&1 || true
   k logs "$pod" -c jenkins > "$OUT/$pod-after-upgrade.log" 2>&1 || true
 done
-check "2 its controller waited for it before restarting" bash -c "grep -q survived '$OUT/during-$REL-0.txt' && ! grep -q 'Pausing (Preparing for shutdown)' '$OUT/during-$REL-0.txt'"
+check "2 it paused for the restart and resumed: every tick once, in order" bash -c "grep -q 'Pausing (Preparing for shutdown)' '$OUT/during-$REL-0.txt' && [[ \$(grep '^tick ' '$OUT/during-$REL-0.txt' | tr -d '\r' | tr '\n' ' ') == '$(seq -f 'tick %g' 1 40 | tr '\n' ' ')' ]]"
 check "2 the restart lock was released" bash -c "[[ -z '$(psql_q "select key from jenkins_store where key = 'cluster/plugins.restart'")' ]]"
 info "2 members: $(psql_q "select name || ' ' || to_char(started_at, 'HH24:MI:SS') || ' ' || coalesce(plugins, '') from jenkins_members where heartbeat_at > now() - interval '30 seconds' order by name" | tr '\n' ';')"
 

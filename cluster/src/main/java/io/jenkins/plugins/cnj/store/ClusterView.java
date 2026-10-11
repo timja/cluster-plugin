@@ -84,15 +84,41 @@ public final class ClusterView extends ManagementLink {
         return PostgresPersistenceStore.NAME;
     }
 
+    /**
+     * The live controllers, plus, for a name no live controller has (one that is down), its last incarnation if it
+     * was seen in the last hour. Earlier incarnations of a controller (every start is a new member) are left out.
+     */
     @Exported
     public List<MemberInfo> getMembers() throws IOException {
         List<MemberInfo> result = new ArrayList<>();
         PostgresPersistenceStore store = store();
         if (store != null) {
-            for (PostgresPersistenceStore.Member m : store.members()) {
+            for (PostgresPersistenceStore.Member m : visible(store.members(), System.currentTimeMillis())) {
                 result.add(new MemberInfo(m));
             }
         }
+        return result;
+    }
+
+    static final long GONE_SHOWN_MILLIS = java.util.concurrent.TimeUnit.HOURS.toMillis(1);
+
+    /** @param members newest first */
+    static List<PostgresPersistenceStore.Member> visible(List<PostgresPersistenceStore.Member> members, long now) {
+        java.util.Set<String> named = new java.util.HashSet<>();
+        for (PostgresPersistenceStore.Member m : members) {
+            if (m.alive()) {
+                named.add(m.name());
+            }
+        }
+        List<PostgresPersistenceStore.Member> result = new ArrayList<>();
+        for (PostgresPersistenceStore.Member m : members) {
+            if (m.alive()) {
+                result.add(m);
+            } else if (named.add(m.name()) && now - m.heartbeatAt() < GONE_SHOWN_MILLIS) {
+                result.add(m); // the newest incarnation of a controller that is down
+            }
+        }
+        result.sort(java.util.Comparator.comparing(PostgresPersistenceStore.Member::name));
         return result;
     }
 
@@ -151,6 +177,14 @@ public final class ClusterView extends ManagementLink {
         @Exported
         public long getStarted() {
             return m.startedAt();
+        }
+
+        public String getStartedAgo() {
+            return hudson.Util.getTimeSpanString(Math.max(0, System.currentTimeMillis() - m.startedAt()));
+        }
+
+        public String getHeartbeatAgo() {
+            return hudson.Util.getTimeSpanString(Math.max(0, System.currentTimeMillis() - m.heartbeatAt()));
         }
 
         @Exported

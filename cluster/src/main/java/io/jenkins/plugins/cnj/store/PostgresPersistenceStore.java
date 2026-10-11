@@ -686,6 +686,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         }
     }
 
+    private volatile long lastMemberPrune = System.nanoTime() - TimeUnit.HOURS.toNanos(1);
+
     void heartbeat() throws IOException {
         try {
             withTransaction(c -> {
@@ -700,6 +702,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     ps.setInt(5, PROTOCOL);
                     ps.setString(6, pluginsStatus);
                     ps.executeUpdate();
+                }
+                if (System.nanoTime() - lastMemberPrune > TimeUnit.MINUTES.toNanos(10)) {
+                    // every start is a new member: forget incarnations gone for a day (nothing refers to them by then)
+                    try (PreparedStatement ps = c.prepareStatement("delete from jenkins_members where heartbeat_at < now() - interval '1 day'")) {
+                        ps.executeUpdate();
+                    }
+                    lastMemberPrune = System.nanoTime();
                 }
                 return null;
             });

@@ -11,8 +11,8 @@
           <j:forEach var="m" items="${it.members}">
             <tr>
               <td>${m.name}</td><td>${m.url}</td>
-              <td>${h.getTimeSpanString(m.started)} ago</td><td>${h.getTimeSpanString(m.heartbeat)} ago</td>
-              <td>${m.alive ? 'yes' : 'no'}</td><td>${m.version} (protocol ${m.protocol})</td><td>${m.plugins}</td>
+              <td>${m.startedAgo} ago</td><td>${m.heartbeatAgo} ago</td>
+              <td>${m.alive ? 'yes' : 'no (down)'}</td><td>${m.version} (protocol ${m.protocol})</td><td>${m.plugins}</td>
             </tr>
           </j:forEach>
         </tbody>
