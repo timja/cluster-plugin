@@ -33,6 +33,8 @@ if [[ -d /extra-plugins ]]; then
   for p in /extra-plugins/*.hpi /extra-plugins/*.jpi; do
     [[ -f "$p" ]] || continue
     name=$(basename "$p"); name="${name%.*}"
+    # Target 13: a version the cluster's plugin set installed here (e.g. an upgrade) stays until the home is gone
+    [[ -f "$JENKINS_HOME/plugins/$name.jpi.cluster" ]] && continue
     rm -rf "$JENKINS_HOME/plugins/$name" "$JENKINS_HOME/plugins/$name".?pi
     cp "$p" "$JENKINS_HOME/plugins/$name.jpi"
   done

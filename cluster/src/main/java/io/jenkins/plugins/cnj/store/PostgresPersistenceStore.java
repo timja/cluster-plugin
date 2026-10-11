@@ -89,6 +89,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                     // Target 10: what each member runs, for rolling upgrades with mixed versions
                     s.execute("alter table jenkins_members add column if not exists version text");
                     s.execute("alter table jenkins_members add column if not exists protocol int");
+                    // Target 13: which generation of the cluster's plugin set each member has applied
+                    s.execute("alter table jenkins_members add column if not exists plugins text");
                     s.execute("create sequence if not exists jenkins_queue_ids");
                     s.execute("create table if not exists jenkins_queue ("
                             + "id bigint primary key, task text not null, dedup_key text not null, actions text not null,"
@@ -688,14 +690,15 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         try {
             withTransaction(c -> {
                 try (PreparedStatement ps = c.prepareStatement(
-                        "insert into jenkins_members (origin, heartbeat_at, name, url, version, protocol) values (?, now(), ?, ?, ?, ?)"
+                        "insert into jenkins_members (origin, heartbeat_at, name, url, version, protocol, plugins) values (?, now(), ?, ?, ?, ?, ?)"
                                 + " on conflict (origin) do update set heartbeat_at = now(), name = excluded.name, url = excluded.url,"
-                                + " version = excluded.version, protocol = excluded.protocol")) {
+                                + " version = excluded.version, protocol = excluded.protocol, plugins = excluded.plugins")) {
                     ps.setString(1, origin);
                     ps.setString(2, NAME);
                     ps.setString(3, INTERNAL_URL);
                     ps.setString(4, VERSION);
                     ps.setInt(5, PROTOCOL);
+                    ps.setString(6, pluginsStatus);
                     ps.executeUpdate();
                 }
                 return null;
@@ -743,6 +746,9 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     /** What this controller runs: core and plugin versions, shown in the cluster view. */
     static final String VERSION = jenkins.model.Jenkins.VERSION + " / " + java.util.Objects.requireNonNullElse(
             PostgresPersistenceStore.class.getPackage().getImplementationVersion(), "dev");
+
+    /** What this controller has applied of the cluster's plugin set ({@link ClusterPlugins}), published with each heartbeat. */
+    static volatile String pluginsStatus;
 
     /** Peers older than this protocol must not be alive when this controller starts (Target 10). */
     static final int MINIMUM_PEER_PROTOCOL = Integer.getInteger(PostgresPersistenceStore.class.getPackageName() + ".minimumPeerProtocol", 0);
@@ -802,7 +808,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     /** A controller in the membership table (Target 8 cluster view). */
-    record Member(String origin, String name, String url, long heartbeatAt, long startedAt, boolean alive, String version, int protocol) {}
+    record Member(String origin, String name, String url, long heartbeatAt, long startedAt, boolean alive, String version, int protocol,
+            String plugins) {}
 
     /** Every controller in the membership table, newest first. */
     @NonNull
@@ -810,13 +817,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         return run("list members", c -> {
             List<Member> result = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("select origin, name, url, heartbeat_at, started_at,"
-                    + " heartbeat_at > now() - ? * interval '1 millisecond', version, coalesce(protocol, 0) from jenkins_members"
+                    + " heartbeat_at > now() - ? * interval '1 millisecond', version, coalesce(protocol, 0), plugins from jenkins_members"
                     + " order by started_at desc")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         result.add(new Member(rs.getString(1), rs.getString(2), rs.getString(3),
-                                rs.getTimestamp(4).getTime(), rs.getTimestamp(5).getTime(), rs.getBoolean(6), rs.getString(7), rs.getInt(8)));
+                                rs.getTimestamp(4).getTime(), rs.getTimestamp(5).getTime(), rs.getBoolean(6), rs.getString(7), rs.getInt(8), rs.getString(9)));
                     }
                 }
             }

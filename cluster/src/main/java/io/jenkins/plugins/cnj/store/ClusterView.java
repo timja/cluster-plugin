@@ -167,6 +167,12 @@ public final class ClusterView extends ManagementLink {
         public int getProtocol() {
             return m.protocol();
         }
+
+        /** The generation of the cluster's plugin set this controller has applied (Target 13). */
+        @Exported
+        public String getPlugins() {
+            return m.plugins();
+        }
     }
 
     @ExportedBean(defaultVisibility = 2)

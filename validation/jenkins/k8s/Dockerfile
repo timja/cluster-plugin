@@ -5,7 +5,7 @@ USER root
 COPY war/jenkins.war /war-override/jenkins.war
 COPY plugins/ /extra-plugins/
 # the kubernetes plugin's dependencies, resolved against the war actually run (the plugin itself comes from /extra-plugins),
-# and mock-slave for trying agents. The plugin set is fixed at runtime (FixedPluginSet): plugins wanted on the cluster go here
+# and mock-slave for trying agents. Plugins installed at runtime are shared by the cluster (ClusterPlugins, Target 13)
 RUN jenkins-plugin-cli --war /war-override/jenkins.war --plugins kubernetes mock-slave \
  && chown -R jenkins:jenkins /usr/share/jenkins/ref/plugins
 USER jenkins
