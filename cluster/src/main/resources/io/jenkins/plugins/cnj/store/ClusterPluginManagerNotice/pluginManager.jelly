@@ -1,0 +1,22 @@
+<?jelly escape-by-default='true'?>
+<!-- Included on the plugin manager's pages by core's PluginManager/notices.jelly. -->
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler">
+  <j:choose>
+    <j:when test="${it.active}">
+      <st:adjunct includes="io.jenkins.plugins.cnj.store.ClusterPluginManagerNotice.notice"/>
+      <div class="jenkins-alert jenkins-alert-info cnj-cluster-plugins" data-status-url="${rootURL}/manage/cluster/pluginStatus">
+        <p>This controller is <strong>${it.cluster.self}</strong>, one of the controllers of a cloud-native Jenkins cluster.
+          Plugins installed, upgraded, uninstalled, disabled or enabled here apply to <strong>all of them</strong>:
+          new plugins load straight away; other changes restart the controllers one at a time, by themselves.</p>
+        <div class="cnj-cluster-plugins__status">
+          <st:include it="${it.cluster}" page="pluginStatus.jelly"/>
+        </div>
+      </div>
+    </j:when>
+    <j:when test="${it.fixed}">
+      <div class="jenkins-alert jenkins-alert-warning">
+        <p>The plugin set of this cluster is fixed: plugins come with the controller image, so changes here are refused.</p>
+      </div>
+    </j:when>
+  </j:choose>
+</j:jelly>

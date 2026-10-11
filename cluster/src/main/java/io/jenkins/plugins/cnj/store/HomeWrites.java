@@ -127,7 +127,8 @@ public final class HomeWrites {
     }
 
     static boolean reportable(String key, @CheckForNull PersistenceStore store) {
-        return !ALLOWED.matcher(key).matches() && (store == null || !store.owns(key));
+        // declared per controller by the code writing it (Target 15: @PerController, LocalFiles): not a finding
+        return !ALLOWED.matcher(key).matches() && (store == null || !store.owns(key)) && !PersistenceStores.declaredLocal(key);
     }
 
     static List<Finding> scan() throws IOException {

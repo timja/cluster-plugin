@@ -4,17 +4,18 @@
       <p>This page is served by <strong>${it.self}</strong>. Everything below comes from the persistence store. See also <a href="compatibility/">what this controller keeps that the cluster does not share</a>.</p>
       <h2>Controllers</h2>
       <table class="jenkins-table">
-        <thead><tr><th>Name</th><th>Internal URL</th><th>Started</th><th>Last heartbeat</th><th>Alive</th><th>Version</th><th>Plugins</th></tr></thead>
+        <thead><tr><th>Name</th><th>Internal URL</th><th>Started</th><th>Last heartbeat</th><th>Alive</th><th>Version</th><th>Executors</th><th>Plugins</th></tr></thead>
         <tbody>
           <j:forEach var="m" items="${it.members}">
             <tr>
               <td>${m.name}</td><td>${m.url}</td>
               <td>${m.startedAgo} ago</td><td>${m.heartbeatAgo} ago</td>
-              <td>${m.alive ? 'yes' : 'no (down)'}</td><td>${m.version} (protocol ${m.protocol})</td><td>${m.pluginsSummary}</td>
+              <td>${m.alive ? 'yes' : 'no (down)'}</td><td>${m.version} (protocol ${m.protocol})</td><td>${m.executorsSummary}</td><td>${m.pluginsSummary}</td>
             </tr>
           </j:forEach>
         </tbody>
       </table>
+      <p>Shared queue: ${it.queueSummary}.</p>
       <h2>Plugin changes</h2>
       <p>Plugins installed, upgraded, uninstalled or disabled on any controller apply to all of them, on top of the plugins in
         the controller image. New plugins load straight away; other changes restart the controllers one at a time.</p>
@@ -45,10 +46,10 @@
       </table>
       <h2>Agent channels</h2>
       <table class="jenkins-table">
-        <thead><tr><th>Agent</th><th>Connected to</th></tr></thead>
+        <thead><tr><th>Agent</th><th>Connected to</th><th>Executors</th></tr></thead>
         <tbody>
           <j:forEach var="c" items="${it.channels}">
-            <tr><td>${c.agent}</td><td>${c.controller}</td></tr>
+            <tr><td>${c.agent}</td><td>${c.controller}</td><td>${c.executorsSummary}</td></tr>
           </j:forEach>
         </tbody>
       </table>

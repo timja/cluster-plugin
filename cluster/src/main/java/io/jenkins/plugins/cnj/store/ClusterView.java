@@ -6,6 +6,7 @@ import hudson.Extension;
 import hudson.model.Api;
 import hudson.model.ManagementLink;
 import hudson.security.Permission;
+import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
@@ -17,6 +18,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStores;
+import org.kohsuke.stapler.StaplerRequest2;
+import org.kohsuke.stapler.StaplerResponse2;
 import org.kohsuke.stapler.export.Exported;
 import org.kohsuke.stapler.export.ExportedBean;
 
@@ -76,6 +79,16 @@ public final class ClusterView extends ManagementLink {
     @CheckForNull
     private static PostgresPersistenceStore store() {
         return PersistenceStores.get() instanceof PostgresPersistenceStore p ? p : null;
+    }
+
+    /**
+     * Each controller's progress applying the cluster's plugin set, as an HTML fragment: shown on the plugin manager's
+     * pages ({@link ClusterPluginManagerNotice}) and refreshed from here.
+     */
+    public void doPluginStatus(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException, ServletException {
+        Jenkins.get().checkPermission(Jenkins.SYSTEM_READ);
+        rsp.setHeader("Cache-Control", "no-cache");
+        req.getView(this, "pluginStatus.jelly").forward(req, rsp);
     }
 
     /** The name of this controller. */
@@ -205,9 +218,28 @@ public final class ClusterView extends ManagementLink {
         List<Channel> result = new ArrayList<>();
         PostgresPersistenceStore store = store();
         if (store != null) {
-            store.channels().forEach((agent, controller) -> result.add(new Channel(agent, controller)));
+            // each agent's executors, as reported by the controller holding its channel
+            java.util.Map<String, int[]> executors = new java.util.HashMap<>();
+            for (PostgresPersistenceStore.Member m : store.members()) {
+                if (m.alive()) {
+                    MemberStatus.Info.parse(m.info()).agents().forEach((agent, counts) -> executors.put(m.name() + "/" + agent, counts));
+                }
+            }
+            store.channels().forEach((agent, controller) -> result.add(new Channel(agent, controller, executors.get(controller + "/" + agent))));
         }
         return result;
+    }
+
+    /** Shared-queue items waiting for a controller to start them, and claimed by one (Target 15). */
+    @Exported
+    public java.util.Map<String, Integer> getQueue() throws IOException {
+        PostgresPersistenceStore store = store();
+        return store == null ? java.util.Map.of() : store.queueCounts();
+    }
+
+    public String getQueueSummary() throws IOException {
+        java.util.Map<String, Integer> q = getQueue();
+        return q.getOrDefault("WAITING", 0) + " waiting, " + q.getOrDefault("CLAIMED", 0) + " being started";
     }
 
     @ExportedBean(defaultVisibility = 2)
@@ -267,6 +299,28 @@ public final class ClusterView extends ManagementLink {
             return m.plugins();
         }
 
+        /** Busy executors on this controller's online computers (agents it holds, and the built-in node). */
+        @Exported
+        public int getBusyExecutors() {
+            return MemberStatus.Info.parse(m.info()).busy();
+        }
+
+        @Exported
+        public int getTotalExecutors() {
+            return MemberStatus.Info.parse(m.info()).total();
+        }
+
+        public String getExecutorsSummary() {
+            if (!m.alive()) {
+                return "";
+            }
+            if (m.info() == null) {
+                return "Unknown (an older version)";
+            }
+            MemberStatus.Info info = MemberStatus.Info.parse(m.info());
+            return info.busy() + " of " + info.total() + " busy";
+        }
+
         /** {@link #getPlugins} for people: up to date, applying, restart pending. */
         public String getPluginsSummary() {
             long current = 0;
@@ -318,10 +372,12 @@ public final class ClusterView extends ManagementLink {
     public static final class Channel {
         private final String agent;
         private final String controller;
+        private final int[] executors;
 
-        Channel(String agent, String controller) {
+        Channel(String agent, String controller, int[] executors) {
             this.agent = agent;
             this.controller = controller;
+            this.executors = executors;
         }
 
         @Exported
@@ -332,6 +388,21 @@ public final class ClusterView extends ManagementLink {
         @Exported
         public String getController() {
             return controller;
+        }
+
+        /** Busy executors of this agent, as its controller reports them; -1 if unknown. */
+        @Exported
+        public int getBusy() {
+            return executors == null ? -1 : executors[0];
+        }
+
+        @Exported
+        public int getExecutors() {
+            return executors == null ? -1 : executors[1];
+        }
+
+        public String getExecutorsSummary() {
+            return executors == null ? "" : executors[0] + " of " + executors[1] + " busy";
         }
     }
 }

@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 class ClusterViewTest {
 
     private static PostgresPersistenceStore.Member m(String origin, String name, long heartbeat, boolean alive) {
-        return new PostgresPersistenceStore.Member(origin, name, "http://" + name + ":8080/", heartbeat, heartbeat - 1000, alive, "v", 1, null);
+        return new PostgresPersistenceStore.Member(origin, name, "http://" + name + ":8080/", heartbeat, heartbeat - 1000, alive, "v", 1, null, null);
     }
 
     @Test

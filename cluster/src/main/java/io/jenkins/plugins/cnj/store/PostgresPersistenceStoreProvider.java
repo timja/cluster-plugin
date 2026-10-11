@@ -27,7 +27,9 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
     private static final Logger LOGGER = Logger.getLogger(PostgresPersistenceStoreProvider.class.getName());
 
     static final Pattern OWNED = Pattern.compile(
-            "jobs/[^/]+(/(jobs|branches)/[^/]+)*/(config\\.xml|nextBuildNumber|scm-revision-hash\\.xml|scm-last-seen-revision-hash\\.xml)");
+            "jobs/[^/]+(/(jobs|branches)/[^/]+)*/(config\\.xml|nextBuildNumber|scm-revision-hash\\.xml|scm-last-seen-revision-hash\\.xml"
+                    // Target 15: sub-items configured in the job (promoted-builds' processes, matrix configurations)
+                    + "|promotions/[^/]+/config\\.xml|configurations(/[^/]+/[^/]+)+/config\\.xml)");
 
     /**
      * Static state (Target 6): global configuration and descriptors at the root, users, nodes.

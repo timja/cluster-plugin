@@ -16,6 +16,8 @@ class ClusterPluginSetTest {
                 ClusterPluginSet.changeOf("POST", "/manage/pluginManager/plugin/mock-slave/doUninstall"));
         assertEquals(new ClusterPluginSet.Change("makeDisabled", "git"), ClusterPluginSet.changeOf("POST", "/pluginManager/plugin/git/makeDisabled/"));
         assertEquals("downgrade", ClusterPluginSet.changeOf("POST", "/updateCenter/downgrade").kind());
+        assertEquals("restart", ClusterPluginSet.changeOf("POST", "/manage/pluginManager/updates/safeRestart").kind());
+        assertEquals("restart", ClusterPluginSet.changeOf("POST", "/updateCenter/cancelRestart").kind());
     }
 
     @Test
@@ -23,7 +25,7 @@ class ClusterPluginSetTest {
         assertNull(ClusterPluginSet.changeOf("GET", "/manage/pluginManager/install"), "viewing");
         assertNull(ClusterPluginSet.changeOf("GET", "/manage/pluginManager/available"));
         assertNull(ClusterPluginSet.changeOf("POST", "/manage/pluginManager/checkUpdatesServer"));
-        assertNull(ClusterPluginSet.changeOf("POST", "/updateCenter/safeRestart"));
+        assertNull(ClusterPluginSet.changeOf("POST", "/safeRestart"), "Manage Jenkins > restart: one controller, on purpose");
         assertNull(ClusterPluginSet.changeOf("POST", "/job/install"));
     }
 
@@ -38,6 +40,11 @@ class ClusterPluginSetTest {
         assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster,
                 new ClusterPluginSet.Change("doUninstall", ClusterPlugins.PROTECTED), true));
         assertEquals(ClusterPluginSet.FIXED, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, install, false), "no blob storage: cannot share");
+        ClusterPluginSet.Change restart = new ClusterPluginSet.Change("restart", null);
+        assertEquals(ClusterPluginSet.RESTART, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, restart, true), "the cluster restarts by itself");
+        assertNull(ClusterPluginSet.refusal(ClusterPluginSet.Mode.fixed, restart, true), "nothing to roll out: a restart is a restart");
+        assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster,
+                new ClusterPluginSet.Change("install", ClusterPlugins.PROTECTED), true), "e.g. the CLI installing the store plugin");
         assertEquals(ClusterPluginSet.FIXED, ClusterPluginSet.refusal(ClusterPluginSet.Mode.fixed, install, true));
         assertNull(ClusterPluginSet.refusal(ClusterPluginSet.Mode.local, uninstall, true));
     }

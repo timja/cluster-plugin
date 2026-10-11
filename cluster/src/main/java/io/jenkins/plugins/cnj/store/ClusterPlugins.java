@@ -183,6 +183,26 @@ public final class ClusterPlugins {
         return generation + (restartPending ? " restart-pending" : "") + (restartRefused ? " restart-refused" : "");
     }
 
+    /**
+     * The same with what is going on (Target 15): {@code applying=<plugin>} while a plugin is fetched and loaded, and
+     * {@code failed=<a>,<b>} for plugins that could not be applied. Older readers ignore the extra words.
+     */
+    static String status(long generation, boolean restartPending, boolean restartRefused, @CheckForNull String applying,
+            java.util.Collection<String> failed) {
+        return status(generation, restartPending, restartRefused) + (applying == null ? "" : " applying=" + applying)
+                + (failed.isEmpty() ? "" : " failed=" + String.join(",", failed));
+    }
+
+    @CheckForNull
+    private static String word(String status, String prefix) {
+        for (String part : status.trim().split(" ")) {
+            if (part.startsWith(prefix)) {
+                return part.substring(prefix.length());
+            }
+        }
+        return null;
+    }
+
     /** What a member's published status means to a person, given the cluster's current generation. */
     static String describe(@CheckForNull String status, long current) {
         if (status == null || status.isBlank()) {
@@ -197,16 +217,22 @@ public final class ClusterPlugins {
         }
         boolean pending = status.contains("restart-pending");
         boolean refused = status.contains("restart-refused");
+        String failed = word(status, "failed=");
+        String failures = failed == null ? "" : "; could not apply " + failed.replace(",", ", ");
         if (refused) {
-            return "Needs attention: still differs after restarting for it";
+            return "Needs attention: still differs after restarting for it" + failures;
+        }
+        String applyingNow = word(status, "applying=");
+        if (applyingNow != null) {
+            return "Applying " + applyingNow + failures;
         }
         if (pending) {
-            return "Restart pending (one controller at a time)";
+            return "Restart pending (one controller at a time)" + failures;
         }
         if (applied < current) {
-            return "Applying " + (current - applied) + " change" + (current - applied == 1 ? "" : "s");
+            return "Applying " + (current - applied) + " change" + (current - applied == 1 ? "" : "s") + failures;
         }
-        return current == 0 ? "Up to date (the image's plugins)" : "Up to date";
+        return (current == 0 ? "Up to date (the image's plugins)" : "Up to date") + failures;
     }
 
     /** Whether a restart lock taken at {@code since} by {@code origin} may be broken. */
@@ -340,6 +366,7 @@ public final class ClusterPlugins {
                 Timer.get().schedule(ClusterPlugins::reconcile, 5, TimeUnit.SECONDS); // again once up
                 return;
             }
+            java.util.List<String> failed = new java.util.ArrayList<>();
             for (Map.Entry<String, Entry> e : overlay.plugins().entrySet()) {
                 String name = e.getKey();
                 if (PROTECTED.equals(name)) {
@@ -354,11 +381,12 @@ public final class ClusterPlugins {
                 } catch (IOException | RuntimeException x) {
                     // e.g. a missing or corrupt archive: skip this plugin, apply the others
                     LOGGER.log(Level.WARNING, "Could not apply the cluster's plugin set for " + name, x);
+                    failed.add(name);
                 }
             }
             appliedGeneration = overlay.generation();
             restartPending = restart;
-            PostgresPersistenceStore.pluginsStatus = status(appliedGeneration, restart, restartRefused);
+            PostgresPersistenceStore.pluginsStatus = status(appliedGeneration, restart, restartRefused, null, failed);
             if (restart) {
                 requestRestart(store, overlay.generation());
             } else {
@@ -391,6 +419,7 @@ public final class ClusterPlugins {
         String stagedAs = staged.get(name);
         if (action != Action.NONE && !(stagedAs != null && stagedAs.equals(desired.version() != null ? desired.version() : desired.state().name()))) {
             LOGGER.info(() -> "Applying the cluster's plugin set: " + name + " " + action + (desired.version() == null ? "" : " " + desired.version()));
+            PostgresPersistenceStore.pluginsStatus = status(appliedGeneration, restartPending, restartRefused, name, java.util.List.of());
             switch (action) {
                 case LOAD, REPLACE -> {
                     File target = new File(pm.rootDir, name + ".jpi");

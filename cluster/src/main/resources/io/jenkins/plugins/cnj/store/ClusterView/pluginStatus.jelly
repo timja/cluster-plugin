@@ -1,0 +1,14 @@
+<?jelly escape-by-default='true'?>
+<!-- Each controller's progress applying the cluster's plugin set: on the plugin manager's pages, refreshed from here. -->
+<j:jelly xmlns:j="jelly:core">
+  <j:if test="${app.hasPermission(app.SYSTEM_READ)}">
+    <table class="jenkins-table jenkins-table--small">
+      <thead><tr><th>Controller</th><th>Plugins</th></tr></thead>
+      <tbody>
+        <j:forEach var="m" items="${it.members}">
+          <tr><td>${m.name}<j:if test="${m.name == it.self}"> (this one)</j:if></td><td>${m.alive ? m.pluginsSummary : 'down'}</td></tr>
+        </j:forEach>
+      </tbody>
+    </table>
+  </j:if>
+</j:jelly>

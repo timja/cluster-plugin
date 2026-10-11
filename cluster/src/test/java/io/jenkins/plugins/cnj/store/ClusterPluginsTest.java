@@ -86,5 +86,12 @@ class ClusterPluginsTest {
         assertEquals("Restart pending (one controller at a time)", ClusterPlugins.describe(ClusterPlugins.status(3, true, false), 3));
         assertEquals("Needs attention: still differs after restarting for it", ClusterPlugins.describe(ClusterPlugins.status(3, true, true), 3));
         assertEquals("Unknown (an older version)", ClusterPlugins.describe(null, 3));
+        // Target 15: what is being applied, and what failed
+        assertEquals("Applying rebuild", ClusterPlugins.describe(ClusterPlugins.status(2, false, false, "rebuild", java.util.List.of()), 3));
+        assertEquals("Up to date; could not apply a, b",
+                ClusterPlugins.describe(ClusterPlugins.status(3, false, false, null, java.util.List.of("a", "b")), 3));
+        assertEquals("Restart pending (one controller at a time); could not apply a",
+                ClusterPlugins.describe(ClusterPlugins.status(3, true, false, null, java.util.List.of("a")), 3));
+        assertEquals("3 restart-pending", ClusterPlugins.status(3, true, false, null, java.util.List.of()), "unchanged for older readers");
     }
 }

@@ -43,12 +43,15 @@ public final class ClusterPluginSet implements Filter {
             + "pluginManager/(?<install>install|installPlugins|installNecessaryPlugins|uploadPlugin)"
             + "|pluginManager/plugin/(?<plugin>[^/]+)/(?<action>makeEnabled|makeDisabled|doUninstall)"
             + "|updateCenter/(?<uc>upgrade|downgrade)"
+            + "|(?:pluginManager/updates|updateCenter)/(?<restart>safeRestart|cancelRestart)"
             + ")/?$");
     static final String FIXED = "The plugin set of this cloud-native Jenkins cluster is fixed: plugins are part of the controller"
             + " image, so that every controller runs the same ones. Add the plugin to the image and roll it out (helm upgrade) instead.";
     static final String DOWNGRADE = "Downgrades are not applied across a cloud-native Jenkins cluster (they restore a backup only this"
             + " controller has). Install the older version instead.";
     static final String CORE_UPGRADE = "Jenkins itself is part of the controller image: upgrade it by rolling out a new image (helm upgrade).";
+    static final String RESTART = "This cloud-native Jenkins cluster restarts its controllers for plugin changes by itself, one at a"
+            + " time, once each has the change (see Manage Jenkins > Cluster). Restarting a single controller from here is not needed.";
     static final String PROTECTED_CHANGE = "The store plugin (" + ClusterPlugins.PROTECTED + ") is part of the controller image and"
             + " cannot be changed at runtime.";
 
@@ -77,6 +80,9 @@ public final class ClusterPluginSet implements Filter {
         if (m.group("uc") != null) {
             return new Change(m.group("uc"), null);
         }
+        if (m.group("restart") != null) {
+            return new Change("restart", null);
+        }
         return new Change(m.group("action"), m.group("plugin"));
     }
 
@@ -85,6 +91,10 @@ public final class ClusterPluginSet implements Filter {
     static String refusal(Mode mode, Change change, boolean clusterActive) {
         if (mode == Mode.local) {
             return null;
+        }
+        if (change.kind().equals("restart")) {
+            // the progress page's "restart when done": outside the cluster's one-at-a-time restarts (Target 15)
+            return mode == Mode.cluster && clusterActive ? RESTART : null;
         }
         if (mode == Mode.fixed || !clusterActive) {
             return FIXED;
@@ -122,6 +132,9 @@ public final class ClusterPluginSet implements Filter {
             rsp.setContentType("text/plain;charset=UTF-8");
             rsp.getOutputStream().write(refusal.getBytes(StandardCharsets.UTF_8));
             return;
+        }
+        if (change.kind().equals("install") && MODE == Mode.cluster) {
+            UpdateCenterRouting.installedHere(req, rsp); // before the response is committed (it redirects)
         }
         chain.doFilter(request, response);
         if (change.plugin() != null && rsp.getStatus() < 400) {

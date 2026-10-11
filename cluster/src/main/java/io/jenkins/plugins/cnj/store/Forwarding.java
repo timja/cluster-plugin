@@ -102,8 +102,14 @@ final class Forwarding {
         rsp.setStatus(r.statusCode());
         for (Map.Entry<String, List<String>> h : r.headers().map().entrySet()) {
             if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT)) && !h.getKey().startsWith(":")) {
+                boolean first = true;
                 for (String value : h.getValue()) {
-                    rsp.addHeader(h.getKey(), value);
+                    if (first) {
+                        rsp.setHeader(h.getKey(), value); // the owner's answer replaces any set here (e.g. X-CNJ-Controller)
+                        first = false;
+                    } else {
+                        rsp.addHeader(h.getKey(), value);
+                    }
                 }
             }
         }

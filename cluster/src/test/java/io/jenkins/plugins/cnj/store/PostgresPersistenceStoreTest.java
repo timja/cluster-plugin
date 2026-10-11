@@ -102,6 +102,12 @@ class PostgresPersistenceStoreTest {
         assertTrue(a.owns("jobs/mb/branches/main/scm-last-seen-revision-hash.xml"));
         assertFalse(a.owns("jobs/mb/state.xml"));
         assertFalse(a.owns("jobs/p/builds/1/build.xml"));
+        // Target 15: sub-items configured in the job
+        assertTrue(a.owns("jobs/p/promotions/release/config.xml"));
+        assertTrue(a.owns("jobs/f/jobs/m/configurations/axis-label/linux/config.xml"));
+        assertTrue(a.owns("jobs/m/configurations/axis-a/1/axis-b/x/config.xml"));
+        assertFalse(a.owns("jobs/m/configurations/axis-a/config.xml"), "an axis, not a configuration");
+        assertFalse(a.owns("jobs/m/configurations/axis-a/1/builds/3/build.xml"));
     }
 
     @Test
