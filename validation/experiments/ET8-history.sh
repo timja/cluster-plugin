@@ -113,13 +113,13 @@ cat > "$OUT_DIR/jacoco.xml" <<'XML'
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?><report name="demo"><sessioninfo id="s" start="1" dump="2"/><package name="demo"><class name="demo/Calc" sourcefilename="Calc.java"><method name="add" desc="(II)I" line="3"><counter type="INSTRUCTION" missed="0" covered="4"/><counter type="LINE" missed="0" covered="1"/><counter type="METHOD" missed="0" covered="1"/></method><method name="sub" desc="(II)I" line="4"><counter type="INSTRUCTION" missed="4" covered="0"/><counter type="LINE" missed="1" covered="0"/><counter type="METHOD" missed="1" covered="0"/></method><counter type="INSTRUCTION" missed="4" covered="4"/><counter type="LINE" missed="1" covered="1"/><counter type="METHOD" missed="1" covered="1"/><counter type="CLASS" missed="0" covered="1"/></class><sourcefile name="Calc.java"><line nr="3" mi="0" ci="4" mb="0" cb="0"/><line nr="4" mi="4" ci="0" mb="0" cb="0"/><counter type="LINE" missed="1" covered="1"/></sourcefile><counter type="LINE" missed="1" covered="1"/></package><counter type="INSTRUCTION" missed="4" covered="4"/><counter type="LINE" missed="1" covered="1"/><counter type="METHOD" missed="1" covered="1"/><counter type="CLASS" missed="0" covered="1"/></report>
 XML
 python3 - "$OUT_DIR/cov.xml" "$OUT_DIR/jacoco.xml" <<'PY'
-import sys, base64
+import sys
 from xml.sax.saxutils import escape
-report = base64.b64encode(open(sys.argv[2], "rb").read()).decode()
+report = open(sys.argv[2]).read().strip()  # no single quotes in it: a Groovy single-quoted string
 script = ("pipeline { agent { label 'built-in' }; stages { stage('test') { steps {\n"
-          "  writeFile file: 'jacoco.xml', text: new String('" + report + "'.decodeBase64(), 'UTF-8')\n"
+          "  writeFile file: 'jacoco.xml', text: '" + report + "'\n"
           "  recordCoverage(tools: [[parser: 'JACOCO', pattern: 'jacoco.xml']]) } } } }")
-open(sys.argv[1], "w").write("<?xml version='1.1' encoding='UTF-8'?>\n<flow-definition plugin=\"workflow-job\"><definition class=\"org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition\" plugin=\"workflow-cps\"><script>%s</script><sandbox>false</sandbox></definition></flow-definition>" % escape(script))
+open(sys.argv[1], "w").write("<?xml version='1.1' encoding='UTF-8'?>\n<flow-definition plugin=\"workflow-job\"><definition class=\"org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition\" plugin=\"workflow-cps\"><script>%s</script><sandbox>true</sandbox></definition></flow-definition>" % escape(script))
 PY
 create_both cov
 build_on $A cov
