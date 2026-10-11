@@ -54,9 +54,8 @@ public final class OwnerRoutingFilter implements Filter {
 
     @Initializer(after = InitMilestone.PLUGINS_STARTED)
     public static void install() throws ServletException {
-        if (PersistenceStores.get() instanceof PostgresPersistenceStore) {
-            PluginServletFilter.addFilter(new OwnerRoutingFilter());
-        }
+        // always: the store may not be created yet at this point; each request checks for it
+        PluginServletFilter.addFilter(new OwnerRoutingFilter());
     }
 
     /** A build addressed by a URL: the job's full name and the build number. */
