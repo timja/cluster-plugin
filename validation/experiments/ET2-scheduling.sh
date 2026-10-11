@@ -162,6 +162,10 @@ sleep 90; snap /job/poll $A $B
 check "3 no further builds without commits (still 2)" test "$(count /job/poll)" = 2
 commit poll
 check "3 second commit → exactly one more build" eventually 180 pollcount 3
+# Target 15: the polling log is where polling ran (one controller per tick); both controllers show it
+pollog() { curl -gsf -u "$AUTH" "http://localhost:$1/job/poll/scmPollLog/pollingLog" 2>/dev/null; }
+pollog $A > "$OUT/polling-log-a.txt" || true; pollog $B > "$OUT/polling-log-b.txt" || true
+check "3 the polling log reads the same on both controllers (served by the one that polled)" bash -c "grep -q 'Started on' '$OUT/polling-log-a.txt' && cmp -s '$OUT/polling-log-a.txt' '$OUT/polling-log-b.txt'"
 sleep 90; snap /job/poll $A $B
 check "3 polling never built the same change twice (3 builds total: $(count /job/poll))" test "$(count /job/poll)" = 3
 check "3 polling stayed on one controller (affinity)" test "$(builds /job/poll | awk '{print $2}' | sort -u | wc -l | tr -d ' ')" = 1
