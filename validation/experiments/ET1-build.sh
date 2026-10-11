@@ -13,7 +13,7 @@ CORE_WT=${CORE_WT:-/Users/timja/code/jenkins/jenkins-cnj-test}
 FOLDER=${FOLDER:-/Users/timja/code/jenkins/cloudbees-folder-plugin}
 CORE_REF=${CORE_REF:-$(git -C "$CORE" rev-parse -q --verify cnj/t1-integration >/dev/null && echo cnj/t1-integration || echo cnj/t1-m4-item-change-applier)}
 FOLDER_REF=${FOLDER_REF:-cnj/t1-m2-folder-children}
-MVN="mvn -B -ntp -q -Dspotbugs.skip -Dcheckstyle.skip -Denforcer.skip -Dlicense.skip=true -Dspotless.check.skip -Djacoco.skip -DskipTests"
+MVN="mvn -B -ntp -q -Dspotbugs.skip -Dcheckstyle.skip -Denforcer.skip -Dlicense.skip=true -Dspotless.check.skip -Dspotless.skip=true -Dspotless.apply.skip=true -Djacoco.skip -DskipTests"
 mkdir -p "$ET1/war" "$ET1/plugins"
 
 # Target 6: Stapler with prefixed bound object ids, which core is built against (skipped if the worktree is absent)
