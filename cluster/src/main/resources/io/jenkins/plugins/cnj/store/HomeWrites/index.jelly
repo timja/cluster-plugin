@@ -1,8 +1,7 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout">
-  <l:layout title="Cluster compatibility" permission="${app.SYSTEM_READ}" type="one-column">
-    <l:main-panel>
-      <l:app-bar title="Cluster compatibility"/>
+  <l:settings-subpage managementLink="${it.managementLink}" title="Cluster compatibility" description="What this controller keeps that the cluster does not share."
+                      permission="${app.SYSTEM_READ}" width="wide">
       <p>Files <strong>${it.controller}</strong> has written under its home since it started, which the persistence store does
         not hold and which are not local by design. Other controllers do not see them, and they are lost with this one.</p>
       <j:set var="findings" value="${it.findings}"/>
@@ -19,6 +18,5 @@
           </table>
         </j:otherwise>
       </j:choose>
-    </l:main-panel>
-  </l:layout>
+  </l:settings-subpage>
 </j:jelly>

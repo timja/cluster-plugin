@@ -31,6 +31,12 @@ import org.kohsuke.stapler.export.ExportedBean;
 @jenkins.security.stapler.StaplerAccessibleType // reached through ClusterView#getCompatibility
 public final class HomeWrites {
 
+    /** The cluster page this one belongs to, for the Manage Jenkins layout. */
+    public ClusterView getManagementLink() {
+        return hudson.ExtensionList.lookupSingleton(ClusterView.class);
+    }
+
+
     /** Local by design: never reported. */
     static final Pattern ALLOWED = Pattern.compile(String.join("|",
             "(plugins|war|logs|caches|workspace|tmp|updates|\\.cache|\\.groovy|\\.java|\\.m2|secrets)(/.*)?",
