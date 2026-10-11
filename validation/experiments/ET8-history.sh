@@ -107,6 +107,32 @@ post $B /job/ju/2/doDelete >/dev/null
 check "3 deleted on B, its results are gone on A" eventually 10 bash -c "[[ \$(curl -gs -o /dev/null -w '%{http_code}' -u '$AUTH' http://localhost:$A/job/ju/2/testReport/api/json) == 404 ]]"
 check "3 and on B" bash -c "[[ \$(curl -gs -o /dev/null -w '%{http_code}' -u '$AUTH' http://localhost:$B/job/ju/2/testReport/api/json) == 404 ]]"
 
+# ------------------------------------------------------------------ 3b. code coverage (Target 15: the coverage plugin)
+log "scenario 3b: a coverage report published on A, shown on B"
+cat > "$OUT_DIR/jacoco.xml" <<'XML'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?><report name="demo"><sessioninfo id="s" start="1" dump="2"/><package name="demo"><class name="demo/Calc" sourcefilename="Calc.java"><method name="add" desc="(II)I" line="3"><counter type="INSTRUCTION" missed="0" covered="4"/><counter type="LINE" missed="0" covered="1"/><counter type="METHOD" missed="0" covered="1"/></method><method name="sub" desc="(II)I" line="4"><counter type="INSTRUCTION" missed="4" covered="0"/><counter type="LINE" missed="1" covered="0"/><counter type="METHOD" missed="1" covered="0"/></method><counter type="INSTRUCTION" missed="4" covered="4"/><counter type="LINE" missed="1" covered="1"/><counter type="METHOD" missed="1" covered="1"/><counter type="CLASS" missed="0" covered="1"/></class><sourcefile name="Calc.java"><line nr="3" mi="0" ci="4" mb="0" cb="0"/><line nr="4" mi="4" ci="0" mb="0" cb="0"/><counter type="LINE" missed="1" covered="1"/></sourcefile><counter type="LINE" missed="1" covered="1"/></package><counter type="INSTRUCTION" missed="4" covered="4"/><counter type="LINE" missed="1" covered="1"/><counter type="METHOD" missed="1" covered="1"/><counter type="CLASS" missed="0" covered="1"/></report>
+XML
+python3 - "$OUT_DIR/cov.xml" "$OUT_DIR/jacoco.xml" <<'PY'
+import sys, base64
+from xml.sax.saxutils import escape
+report = base64.b64encode(open(sys.argv[2], "rb").read()).decode()
+script = ("pipeline { agent { label 'built-in' }; stages { stage('test') { steps {\n"
+          "  writeFile file: 'jacoco.xml', text: new String('" + report + "'.decodeBase64(), 'UTF-8')\n"
+          "  recordCoverage(tools: [[parser: 'JACOCO', pattern: 'jacoco.xml']]) } } } }")
+open(sys.argv[1], "w").write("<?xml version='1.1' encoding='UTF-8'?>\n<flow-definition plugin=\"workflow-job\"><definition class=\"org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition\" plugin=\"workflow-cps\"><script>%s</script><sandbox>false</sandbox></definition></flow-definition>" % escape(script))
+PY
+create_both cov
+build_on $A cov
+check "3b the coverage build completes on A" eventually 120 result_is $A /job/cov/1 SUCCESS
+curl -gsf -u "$AUTH" "http://localhost:$A/job/cov/1/coverage/api/json" > "$OUT/coverage-a.json" 2>/dev/null || true
+same_coverage() {
+  curl -gsf -u "$AUTH" "http://localhost:$B/job/cov/1/coverage/api/json" > "$OUT/coverage-b.json" 2>/dev/null || return 1
+  grep -q '50.00%' "$OUT/coverage-b.json" && cmp -s <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("projectStatistics"))' "$OUT/coverage-a.json") \
+    <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("projectStatistics"))' "$OUT/coverage-b.json")
+}
+check "3b B shows the same coverage (line coverage 50%)" eventually 30 same_coverage
+check "3b ... and its coverage page, with the class tree" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/cov/1/coverage/ | grep -q 'Calc'"
+
 # ------------------------------------------------------------------ 4. discarders
 log "scenario 4: numToKeep=3 with builds alternating between A and B"
 KEEP3='<jenkins.model.BuildDiscarderProperty><strategy class="hudson.tasks.LogRotator"><daysToKeep>-1</daysToKeep><numToKeep>3</numToKeep><artifactDaysToKeep>-1</artifactDaysToKeep><artifactNumToKeep>-1</artifactNumToKeep></strategy></jenkins.model.BuildDiscarderProperty>'
