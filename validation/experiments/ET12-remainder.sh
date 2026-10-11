@@ -63,7 +63,7 @@ check "lin is connected to B only" eventually 60 bash -c "[[ \$(cd $VALIDATION_D
 
 # ------------------------------------------------------------------ 1. placement by label
 log "scenario 1: Pipelines started on A needing an agent only B has"
-pipeline lab1 'node("lin") { sh "echo on-agent-$(hostname)" }'
+pipeline lab1 "node('lin') { sh 'echo on-agent-\$(hostname)' }"
 pipeline lab2 'node("built-in") { echo "first, on the controller" }; node("lin") { sh "echo then-on-agent" }'
 post $A "/job/lab1/build?delay=0sec" >/dev/null
 post $A "/job/lab2/build?delay=0sec" >/dev/null
@@ -106,7 +106,7 @@ code=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$B/j
 check "4 a request for a build of the old controller is answered (not forwarded to its namesake: $code)" bash -c "[[ '$code' != 000 && '$code' != 502 ]]"
 check "3 the Pipeline is resumed and completes" eventually 240 bash -c "for p in $A $B; do curl -gsf -u '$AUTH' http://localhost:\$p/job/sleeper/1/api/json?tree=result | grep -q SUCCESS && curl -gsf -u '$AUTH' http://localhost:\$p/job/sleeper/1/consoleText | grep -q 'after its controller was gone' && exit 0; done; exit 1"
 check "3 the freestyle build is closed as aborted" eventually 240 bash -c "for p in $A $B; do curl -gsf -u '$AUTH' http://localhost:\$p/job/long/1/api/json?tree=result | grep -q ABORTED && exit 0; done; exit 1"
-check "3 with a console saying why" bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/long/1/consoleText | grep -q 'closed as aborted'"
+check "3 with a console saying why, on both controllers" bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/long/1/consoleText | grep -q 'closed as aborted' && curl -gsf -u '$AUTH' http://localhost:$B/job/long/1/consoleText | grep -q 'closed as aborted'"
 check "4 no routing warnings after the restart" bash -c "! (cd $VALIDATION_DIR && docker compose -f compose.et1.yaml logs jenkins-a jenkins-b 2>&1 | grep -q 'Could not route')"
 
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1; docker logs et12-lin > "$OUT/lin.log" 2>&1
