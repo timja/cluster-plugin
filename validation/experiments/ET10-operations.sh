@@ -171,8 +171,8 @@ check "3 the old user's API token works" bash -c "[[ \$(kubectl --context kind-$
 pipeline_on "$REL-0" usecred 'withCredentials([string(credentialsId: "oldsecret", variable: "S")]) { echo "length ${S.length()}" }'
 on "$REL-0" "/job/usecred/build?delay=0sec" -X POST >/dev/null
 check "3 the old credential decrypts in a build" eventually 120 bash -c "kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' http://localhost:8080/job/usecred/1/consoleText | grep -q 'length 9'"
-info "3 node and quiet period on $REL-1: $(g_on "$REL-1" 'println((Jenkins.get().getNode("oldnode") != null) + "/" + Jenkins.get().quietPeriod)')"
-check "3 the old node and setting" bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' -X POST http://localhost:8080/scriptText --data-urlencode 'script=println((Jenkins.get().getNode(\"oldnode\") != null) + \"/\" + Jenkins.get().quietPeriod)' | tr -d '\r\n ') == true/3 ]]"
+info "3 node and quiet period on $REL-1: $(g_on "$REL-1" 'println("" + (Jenkins.get().getNode("oldnode") != null) + "/" + Jenkins.get().quietPeriod)')"
+check "3 the old node and setting" bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' -X POST http://localhost:8080/scriptText --data-urlencode 'script=println(\"\" + (Jenkins.get().getNode(\"oldnode\") != null) + \"/\" + Jenkins.get().quietPeriod)' | tr -d '\r\n ') == true/3 ]]"
 # again: nothing changes
 h upgrade "$REL" "$CHART" --reuse-values --set controllers=0 >/dev/null; sleep 10
 importer
@@ -200,7 +200,7 @@ jobs_after=$(on "$REL-0" '/api/json?tree=jobs[name]' | jq_ '",".join(sorted(j["n
 check "4 every job is there ($jobs_after)" test "$jobs_after" = "$jobs_before"
 check "4 history and consoles (team/fs #1)" bash -c "kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' http://localhost:8080/job/team/job/fs/1/consoleText | grep -q old-build"
 check "4 users (the old token)" bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS exec $REL-0 -c jenkins -- curl -gs -o /dev/null -w '%{http_code}' -u 'olduser:$old_token' http://localhost:8080/whoAmI/api/json) == 200 ]]"
-check "4 credentials and nodes" bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' -X POST http://localhost:8080/scriptText --data-urlencode 'script=println(com.cloudbees.plugins.credentials.SystemCredentialsProvider.getInstance().getCredentials().collect { it.id }.contains(\"oldsecret\") + \"/\" + (Jenkins.get().getNode(\"oldnode\") != null))' | tr -d '\r\n ') == true/true ]]"
+check "4 credentials and nodes" bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS exec $REL-1 -c jenkins -- curl -gsf -u '$AUTH' -X POST http://localhost:8080/scriptText --data-urlencode 'script=println(\"\" + com.cloudbees.plugins.credentials.SystemCredentialsProvider.getInstance().getCredentials().collect { it.id }.contains(\"oldsecret\") + \"/\" + (Jenkins.get().getNode(\"oldnode\") != null))' | tr -d '\r\n ') == true/true ]]"
 r=$(on "$REL-0" '/job/during-backup/1/api/json?tree=result,building' 2>/dev/null || echo '{}')
 info "4 the build running at backup time, after restore: $r"
 
