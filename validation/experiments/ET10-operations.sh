@@ -123,6 +123,7 @@ pipeline_on old oldp 'echo "an old pipeline"'
 on old "/job/team/job/fs/build?delay=0sec" -X POST >/dev/null; sleep 20; on old "/job/team/job/fs/build?delay=0sec" -X POST >/dev/null
 on old "/job/oldp/build?delay=0sec" -X POST >/dev/null
 for b in "team/job/fs 1" "team/job/fs 2" "oldp 1"; do set -- $b; eventually 120 result_on old "$1" "$2" SUCCESS || true; done
+g_on old 'println "executors: " + Jenkins.get().numExecutors + ", online: " + Jenkins.get().toComputer().isOnline(); Jenkins.get().queue.items.each { println "queued: " + it.task.fullDisplayName + ": " + it.why }; println "fs builds: " + Jenkins.get().getItemByFullName("team/fs")?.builds?.collect { it.number + " " + it.result }' > "$OUT/old-state.txt" 2>&1 || true
 g_on old 'Jenkins.get().securityRealm.createAccount("olduser", "old-password-1")' >/dev/null
 old_token=$(g_on old 'def u = hudson.model.User.getById("olduser", false); def t = u.getProperty(jenkins.security.ApiTokenProperty).tokenStore.generateNewToken("old"); u.save(); println t.plainValue')
 g_on old 'def p = com.cloudbees.plugins.credentials.SystemCredentialsProvider.getInstance(); p.getCredentials().add(new org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl(com.cloudbees.plugins.credentials.CredentialsScope.GLOBAL, "oldsecret", "old", hudson.util.Secret.fromString("old-value"))); p.save()' >/dev/null
