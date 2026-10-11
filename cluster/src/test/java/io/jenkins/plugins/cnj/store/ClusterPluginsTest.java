@@ -76,4 +76,15 @@ class ClusterPluginsTest {
         assertTrue(ClusterPlugins.lockExpired(0, tenMinutes + 1, false), "holder gone");
         assertFalse(ClusterPlugins.lockExpired(0, tenMinutes * 6, true), "holder still quieting down for a long build");
     }
+
+    @Test
+    void statusInWords() {
+        assertEquals("Up to date (the image's plugins)", ClusterPlugins.describe(ClusterPlugins.status(0, false, false), 0));
+        assertEquals("Up to date", ClusterPlugins.describe(ClusterPlugins.status(3, false, false), 3));
+        assertEquals("Applying 2 changes", ClusterPlugins.describe(ClusterPlugins.status(1, false, false), 3));
+        assertEquals("Applying 1 change", ClusterPlugins.describe(ClusterPlugins.status(2, false, false), 3));
+        assertEquals("Restart pending (one controller at a time)", ClusterPlugins.describe(ClusterPlugins.status(3, true, false), 3));
+        assertEquals("Needs attention: still differs after restarting for it", ClusterPlugins.describe(ClusterPlugins.status(3, true, true), 3));
+        assertEquals("Unknown (an older version)", ClusterPlugins.describe(null, 3));
+    }
 }

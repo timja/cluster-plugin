@@ -100,6 +100,65 @@ public final class ClusterView extends ManagementLink {
         return result;
     }
 
+    /** Plugins installed, upgraded, uninstalled or disabled at runtime and applied to every controller (Target 13). */
+    @Exported
+    public List<PluginChange> getPluginChanges() throws IOException {
+        List<PluginChange> result = new ArrayList<>();
+        if (store() != null) {
+            ClusterPlugins.read().plugins().forEach((name, e) -> result.add(new PluginChange(name, e)));
+        }
+        result.sort(java.util.Comparator.comparingLong(PluginChange::getAt).reversed()); // newest first
+        return result;
+    }
+
+    @ExportedBean(defaultVisibility = 2)
+    public static final class PluginChange {
+        private final String name;
+        private final ClusterPlugins.Entry e;
+
+        PluginChange(String name, ClusterPlugins.Entry e) {
+            this.name = name;
+            this.e = e;
+        }
+
+        @Exported
+        public String getName() {
+            return name;
+        }
+
+        @Exported
+        public String getState() {
+            return e.state().name();
+        }
+
+        public String getStateText() {
+            return switch (e.state()) {
+                case installed -> e.version() == null ? "Enabled" : "Installed";
+                case uninstalled -> "Uninstalled";
+                case disabled -> "Disabled";
+            };
+        }
+
+        @Exported
+        public String getVersion() {
+            return e.version();
+        }
+
+        @Exported
+        public String getBy() {
+            return e.by();
+        }
+
+        @Exported
+        public long getAt() {
+            return e.at();
+        }
+
+        public String getAgo() {
+            return hudson.Util.getTimeSpanString(Math.max(0, System.currentTimeMillis() - e.at()));
+        }
+    }
+
     static final long GONE_SHOWN_MILLIS = java.util.concurrent.TimeUnit.HOURS.toMillis(1);
 
     /** @param members newest first */
@@ -202,10 +261,21 @@ public final class ClusterView extends ManagementLink {
             return m.protocol();
         }
 
-        /** The generation of the cluster's plugin set this controller has applied (Target 13). */
+        /** What this controller has applied of the cluster's plugin set (Target 13), as published: generation and flags. */
         @Exported
         public String getPlugins() {
             return m.plugins();
+        }
+
+        /** {@link #getPlugins} for people: up to date, applying, restart pending. */
+        public String getPluginsSummary() {
+            long current = 0;
+            try {
+                current = ClusterPlugins.read().generation();
+            } catch (IOException | RuntimeException e) {
+                // shown as published
+            }
+            return m.alive() ? ClusterPlugins.describe(m.plugins(), current) : "";
         }
     }
 

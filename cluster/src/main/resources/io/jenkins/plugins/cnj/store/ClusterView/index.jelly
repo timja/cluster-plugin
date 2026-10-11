@@ -4,17 +4,36 @@
       <p>This page is served by <strong>${it.self}</strong>. Everything below comes from the persistence store. See also <a href="compatibility/">what this controller keeps that the cluster does not share</a>.</p>
       <h2>Controllers</h2>
       <table class="jenkins-table">
-        <thead><tr><th>Name</th><th>Internal URL</th><th>Started</th><th>Last heartbeat</th><th>Alive</th><th>Version</th><th>Cluster plugins</th></tr></thead>
+        <thead><tr><th>Name</th><th>Internal URL</th><th>Started</th><th>Last heartbeat</th><th>Alive</th><th>Version</th><th>Plugins</th></tr></thead>
         <tbody>
           <j:forEach var="m" items="${it.members}">
             <tr>
               <td>${m.name}</td><td>${m.url}</td>
               <td>${m.startedAgo} ago</td><td>${m.heartbeatAgo} ago</td>
-              <td>${m.alive ? 'yes' : 'no (down)'}</td><td>${m.version} (protocol ${m.protocol})</td><td>${m.plugins}</td>
+              <td>${m.alive ? 'yes' : 'no (down)'}</td><td>${m.version} (protocol ${m.protocol})</td><td>${m.pluginsSummary}</td>
             </tr>
           </j:forEach>
         </tbody>
       </table>
+      <h2>Plugin changes</h2>
+      <p>Plugins installed, upgraded, uninstalled or disabled on any controller apply to all of them, on top of the plugins in
+        the controller image. New plugins load straight away; other changes restart the controllers one at a time.</p>
+      <j:set var="changes" value="${it.pluginChanges}"/>
+      <j:choose>
+        <j:when test="${changes.isEmpty()}">
+          <p><em>None yet: every controller runs the image's plugins.</em></p>
+        </j:when>
+        <j:otherwise>
+          <table class="jenkins-table">
+            <thead><tr><th>Plugin</th><th>Change</th><th>Version</th><th>By</th><th>When</th></tr></thead>
+            <tbody>
+              <j:forEach var="c" items="${changes}">
+                <tr><td>${c.name}</td><td>${c.stateText}</td><td>${c.version}</td><td>${c.by}</td><td>${c.ago} ago</td></tr>
+              </j:forEach>
+            </tbody>
+          </table>
+        </j:otherwise>
+      </j:choose>
       <h2>Running builds</h2>
       <table class="jenkins-table">
         <thead><tr><th>Build</th><th>Running on</th></tr></thead>

@@ -178,6 +178,37 @@ public final class ClusterPlugins {
         }
     }
 
+    /** What a member publishes: {@code <generation applied>[ restart-pending][ restart-refused]}. */
+    static String status(long generation, boolean restartPending, boolean restartRefused) {
+        return generation + (restartPending ? " restart-pending" : "") + (restartRefused ? " restart-refused" : "");
+    }
+
+    /** What a member's published status means to a person, given the cluster's current generation. */
+    static String describe(@CheckForNull String status, long current) {
+        if (status == null || status.isBlank()) {
+            return "Unknown (an older version)";
+        }
+        String[] parts = status.trim().split(" ");
+        long applied;
+        try {
+            applied = Long.parseLong(parts[0]);
+        } catch (NumberFormatException e) {
+            return status;
+        }
+        boolean pending = status.contains("restart-pending");
+        boolean refused = status.contains("restart-refused");
+        if (refused) {
+            return "Needs attention: still differs after restarting for it";
+        }
+        if (pending) {
+            return "Restart pending (one controller at a time)";
+        }
+        if (applied < current) {
+            return "Applying " + (current - applied) + " change" + (current - applied == 1 ? "" : "s");
+        }
+        return current == 0 ? "Up to date (the image's plugins)" : "Up to date";
+    }
+
     /** Whether a restart lock taken at {@code since} by {@code origin} may be broken. */
     static boolean lockExpired(long since, long now, boolean holderAlive) {
         return now - since > LOCK_TIMEOUT_MILLIS && !holderAlive;
@@ -327,8 +358,7 @@ public final class ClusterPlugins {
             }
             appliedGeneration = overlay.generation();
             restartPending = restart;
-            PostgresPersistenceStore.pluginsStatus = "generation " + appliedGeneration + (restart ? ", restart pending" : "")
-                    + (restartRefused ? " (restart refused: already restarted for it)" : "");
+            PostgresPersistenceStore.pluginsStatus = status(appliedGeneration, restart, restartRefused);
             if (restart) {
                 requestRestart(store, overlay.generation());
             } else {
