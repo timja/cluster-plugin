@@ -9,7 +9,8 @@ module.exports = defineConfig({
   reporter: [['list'], ['json', { outputFile: 'test-results/results.json' }]],
   use: {
     baseURL: process.env.BASE_URL || 'http://localhost:8090',
-    httpCredentials: { username, password },
+    // preemptively: Jenkins answers an anonymous request for an admin page with a login page, not a 401 challenge
+    extraHTTPHeaders: { Authorization: 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64') },
     headless: true,
     trace: 'retain-on-failure',
   },
