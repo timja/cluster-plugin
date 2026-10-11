@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -296,6 +297,44 @@ class PostgresPersistenceStoreTest {
             }
             assertTrue(seen.stream().anyMatch(e -> e.key().equals("jobs/slow/config.xml")), "delivered late: " + seen);
         }
+    }
+
+    @Test
+    void childrenSkipOverEverythingBelowEachChild() throws Exception {
+        // names sorting just before and after '/' (".", "-", "0"), nested keys, a key equal to a child's name
+        for (String key : List.of("jobs/a/config.xml", "jobs/a/builds/1/build.xml", "jobs/a/builds/2/build.xml", "jobs/a.b/config.xml",
+                "jobs/a-c/config.xml", "jobs/a0/config.xml", "jobs/b/jobs/c/config.xml", "jobs/z", "jobsx/config.xml", "jobs.y/config.xml")) {
+            a.write(key, bytes("x"), PersistenceStore.ANY);
+        }
+        assertEquals(java.util.Set.of("a", "a.b", "a-c", "a0", "b", "z"), a.children("jobs"));
+        assertEquals(java.util.Set.of("1", "2"), a.children("jobs/a/builds"));
+        assertEquals(java.util.Set.of(), a.children("nothing"));
+        for (int i = 0; i < 500; i++) {
+            a.write("jobs/many/builds/" + i + "/build.xml", bytes("x"), PersistenceStore.ANY);
+        }
+        assertEquals(500, a.children("jobs/many/builds").size());
+        assertTrue(a.children("jobs").contains("many"));
+    }
+
+    @Test
+    void deleteAllDeletesBelowAPrefixWithEvents() throws Exception {
+        for (int i = 0; i < 50; i++) {
+            a.write("jobs/gone/builds/" + i + "/build.xml", bytes("x"), PersistenceStore.ANY);
+        }
+        a.write("jobs/gone/config.xml", bytes("kept"), PersistenceStore.ANY);
+        a.write("jobs/gone2/builds/1/build.xml", bytes("kept"), PersistenceStore.ANY);
+        java.util.List<PersistenceStore.ChangeEvent> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        b.subscribe(seen::add);
+        Thread.sleep(1500); // let the listener establish its starting point
+        assertEquals(50, a.deleteAll("jobs/gone/builds"));
+        assertTrue(a.children("jobs/gone/builds").isEmpty());
+        assertNotNull(a.read("jobs/gone/config.xml"));
+        assertNotNull(a.read("jobs/gone2/builds/1/build.xml"), "a sibling with a longer name is not below the prefix");
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        while (seen.stream().filter(e -> e.kind() == PersistenceStore.ChangeEvent.Kind.DELETED).count() < 50 && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
+        assertEquals(50, seen.stream().filter(e -> e.kind() == PersistenceStore.ChangeEvent.Kind.DELETED).count(), "an event each");
     }
 
     @Test

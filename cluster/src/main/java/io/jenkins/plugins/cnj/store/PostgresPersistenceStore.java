@@ -258,10 +258,22 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         try {
             return withTransaction(c -> {
                 Set<String> names = new TreeSet<>();
-                try (PreparedStatement ps = c.prepareStatement(
-                        "select distinct split_part(substr(key, ?), '/', 1) from jenkins_store where key like ? escape '\\'")) {
+                // a skip scan over the key index (Target 15): one probe per child, however many keys are below it
+                // (listing jobs no longer reads every build record). Keys of one child are contiguous in byte order;
+                // the next child starts at or after <prefix><child>'0' ('0' sorts right after '/')
+                String upper = prefix.substring(0, prefix.length() - 1) + "0";
+                try (PreparedStatement ps = c.prepareStatement("with recursive s(seg) as ("
+                        + "(select split_part(substr(key, ?), '/', 1) from jenkins_store where key ~>=~ ? and key ~<~ ? order by key using ~<~ limit 1)"
+                        + " union all"
+                        + " select (select split_part(substr(j.key, ?), '/', 1) from jenkins_store j where j.key ~>=~ (? || s.seg || '0')"
+                        + " and j.key ~<~ ? order by j.key using ~<~ limit 1) from s where s.seg is not null)"
+                        + " select seg from s where seg is not null")) {
                     ps.setInt(1, prefix.length() + 1);
-                    ps.setString(2, likePrefix(prefix));
+                    ps.setString(2, prefix);
+                    ps.setString(3, upper);
+                    ps.setInt(4, prefix.length() + 1);
+                    ps.setString(5, prefix);
+                    ps.setString(6, upper);
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
                             names.add(rs.getString(1));
@@ -272,6 +284,32 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             });
         } catch (SQLException e) {
             throw new IOException("Failed to list " + parentKey, e);
+        }
+    }
+
+    /** Every key below a prefix in one statement, with a deletion event each (Target 15). */
+    @Override
+    public int deleteAll(@NonNull String prefix) throws IOException {
+        String lower = prefix + "/";
+        String upper = prefix + "0";
+        try {
+            return withTransaction(c -> {
+                int n;
+                try (PreparedStatement ps = c.prepareStatement("with d as (delete from jenkins_store where key ~>=~ ? and key ~<~ ? returning key)"
+                        + " insert into jenkins_store_events (kind, key, old_key, version, origin)"
+                        + " select 'DELETED', key, null, nextval('jenkins_store_version'), ? from d")) {
+                    ps.setString(1, lower);
+                    ps.setString(2, upper);
+                    ps.setString(3, origin);
+                    n = ps.executeUpdate();
+                }
+                if (n > 0) {
+                    notifyChanged(c);
+                }
+                return n;
+            });
+        } catch (SQLException e) {
+            throw new IOException("Failed to delete " + prefix + "/…", e);
         }
     }
 
@@ -1492,8 +1530,42 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
             ps.setString(5, origin);
             ps.executeUpdate();
         }
-        try (Statement s = c.createStatement()) {
-            s.execute("notify " + CHANNEL);
+        notifyChanged(c);
+    }
+
+    /** When this JVM last notified listeners of a change, {@link System#nanoTime}. */
+    private volatile long lastNotify;
+    private final java.util.concurrent.atomic.AtomicBoolean trailingNotify = new java.util.concurrent.atomic.AtomicBoolean();
+    /** Notifications are at most this often per controller (Target 15); listeners also poll every second. */
+    static final long NOTIFY_MILLIS = Long.getLong(PostgresPersistenceStore.class.getName() + ".notifyMillis", 100);
+
+    /**
+     * Wakes the other controllers' listeners. Postgres serialises the commits of transactions that notify, so during
+     * write storms (branch indexing) a notification per write throttles every writer: within {@link #NOTIFY_MILLIS}
+     * of the last one, a single notification is sent once that time is up instead.
+     */
+    private void notifyChanged(Connection c) throws SQLException {
+        long now = System.nanoTime();
+        if (now - lastNotify > TimeUnit.MILLISECONDS.toNanos(NOTIFY_MILLIS)) {
+            lastNotify = now;
+            try (Statement s = c.createStatement()) {
+                s.execute("notify " + CHANNEL);
+            }
+        } else if (trailingNotify.compareAndSet(false, true)) {
+            jenkins.util.Timer.get().schedule(() -> {
+                trailingNotify.set(false);
+                lastNotify = System.nanoTime();
+                try {
+                    withControl(cc -> {
+                        try (Statement s = cc.createStatement()) {
+                            s.execute("notify " + CHANNEL);
+                        }
+                        return null;
+                    });
+                } catch (SQLException | RuntimeException e) {
+                    LOGGER.log(Level.FINE, "Could not notify listeners", e); // they poll every second anyway
+                }
+            }, NOTIFY_MILLIS, TimeUnit.MILLISECONDS);
         }
     }
 
