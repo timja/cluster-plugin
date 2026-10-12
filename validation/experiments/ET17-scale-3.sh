@@ -148,8 +148,21 @@ info "3 storm settled $((SECONDS - start)) s after the scans"
 branch_builds="select count(*) from (select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/') b, count(*) n,
   count(*) filter (where convert_from(content, 'UTF8') like '%<result>SUCCESS</result>%') ok
   from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' group by 1) t"
-built_once() { [[ $(psql_q "$branch_builds where ok >= 1") == $want ]]; }
-check "3 every branch built (a successful build published)" eventually 600 built_once
+# every branch has a published build: successful, or (those C ran, killed before their first save point) closed as
+# aborted, saying why (JEP-252: what nothing can resume is closed, not lost)
+branch_records() { psql_q "$branch_builds where n >= 1"; }
+built_once() { [[ $(branch_records) == $want ]]; }
+check "3 every branch built (a published record each: none lost)" eventually 600 built_once
+aborted=$(psql_q "select count(*) from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' and convert_from(content, 'UTF8') like '%<result>ABORTED</result>%'")
+info "3 successful: $(psql_q "$branch_builds where ok >= 1"); closed as aborted (were running on C when it was killed): $aborted"
+closed_by_c() { # up to 5 of the aborted builds: their console says C was gone
+  local k
+  for k in $(psql_q "select substring(key from '^jobs/(mb[0-9]+)/branches/([^/]+)/builds/([0-9]+)/') || '|' || substring(key from '^jobs/mb[0-9]+/branches/([^/]+)/') || '|' || substring(key from '/builds/([0-9]+)/') from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' and convert_from(content, 'UTF8') like '%<result>ABORTED</result>%' limit 5"); do
+    IFS='|' read -r mb br n <<<"$k"
+    curl -gsf -u "$AUTH" "http://localhost:$A/job/$mb/job/$br/$n/consoleText" | grep -q 'running on jenkins-c, which is gone' || return 1
+  done
+}
+check "3 ... each aborted one closed because C was gone (5 consoles)" closed_by_c
 info "3 branches with more than one build: $(psql_q "$branch_builds where n > 1")"
 check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
 c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
