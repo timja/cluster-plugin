@@ -78,6 +78,9 @@ info "2 console -f exit $rc, $(grep -c '^tick\|tick [0-9]' "$OUT/console-f.txt")
 check "2 console -f on B follows A's build to the end" bash -c "grep -q 'tick 15' '$OUT/console-f.txt' && grep -q 'Finished: SUCCESS' '$OUT/console-f.txt' && [[ $rc == 0 ]]"
 
 log "scenario 2b: the same over the CLI's WebSocket transport"
+# the WebSocket CLI checks the request's origin against the Jenkins URL, as on one controller: set it on A, shared with B
+groovy $A 'jenkins.model.JenkinsLocationConfiguration.get().setUrl("http://localhost:'$B'/")' >/dev/null
+eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $B 'println jenkins.model.JenkinsLocationConfiguration.get().getUrl()' | tr -d '\r\n ') == http://localhost:$B/ ]]"
 post $A "/job/tick/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/tick/2 "tick 2"
 rc=0; run_for 120 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/" -auth "$AUTH" -webSocket console tick 2 -f > "$OUT/console-f-ws.txt" 2>&1 || rc=$?
