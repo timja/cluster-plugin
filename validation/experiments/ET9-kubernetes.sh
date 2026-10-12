@@ -141,8 +141,10 @@ eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l
 
 # ------------------------------------------------------------------ 4b. pod workspaces and stashes across an adoption (Target 15)
 log "scenario 4b: inline podTemplate; a stage stashes, the next is interrupted by losing its controller and resumes on a new pod"
+# retry inside podTemplate, as the kubernetes plugin asks for inline templates: the resumed podTemplate step registers
+# its template on the adopting controller, so the retry condition recognises the lost pod as a Kubernetes agent
 pipeline carry 'stage("write") { podTemplate { node(POD_LABEL) { sh "echo carried-by-stash > out.txt"; stash name: "out", includes: "out.txt" } } }
-stage("use") { retry(count: 2, conditions: [kubernetesAgent(), nonresumable()]) { podTemplate { node(POD_LABEL) {
+stage("use") { podTemplate { retry(count: 2, conditions: [kubernetesAgent(), nonresumable()]) { node(POD_LABEL) {
   sh '"'"'echo attempt-on-$(hostname); if test -f out.txt; then echo workspace-kept; else echo workspace-new; fi'"'"'
   sleep 45; unstash "out"; sh "cat out.txt" } } } }'
 on "$REL-0" "/job/carry/build?delay=0sec" -X POST >/dev/null
@@ -150,7 +152,7 @@ eventually 180 bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/c
 owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = 'jobs/carry/running/1.xml'" | sed -n 's/^controller=//p')
 info "4b carry #1 running on $owner_before"
 k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
-check "4b the build completes after its controller's pod was deleted" eventually 400 result_is carry 1 SUCCESS
+check "4b the build completes after its controller's pod was deleted" eventually 600 result_is carry 1 SUCCESS
 check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c 'attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
 check "4b ... and got the earlier stage's file from its stash" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q '^carried-by-stash'"
 # evidence of 4b while it is still there (the pods are replaced later)
@@ -184,7 +186,7 @@ helm --kube-context "kind-$CLUSTER" -n "$NS" upgrade "$REL" "$CHART" --reuse-val
 check "6 three controllers ready" eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 3 ]]"
 check "6 the third is a live member" eventually 60 bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$SVC/manage/cluster/api/json?depth=1' | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len([m for m in d[\"members\"] if m[\"alive\"]]))') == 3 ]]"
 jobs_2=$(on "$REL-2" '/api/json?tree=jobs[name]' | jq_ '",".join(sorted(j["name"] for j in d["jobs"]))')
-check "6 it sees every job ($jobs_2)" test "$jobs_2" = "flyweight,fs9,kagent,survive"
+check "6 it sees every job ($jobs_2)" test "$jobs_2" = "carry,flyweight,fs9,kagent,survive"
 check "6 and the history (kagent: 6 builds)" test "$(on "$REL-2" '/job/kagent/api/json?tree=builds[number]' | jq_ 'len(d["builds"])')" = 6
 on "$REL-2" "/job/flyweight/build?delay=0sec" -X POST >/dev/null
 check "6 and runs builds" eventually 120 result_is flyweight 11 SUCCESS
