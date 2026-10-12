@@ -109,7 +109,7 @@ start=$SECONDS
 curl -gsf -u "$AUTH" -X POST "http://localhost:$A/job/h$HJOBS/doDelete" -o /dev/null
 info "2 deleting a job with $PER builds took $((SECONDS - start)) s"
 check "2 ... and the others drop it within 60 s" eventually 60 bash -c "! curl -gsf -u '$AUTH' http://localhost:$B/job/h$HJOBS/api/json -o /dev/null && ! curl -gsf -u '$AUTH' http://localhost:$C/job/h$HJOBS/api/json -o /dev/null"
-check "2 ... with its records" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like 'jobs/h$HJOBS/%'\") == 0 ]]"
+check "2 ... with its records (its build numbers are kept, so a recreated job never reuses one)" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like 'jobs/h$HJOBS/%' and key <> 'jobs/h$HJOBS/nextBuildNumber'\") == 0 ]]"
 
 # ------------------------------------------------------------------ 3. a branch-indexing storm
 log "scenario 3: $PROJECTS multibranch projects of $BRANCHES branches, scanned from all three controllers at once"
@@ -123,7 +123,9 @@ done
 groovy $A "
 for (int i = 1; i <= $PROJECTS; i++) {
   def p = Jenkins.get().createProject(org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject, 'mb' + i)
-  p.getSourcesList().add(new jenkins.branch.BranchSource(new jenkins.plugins.git.GitSCMSource('file:///repo/r' + i)))
+  def src = new jenkins.plugins.git.GitSCMSource('file:///repo/r' + i)
+  src.setTraits([new jenkins.plugins.git.traits.BranchDiscoveryTrait()]) // a source made in code discovers nothing without it
+  p.getSourcesList().add(new jenkins.branch.BranchSource(src))
   p.save()
 }" >/dev/null
 sleep 10

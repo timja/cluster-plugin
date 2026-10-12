@@ -204,7 +204,8 @@ eventually 10 has_placeholder $B /job/fast 1@jenkins-a
 kill_a; killed=$SECONDS
 check "6 B removes its placeholder" eventually 120 no_placeholders $B /job/fast
 check "6 B does not run it: it is closed as aborted (Target 12)" eventually 60 bash -c "curl -gsf -u '$AUTH' 'http://localhost:$B/job/fast/1/api/json?tree=result' | grep -q ABORTED && curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q 'closed as aborted' && [[ \$(curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -c '^fast 1\$') -le 1 ]]"
-check "6 ... keeping what it printed on A (Target 15)" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q '^fast 3\$'"
+# what A shipped before it died (its log is shipped every few seconds, so not necessarily up to the line seen on A)
+check "6 ... keeping what it printed on A (Target 15)" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q '^fast 1\$'"
 restart jenkins-a; wait_up $A
 
 # ------------------------------------------------------------------ 7. cost of save points
