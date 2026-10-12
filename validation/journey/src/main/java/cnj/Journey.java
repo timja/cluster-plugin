@@ -175,8 +175,19 @@ public final class Journey {
             } catch (FailingHttpStatusCodeException e) {
                 check(false, "configure form saved (" + e.getStatusCode() + ")");
             }
-            String desc = wc.getPage(base + "job/" + job + "/api/json?tree=description").getWebResponse().getContentAsString();
-            check(desc.contains("saved by the browser journey"), "the saved description is there");
+            // read back through the load balancer: the other controller has it once it applied the change (milliseconds
+            // to a second or two), so look for up to 10 s, and say which controllers answered
+            boolean there = false;
+            java.util.List<String> readers = new java.util.ArrayList<>();
+            for (int i = 0; i < 20 && !there; i++) {
+                org.htmlunit.Page p = wc.getPage(base + "job/" + job + "/api/json?tree=description");
+                readers.add(p.getWebResponse().getResponseHeaderValue("X-CNJ-Controller"));
+                there = p.getWebResponse().getContentAsString().contains("saved by the browser journey");
+                if (!there) {
+                    Thread.sleep(500);
+                }
+            }
+            check(there, "the saved description is there (" + readers.size() + " read(s), from " + readers + ")");
 
             // 4. progressive rendering (build time trend), as its JavaScript drives it (HtmlUnit has no fetch()):
             // the proxy script, then start() and news() until done, all on the controller holding the renderer
