@@ -13,3 +13,4 @@ azure-artifact-manager
 windows-azure-storage
 instance-identity
 coverage
+avatar

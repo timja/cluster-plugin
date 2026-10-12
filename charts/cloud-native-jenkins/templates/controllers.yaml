@@ -34,6 +34,7 @@ spec:
                 -Dio.jenkins.plugins.casc.core.JenkinsConfigurator.keepUndeclaredNodes=true
                 -Dio.jenkins.plugins.cnj.store.PostgresPersistenceStore.poolSize={{ .Values.store.poolSize }}
                 -Dio.jenkins.plugins.cnj.store.PostgresPersistenceStore.sessionLocks={{ .Values.store.sessionLocks }}
+                -Djenkins.persistence.ItemFiles.enabled={{ .Values.store.sharePluginFiles }}
                 {{- if not .Values.updateSites.fetch }} -Dhudson.model.UpdateCenter.never=true -Dhudson.model.DownloadService.never=true{{ end }}
                 -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true {{ .Values.javaOpts }}
           readinessProbe:

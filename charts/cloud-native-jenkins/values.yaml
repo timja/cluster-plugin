@@ -54,6 +54,9 @@ store:
   # Session-lock liveness (a dead controller's builds are adopted ~6 s after its death): needs a direct connection to
   # Postgres; turn off behind a pooler in transaction mode (PgBouncer), which does not keep sessions.
   sessionLocks: true
+  # Share the files plugins write with their own file APIs in item and user directories (e.g. the avatar plugin's
+  # image), every minute (Target 15). Off by default: it scans every item and user directory.
+  sharePluginFiles: false
 postgres:
   inChart: true
   image: postgres:16
