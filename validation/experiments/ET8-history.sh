@@ -138,24 +138,26 @@ check "3b B shows the same coverage (line coverage 50%)" eventually 30 same_cove
 # the page's tree is fetched by its script through a bound proxy (getCoverageTree): call it as the browser does
 coverage_tree() { # port: the tree of the page's first tree chart, through that controller
   python3 - "http://localhost:$1/job/cov/1/coverage/" "$AUTH" <<'PY'
-import base64, json, re, sys, urllib.request
+import base64, http.cookiejar, json, re, sys, urllib.request
 page, auth = sys.argv[1], sys.argv[2]
-hdr = {"Authorization": "Basic " + base64.b64encode(auth.encode()).decode()}
-html = urllib.request.urlopen(urllib.request.Request(page, headers=hdr)).read().decode()
 root = re.match(r"https?://[^/]+", page).group(0)
-m = re.search(r"makeStaplerProxy\('([^']+)','([^']*)'", html)
-if not m:  # modern binding: a script whose source makes the proxy
-    srcs = [u.replace("&amp;", "&") for u in re.findall(r'<script[^>]+src="([^"]*\$stapler/bound/script/[^"]*)"', html)]
-    srcs.sort(key=lambda u: "var=proxy" not in u)  # the view model's script makes `proxy`
-    if srcs:
-        js = urllib.request.urlopen(urllib.request.Request(root + srcs[0], headers=hdr)).read().decode()
-        m = re.search(r"makeStaplerProxy\('([^']+)','([^']*)'", js)
+# as a browser: one signed-in cookie for the page and its script's calls (the crumb is bound to it). The token signs
+# in once; later requests carry only the cookie (with the token on each, the harness re-issues the cookie every time)
+open_ = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())).open
+open_(urllib.request.Request(root + "/whoAmI/", headers={"Authorization": "Basic " + base64.b64encode(auth.encode()).decode()}))
+html = open_(page).read().decode()
+srcs = [u.replace("&amp;", "&") for u in re.findall(r'<script[^>]+src="([^"]*\$stapler/bound/script/[^"]*)"', html)]
+srcs.sort(key=lambda u: "var=proxy" not in u)  # the view model's script makes `proxy`
+js = open_(root + srcs[0]).read().decode() if srcs else html
+m = re.search(r"makeStaplerProxy\('([^']+)'", js)
+crumb = re.search(r'data-crumb-value="([^"]*)"', html)
 tree = re.search(r'id="([^"]+)"[^>]*class="[^"]*tree-chart|class="[^"]*tree-chart[^"]*"[^>]*id="([^"]+)"', html)
 if not m or not tree:
     sys.exit("no proxy or tree chart on the page")
+c = crumb.group(1) if crumb else ""
 req = urllib.request.Request(root + m.group(1) + "/getCoverageTree", data=json.dumps([tree.group(1) or tree.group(2)]).encode(),
-    headers=dict(hdr, **{"Content-Type": "application/x-stapler-method-invocation;charset=UTF-8", "Crumb": m.group(2)}))
-print(urllib.request.urlopen(req).read().decode())
+    headers={"Content-Type": "application/x-stapler-method-invocation;charset=UTF-8", "Crumb": c, "Jenkins-Crumb": c})
+print(open_(req).read().decode())
 PY
 }
 coverage_tree $B > "$OUT/coverage-tree-b.json" 2>>"$OUT/check.log" || true
