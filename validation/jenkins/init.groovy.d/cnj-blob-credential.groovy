@@ -4,6 +4,7 @@
 // which would delete credentials added at runtime.
 import com.cloudbees.plugins.credentials.CredentialsScope
 import com.cloudbees.plugins.credentials.SystemCredentialsProvider
+import jenkins.model.Jenkins
 
 def env = System.getenv()
 def account = env['CNJ_BLOB_ACCOUNT_NAME']
