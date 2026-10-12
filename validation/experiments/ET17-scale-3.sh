@@ -115,7 +115,8 @@ check "2 ... with its records (its build numbers are kept, so a recreated job ne
 
 # ------------------------------------------------------------------ 3. a branch-indexing storm
 log "scenario 3: $PROJECTS multibranch projects of $BRANCHES branches, scanned from all three controllers at once"
-rm -rf "$ET1/repo"; mkdir -p "$ET1/repo"
+# emptied, not replaced: the running controllers have this directory bind-mounted (a new one would not be seen)
+mkdir -p "$ET1/repo"; find "$ET1/repo" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 for i in $(seq 1 $PROJECTS); do
   d="$ET1/repo/r$i"; git init -q -b main "$d"
   printf "pipeline { agent none; stages { stage('hello') { steps { echo 'built r$i' } } } }\n" > "$d/Jenkinsfile"
