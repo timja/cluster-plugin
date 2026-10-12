@@ -143,9 +143,15 @@ branches_on() { groovy "$1" 'println Jenkins.get().allItems(org.jenkinsci.plugin
 all_branches() { [[ $(branches_on $A) == $want && $(branches_on $B) == $want ]]; }
 check "3 every branch job ($want) on A and B" eventually 600 all_branches
 info "3 storm settled $((SECONDS - start)) s after the scans"
-built_once() { [[ $(psql_q "select count(*) from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/1/build.xml\$'") == $want ]]; }
-check "3 every branch built (#1 published)" eventually 600 built_once
-check "3 ... exactly once: no branch has a #2" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/2/build.xml\\\$'\") == 0 ]]"
+# per branch, its published records; a number C took just before it was killed may never become a build (as after a
+# crash on one controller), and the next scan builds the branch then: count builds, not #1
+branch_builds="select count(*) from (select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/') b, count(*) n,
+  count(*) filter (where convert_from(content, 'UTF8') like '%<result>SUCCESS</result>%') ok
+  from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' group by 1) t"
+built_once() { [[ $(psql_q "$branch_builds where ok >= 1") == $want ]]; }
+check "3 every branch built (a successful build published)" eventually 600 built_once
+info "3 branches with more than one build: $(psql_q "$branch_builds where n > 1")"
+check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
 c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
 info "3 conflicts and merges (A;B;C) before: $c0 after (A;B): $c1"
 info "3 heap: A $(heap et1-jenkins-a-1), B $(heap et1-jenkins-b-1)"
