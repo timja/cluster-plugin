@@ -7,6 +7,8 @@
 #
 # Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
+# three controllers in one Docker VM (8 GB, shared with whatever else runs): bounded heaps (it uses about 200 MB)
+export CNJ_JAVA_OPTS="${CNJ_JAVA_OPTS:-} -Xmx768m"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=8081 B=8082 C=8083 OUT="$RAW_DIR/ET17" ET1="$VALIDATION_DIR/.et1"
 HJOBS=${HJOBS:-10} PER=${PER:-20000} SNAPSHOTS=${SNAPSHOTS:-100} PROJECTS=${PROJECTS:-30} BRANCHES=${BRANCHES:-10}
