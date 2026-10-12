@@ -153,6 +153,10 @@ k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4b the build completes after its controller's pod was deleted" eventually 400 result_is carry 1 SUCCESS
 check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c 'attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
 check "4b ... and got the earlier stage's file from its stash" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q '^carried-by-stash'"
+# evidence of 4b while it is still there (the pods are replaced later)
+curl -gs -u "$AUTH" "http://localhost:$SVC/job/carry/1/consoleText" > "$OUT/4b-carry-console.txt" 2>/dev/null || true
+for pod in $(k get pods -l app.kubernetes.io/name=$REL-controller -o name 2>/dev/null); do k logs "$pod" > "$OUT/4b-${pod#pod/}.log" 2>&1 || true; done
+psql_q "select key, convert_from(content, 'UTF8') from jenkins_store where key like 'jobs/carry/%' and key not like '%/builds/%'" > "$OUT/4b-carry-keys.txt" 2>&1 || true
 eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 2 ]]"
 counters_zero() { [[ "$(psql_q "select coalesce(sum(count), 0) from jenkins_counters")" == 0 ]]; }
 check "4b the cluster's agent counters are back to 0 once the pods are gone" eventually 300 counters_zero
