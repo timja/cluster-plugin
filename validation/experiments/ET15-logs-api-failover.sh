@@ -135,7 +135,8 @@ check "3 ... in order" eventually 60 console_whole_on $B /job/before/job/inner/1
 log "scenario 4: failover time (SIGKILL three times, a clean stop, and a pause shorter than the timeout)"
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 adopted_ms() { # job: when B logged adopting it, by its log's clock (the host's), or empty
-  docker logs et1-jenkins-b-1 2>&1 | grep -m1 "Adopting $1 #1" | grep -o '20[0-9-]* [0-9:.]*+0000' | head -1 \
+  local l; l=$(docker logs et1-jenkins-b-1 2>&1) # whole, first: an early grep exit fails docker logs, and pipefail with it
+  grep -m1 "Adopting $1 #1" <<<"$l" | grep -o '20[0-9-]* [0-9:.]*+0000' | head -1 \
     | python3 -c "import datetime,sys; l=sys.stdin.read().strip(); print(int(datetime.datetime.strptime(l, '%Y-%m-%d %H:%M:%S.%f%z').timestamp()*1000) if l else '')"
 }
 adopted() { [[ -n "$(adopted_ms "$1")" ]]; }

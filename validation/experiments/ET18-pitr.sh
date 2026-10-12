@@ -110,7 +110,8 @@ FILES=(-f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et18.ya
 et1 up -d --no-deps postgres >/dev/null 2>&1
 eventually 120 bash -c "cd $VALIDATION_DIR && docker compose ${FILES[*]} exec -T postgres psql -U jenkins -At -c 'select not pg_is_in_recovery()' 2>/dev/null | grep -q t"
 check "2 Postgres recovered to T and was promoted" bash -c "docker logs et1-postgres-1 2>&1 | grep -q 'recovery stopping at restore point \"T\"'"
-if ! docker logs et1-postgres-1 2>&1 | grep -q 'recovery stopping at restore point "T"'; then
+pglog=$(docker logs et1-postgres-1 2>&1) # whole, first (pipefail with an early grep exit)
+if ! grep -q 'recovery stopping at restore point "T"' <<<"$pglog"; then
   et1 logs postgres > "$OUT/postgres.log" 2>&1; r ""; r "Failures: $FAILED (stopped: no recovery to T)"; exit 1
 fi
 fresh_controllers
