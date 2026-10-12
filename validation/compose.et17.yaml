@@ -1,13 +1,5 @@
-# ET17 (scale): an overlay on compose.et1.yaml adding a third controller, and pg_stat_statements for the top queries.
+# ET17 (scale): an overlay on compose.et1.yaml with pg_stat_statements for the top queries. The third controller,
+# jenkins-c, is in compose.et1.yaml (profile "et17"): an overlay cannot drop the port jenkins-a's settings would bring.
 services:
   postgres:
     command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "max_connections=200"]
-  jenkins-c:
-    extends:
-      file: compose.et1.yaml
-      service: jenkins-a
-    hostname: jenkins-c
-    environment:
-      CNJ_NAME: jenkins-c
-      CNJ_INTERNAL_URL: http://jenkins-c:8080/
-    ports: ["8083:8080"]

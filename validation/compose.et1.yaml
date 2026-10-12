@@ -77,6 +77,17 @@ services:
       CNJ_INTERNAL_URL: http://jenkins-b:8080/
     ports: ["8082:8080"]
 
+  # ET17 (profile "et17"): a third controller, started only when named
+  jenkins-c:
+    <<: *jenkins
+    profiles: ["et17"]
+    hostname: jenkins-c
+    environment:
+      <<: *env
+      CNJ_NAME: jenkins-c
+      CNJ_INTERNAL_URL: http://jenkins-c:8080/
+    ports: ["8083:8080"]
+
   # Target 4 (profile "agents"): an inbound WebSocket agent behind a failover URL
   lb:
     image: nginx:1.27

@@ -10,7 +10,9 @@ source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=8081 B=8082 C=8083 OUT="$RAW_DIR/ET17" ET1="$VALIDATION_DIR/.et1"
 HJOBS=${HJOBS:-10} PER=${PER:-20000} SNAPSHOTS=${SNAPSHOTS:-100} PROJECTS=${PROJECTS:-30} BRANCHES=${BRANCHES:-10}
-et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et17.yaml" "$@"; }
+et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et17.yaml" --profile et17 "$@"; }
+# the third controller must not outlive this experiment (the others do not know its profile)
+trap 'et1 rm -sf jenkins-c >/dev/null 2>&1 || true' EXIT
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
 r() { echo "$*" | tee -a "$OUT/results.md" >&2; }
