@@ -163,7 +163,10 @@ closed_by_c() { # up to 5 of the aborted builds: their console says C was gone
   done
 }
 check "3 ... each aborted one closed because C was gone (5 consoles)" closed_by_c
+info "3 records by result: $(psql_q "select coalesce(substring(convert_from(content, 'UTF8') from '<result>([A-Z_]+)</result>'), 'none') || '=' || count(*) from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' group by 1 order by 1" | tr '\n' ' ')"
 info "3 branches with more than one build: $(psql_q "$branch_builds where n > 1")"
+twice=$(psql_q "select b from (select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/') b, count(*) filter (where convert_from(content, 'UTF8') like '%<result>SUCCESS</result>%') ok from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' group by 1) t where ok > 1")
+[[ -n $twice ]] && info "3 built successfully more than once: $(echo $twice)"
 check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
 c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
 info "3 conflicts and merges (A;B;C) before: $c0 after (A;B): $c1"
