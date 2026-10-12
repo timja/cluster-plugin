@@ -11,3 +11,14 @@ jenkins:
   authorizationStrategy: loggedInUsersCanDoAnything
   # Target 6: crumbs valid on every controller (forms rendered by one may be submitted to another)
   crumbIssuer: cluster
+# Target 15: artifacts and stashes go to blob storage as they are made (azure-artifact-manager), so an adopted build finds
+# them there
+unclassified:
+  artifactManager:
+    artifactManagerFactories:
+      - azure:
+          config:
+            container: jenkins
+            prefix: "artifacts/"
+            storageCredentialId: cnj-blob
+            disableExternalUrl: true

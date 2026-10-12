@@ -70,6 +70,17 @@ persistence:
   enabled: true
   size: 2Gi
   storageClass: ""
+# Artifacts and stashes in blob storage (azure-artifact-manager): what builds archive or stash goes to the container as
+# it is made, under the prefix, so a build adopted by another controller (or a fresh one) finds it there.
+artifactManager:
+  enabled: true
+  prefix: "artifacts/"
+  # Its storage credential (id cnj-blob) is made at startup if absent, from CNJ_BLOB_ACCOUNT_NAME, CNJ_BLOB_ACCOUNT_KEY
+  # and CNJ_BLOB_ENDPOINT (in the store Secret; set by the chart for in-chart Azurite). Not declared in JCasC: JCasC
+  # replaces the system credentials it declares, on every controller that starts, and so cluster-wide.
+  # When not in-chart: the storage account (its key as CNJ_BLOB_ACCOUNT_KEY in store.existingSecret)
+  accountName: ""
+  blobEndpoint: ""       # e.g. https://myaccount.blob.core.windows.net/
 blob:
   inChart: true
   image: mcr.microsoft.com/azure-storage/azurite:3.34.0

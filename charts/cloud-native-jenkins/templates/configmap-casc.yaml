@@ -5,6 +5,18 @@ metadata:
 data:
   base.yaml: |
 {{ .Values.casc | indent 4 }}
+{{- if .Values.artifactManager.enabled }}
+  artifacts.yaml: |
+    unclassified:
+      artifactManager:
+        artifactManagerFactories:
+          - azure:
+              config:
+                container: {{ .Values.blob.container | quote }}
+                prefix: {{ .Values.artifactManager.prefix | quote }}
+                storageCredentialId: cnj-blob
+                disableExternalUrl: true
+{{- end }}
 {{- if .Values.kubernetesCloud.enabled }}
   cloud.yaml: |
     jenkins:

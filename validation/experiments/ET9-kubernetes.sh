@@ -155,6 +155,9 @@ k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4b the build completes after its controller's pod was deleted" eventually 600 result_is carry 1 SUCCESS
 check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c 'attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
 check "4b ... and got the earlier stage's file from its stash" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q '^carried-by-stash'"
+stash_keys=$(g_on "$REL-1" 'println jenkins.persistence.PersistenceStores.getBlobStore().list("artifacts/carry/1/stashes").join(" ")' | tr -d '\r')
+info "4b the stash in blob storage: ${stash_keys:-none}"
+check "4b ... which the artifact manager had put in blob storage" test -n "$stash_keys"
 # evidence of 4b while it is still there (the pods are replaced later)
 curl -gs -u "$AUTH" "http://localhost:$SVC/job/carry/1/consoleText" > "$OUT/4b-carry-console.txt" 2>/dev/null || true
 for pod in $(k get pods -l app.kubernetes.io/name=$REL-controller -o name 2>/dev/null); do k logs "$pod" > "$OUT/4b-${pod#pod/}.log" 2>&1 || true; done
