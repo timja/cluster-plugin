@@ -53,6 +53,8 @@ PY
 console_whole_on() { json "$1" "$2/consoleText" > "$OUT/console-$3.txt" 2>/dev/null && lines_in_order "$OUT/console-$3.txt" "$4" && grep -q '^done' "$OUT/console-$3.txt"; }
 kill_a() { docker kill -s KILL et1-jenkins-a-1 >/dev/null; }
 restart_a() { et1 rm -sf jenkins-a >/dev/null 2>&1; et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; }
+# controller logs are kept however the script ends (an early exit kept nothing to diagnose)
+trap 'et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1' EXIT
 CHATTY='for (int i = 1; i <= COUNT; i++) { echo "line ${i}"; sleep time: 200, unit: "MILLISECONDS" }; echo "done"'
 
 [[ -f "$ET1/war/jenkins.war" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
