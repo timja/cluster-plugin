@@ -135,7 +135,31 @@ same_coverage() {
     <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("projectStatistics"))' "$OUT/coverage-b.json")
 }
 check "3b B shows the same coverage (line coverage 50%)" eventually 30 same_coverage
-check "3b ... and its coverage page, with the class tree" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/cov/1/coverage/ | grep -q 'Calc'"
+# the page's tree is fetched by its script through a bound proxy (getCoverageTree): call it as the browser does
+coverage_tree() { # port: the tree of the page's first tree chart, through that controller
+  python3 - "http://localhost:$1/job/cov/1/coverage/" "$AUTH" <<'PY'
+import base64, json, re, sys, urllib.request
+page, auth = sys.argv[1], sys.argv[2]
+hdr = {"Authorization": "Basic " + base64.b64encode(auth.encode()).decode()}
+html = urllib.request.urlopen(urllib.request.Request(page, headers=hdr)).read().decode()
+root = re.match(r"https?://[^/]+", page).group(0)
+m = re.search(r"makeStaplerProxy\('([^']+)','([^']*)'", html)
+if not m:  # modern binding: a script whose source makes the proxy
+    srcs = [u.replace("&amp;", "&") for u in re.findall(r'<script[^>]+src="([^"]*\$stapler/bound/script/[^"]*)"', html)]
+    srcs.sort(key=lambda u: "var=proxy" not in u)  # the view model's script makes `proxy`
+    if srcs:
+        js = urllib.request.urlopen(urllib.request.Request(root + srcs[0], headers=hdr)).read().decode()
+        m = re.search(r"makeStaplerProxy\('([^']+)','([^']*)'", js)
+tree = re.search(r'id="([^"]+)"[^>]*class="[^"]*tree-chart|class="[^"]*tree-chart[^"]*"[^>]*id="([^"]+)"', html)
+if not m or not tree:
+    sys.exit("no proxy or tree chart on the page")
+req = urllib.request.Request(root + m.group(1) + "/getCoverageTree", data=json.dumps([tree.group(1) or tree.group(2)]).encode(),
+    headers=dict(hdr, **{"Content-Type": "application/x-stapler-method-invocation;charset=UTF-8", "Crumb": m.group(2)}))
+print(urllib.request.urlopen(req).read().decode())
+PY
+}
+coverage_tree $B > "$OUT/coverage-tree-b.json" 2>>"$OUT/check.log" || true
+check "3b ... and its coverage page's class tree (fetched as the page's script does)" grep -q 'Calc' "$OUT/coverage-tree-b.json"
 
 # ------------------------------------------------------------------ 4. discarders
 log "scenario 4: numToKeep=3 with builds alternating between A and B"
