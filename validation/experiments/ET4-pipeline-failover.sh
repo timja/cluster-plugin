@@ -161,7 +161,7 @@ $KILL
 on_other() { agent_online_on $OTHER; }
 check "2b the other controller adopts it, and agent1 reconnects there" eventually 150 on_other
 check "2b the read stage finds the file the write stage left: the build completes" eventually 240 result_is $OTHER /job/ws/1 SUCCESS
-check "2b ... printing it after the resumption" bash -c "cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" http://localhost:$OTHER/job/ws/1/consoleText | python3 -c 'import sys; t=sys.stdin.read(); i=[t.find(s) for s in (\"Resuming\", \"cat carried.txt\", \"carried-from-stage-write\")]; sys.exit(0 if all(x >= 0 for x in i) and i == sorted(i) else 1)'"
+check "2b ... printing it after the resumption" bash -c "cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" http://localhost:$OTHER/job/ws/1/consoleText | python3 -c 'import sys; t=sys.stdin.read(); i=t.find(\"Resuming\"); i=t.find(\"+ cat carried.txt\", i) if i >= 0 else -1; i=t.find(\"\\ncarried-from-stage-write\", i) if i >= 0 else -1; sys.exit(0 if i >= 0 else 1)'"
 restart $OWNER_SVC; wait_up $OWNER
 
 # ------------------------------------------------------------------ 4. partition: owner paused, not killed
@@ -203,7 +203,8 @@ eventually 60 console_has $A /job/fast/1 "fast 3"
 eventually 10 has_placeholder $B /job/fast 1@jenkins-a
 kill_a; killed=$SECONDS
 check "6 B removes its placeholder" eventually 120 no_placeholders $B /job/fast
-check "6 B does not run it: it is closed as aborted (Target 12)" eventually 60 bash -c "curl -gsf -u '$AUTH' 'http://localhost:$B/job/fast/1/api/json?tree=result' | grep -q ABORTED && curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q 'closed as aborted' && ! curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q 'fast 1'"
+check "6 B does not run it: it is closed as aborted (Target 12)" eventually 60 bash -c "curl -gsf -u '$AUTH' 'http://localhost:$B/job/fast/1/api/json?tree=result' | grep -q ABORTED && curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q 'closed as aborted' && [[ \$(curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -c '^fast 1\$') -le 1 ]]"
+check "6 ... keeping what it printed on A (Target 15)" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/fast/1/consoleText | grep -q '^fast 3\$'"
 restart jenkins-a; wait_up $A
 
 # ------------------------------------------------------------------ 7. cost of save points

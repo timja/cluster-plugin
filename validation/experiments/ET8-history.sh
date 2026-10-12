@@ -80,14 +80,18 @@ check "1 B lists both usages" eventually 10 usages_are $B $md5 'fpa:1-1 fpb:1-1'
 check "1 nothing under fingerprints/ in either home" bash -c "for c in et1-jenkins-a-1 et1-jenkins-b-1; do [[ -z \$(docker exec \$c sh -c 'ls -A /var/jenkins_home/fingerprints 2>/dev/null') ]] || exit 1; done"
 
 # ------------------------------------------------------------------ 2. concurrent updates of one fingerprint
-log "scenario 2: 10 builds on A and 10 on B record the same file at once"
-for i in $(seq 1 10); do build_on $A fpa & build_on $B fpb & done; wait
+log "scenario 2: 5 rounds of a build on A and a build on B recording the same file at once"
+# one request per job per round: requests made while one is waiting fold into it (as on one controller)
+for i in $(seq 2 6); do
+  build_on $A fpa & build_on $B fpb & wait
+  eventually 120 bash -c "cd $VALIDATION_DIR && source lib.sh && [[ \$(curl -gsf -u \"\$AUTH\" http://localhost:$A/job/fpa/$i/api/json?tree=result) == *SUCCESS* && \$(curl -gsf -u \"\$AUTH\" http://localhost:$B/job/fpb/$i/api/json?tree=result) == *SUCCESS* ]]" || true
+done
 eventually 300 idle
 u=$(usages $A $md5)
 na=$(builds_of $A fpa | wc -w | tr -d ' '); nb=$(builds_of $A fpb | wc -w | tr -d ' ')
-info "2 usages after: $u; builds (requests without parameters fold in the queue): fpa [$(builds_of $A fpa)] fpb [$(builds_of $A fpb)]"
+info "2 usages after: $u; builds: fpa [$(builds_of $A fpa)] fpb [$(builds_of $A fpb)]"
 check "2 every build is a usage (fpa:1-$na fpb:1-$nb)" test "$u" = "fpa:1-$na fpb:1-$nb"
-check "2 builds ran on both controllers at once (more than one each)" test "$na" -gt 2 -a "$nb" -gt 2
+check "2 every round's builds ran (6 each)" test "$na" -eq 6 -a "$nb" -eq 6
 check "2 B agrees" test "$(usages $B $md5)" = "$u"
 
 # ------------------------------------------------------------------ 3. test results
