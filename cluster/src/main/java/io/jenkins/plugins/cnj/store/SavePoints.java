@@ -266,7 +266,7 @@ public final class SavePoints {
             // lost the build meanwhile: the save point just uploaded is not one; remove it
             blobs.delete(st.base + "/" + PROGRAM + "." + savePoint);
             blobs.delete(st.base + "/" + RECORD + "." + savePoint);
-            blobs.delete(st.base + "/" + NODES + "." + savePoint + "/");
+            blobs.delete(st.base + "/" + NODES + "." + savePoint);
             st.stopped = true;
             states.remove(st.base);
             deleteIfCompleted(blobs, st);

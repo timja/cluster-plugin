@@ -71,7 +71,10 @@ public class PipelineAdopter implements BuildAdopter {
             java.util.TreeMap<long[], java.util.List<String>> bySavePoint = new java.util.TreeMap<>(SavePoints::compareSavePoints);
             java.util.List<String> unversioned = new java.util.ArrayList<>();
             String nodes = base + "/" + SavePoints.NODES;
-            for (String key : blobs.list(nodes)) {
+            for (String key : blobs.list(base)) { // not list(nodes): that holds only workflow/..., not workflow.<epoch>.<seq>/...
+                if (!key.startsWith(nodes)) {
+                    continue;
+                }
                 String rest = key.substring(nodes.length());
                 if (rest.startsWith("/")) {
                     unversioned.add(key); // saved before nodes were kept per save point
