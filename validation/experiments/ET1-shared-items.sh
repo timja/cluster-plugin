@@ -179,6 +179,9 @@ r "| ℹ️ | scenario 4b: $writes writes in the event log; the store holds the 
 
 # ------------------------------------------------------------------ 6. write amplification (before 5, while A and B are settled)
 log "scenario 6: re-index with no changes"
+# once first: resolving a permalink nothing asked for before caches it (Target 15: in the store, as a single controller
+# writes its permalinks file); what must not happen is writes on every re-index
+post $A /job/mb/build >/dev/null; wait_idle $A; sleep 3
 before=$(store_versions)
 post $A /job/mb/build >/dev/null; wait_idle $A; sleep 3
 after=$(store_versions)
