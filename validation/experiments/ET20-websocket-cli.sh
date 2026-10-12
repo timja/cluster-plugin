@@ -77,6 +77,13 @@ rc=0; run_for 120 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/"
 info "2 console -f exit $rc, $(grep -c '^tick\|tick [0-9]' "$OUT/console-f.txt") tick lines"
 check "2 console -f on B follows A's build to the end" bash -c "grep -q 'tick 15' '$OUT/console-f.txt' && grep -q 'Finished: SUCCESS' '$OUT/console-f.txt' && [[ $rc == 0 ]]"
 
+log "scenario 2b: the same over the CLI's WebSocket transport"
+post $A "/job/tick/build?delay=0sec" >/dev/null
+eventually 60 console_has $A /job/tick/2 "tick 2"
+rc=0; run_for 120 java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$B/" -auth "$AUTH" -webSocket console tick 2 -f > "$OUT/console-f-ws.txt" 2>&1 || rc=$?
+info "2b console -f (-webSocket) exit $rc, $(grep -c 'tick [0-9]' "$OUT/console-f-ws.txt") tick lines"
+check "2b console -f -webSocket on B follows A's build to the end" bash -c "grep -q 'tick 15' '$OUT/console-f-ws.txt' && grep -q 'Finished: SUCCESS' '$OUT/console-f-ws.txt' && [[ $rc == 0 ]]"
+
 # ------------------------------------------------------------------ 3. build -s -v on B of a job only A can run
 log "scenario 3: CLI build -s -v on B, the job runs on A (agent ala)"
 groovy $A 'def n = new hudson.slaves.DumbSlave("ala", "/home/jenkins/agent", new hudson.slaves.JNLPLauncher()); n.setLabelString("ala"); n.setNumExecutors(1); Jenkins.get().addNode(n)' >/dev/null
