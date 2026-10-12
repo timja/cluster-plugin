@@ -69,6 +69,15 @@ public class PipelineAdopter implements BuildAdopter {
             for (String key : blobs.list(nodes)) {
                 download(blobs, key, staging.resolve(SavePoints.NODES).resolve(key.substring(nodes.length() + 1)));
             }
+            // the build's other files (stashes and so on), never outside its directory
+            String files = base + "/" + SavePoints.FILES;
+            for (String key : blobs.list(files)) {
+                Path target = staging.resolve(key.substring(files.length() + 1)).normalize();
+                if (target.startsWith(staging) && !target.equals(staging)) {
+                    Files.createDirectories(target.getParent());
+                    download(blobs, key, target);
+                }
+            }
             BlobLogStorage.fetch(blobs, build, staging.toFile());
         } catch (IOException | RuntimeException e) {
             Util.deleteRecursive(staging.toFile());

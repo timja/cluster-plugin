@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -50,6 +51,13 @@ public final class SavePoints {
     static final String PROGRAM = "program.dat";
     static final String RECORD = "build.xml";
     static final String NODES = "workflow";
+    /**
+     * The build's other files (Target 15): what steps leave in the build directory while it runs, such as
+     * {@code stash}'s {@code stashes/*.tar.gz} or artifacts archived without an artifact manager; under
+     * {@code .../running/files/<path>}, uploaded only when changed, up to {@link #MAX_FILE} each.
+     */
+    static final String FILES = "files";
+    static final long MAX_FILE = Long.getLong(SavePoints.class.getName() + ".maxFileSize", 64L * 1024 * 1024);
     static final String SAVE_POINT = "savePoint";
 
     static final long SHIP_PERIOD_MILLIS = Long.getLong(SavePoints.class.getName() + ".shipPeriodMillis", 1_000);
@@ -61,6 +69,7 @@ public final class SavePoints {
         byte[] program;
         byte[] record;
         final Map<String, byte[]> nodes = new HashMap<>();
+        final Map<String, byte[]> files = new HashMap<>();
     }
 
     /** Replication state of one running build. */
@@ -69,6 +78,8 @@ public final class SavePoints {
         final String base;
         /** File name → last modified and length, to copy only changed nodes. */
         final Map<String, String> nodeStamps = new HashMap<>();
+        /** Path in the build directory → last modified and length, to copy only changed files. */
+        final Map<String, String> fileStamps = new HashMap<>();
 
         Pending pending;
         long seq;
@@ -133,8 +144,16 @@ public final class SavePoints {
                             }
                         }
                     }
+                    for (Map.Entry<Path, String> f : otherFiles(run.getRootDir().toPath()).entrySet()) {
+                        String rel = run.getRootDir().toPath().relativize(f.getKey()).toString().replace(File.separatorChar, '/');
+                        if (!f.getValue().equals(st.fileStamps.get(rel))) {
+                            p.files.put(rel, Files.readAllBytes(f.getKey()));
+                            st.fileStamps.put(rel, f.getValue());
+                        }
+                    }
                     if (st.pending != null) {
                         p.nodes.putAll(merge(st.pending.nodes, p.nodes));
+                        p.files.putAll(merge(st.pending.files, p.files));
                     }
                     st.pending = p;
                 }
@@ -144,6 +163,37 @@ public final class SavePoints {
             }
             schedule();
         }
+    }
+
+    /**
+     * The files of a running build's directory a save point carries besides {@code program.dat}, the record and the
+     * flow nodes: path → last modified and length. Not the log (shipped by its log storage), nor files over
+     * {@link #MAX_FILE}.
+     */
+    static Map<Path, String> otherFiles(Path root) throws IOException {
+        Map<Path, String> files = new HashMap<>();
+        if (!Files.isDirectory(root)) {
+            return files;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            for (Path f : (Iterable<Path>) walk::iterator) {
+                Path rel = root.relativize(f);
+                String first = rel.getNameCount() == 0 ? "" : rel.getName(0).toString();
+                String name = f.getFileName().toString();
+                if (!Files.isRegularFile(f) || first.equals(NODES) || rel.getNameCount() == 1
+                        && (name.equals(PROGRAM) || name.equals(RECORD) || name.equals("log") || name.equals("log-index"))
+                        || name.endsWith(".tmp")) {
+                    continue;
+                }
+                long size = Files.size(f);
+                if (size > MAX_FILE) {
+                    LOGGER.fine(() -> "Not carrying " + f + " (" + size + " bytes) in save points");
+                    continue;
+                }
+                files.put(f, Files.getLastModifiedTime(f).toMillis() + ":" + size);
+            }
+        }
+        return files;
     }
 
     private static Map<String, byte[]> merge(Map<String, byte[]> older, Map<String, byte[]> newer) {
@@ -203,6 +253,7 @@ public final class SavePoints {
                     st.pending = p;
                 } else {
                     st.pending.nodes.putAll(merge(p.nodes, st.pending.nodes));
+                    st.pending.files.putAll(merge(p.files, st.pending.files));
                 }
             }
             return;
@@ -225,6 +276,9 @@ public final class SavePoints {
             for (Map.Entry<String, byte[]> node : p.nodes.entrySet()) {
                 put(blobs, st.base + "/" + NODES + "/" + node.getKey(), node.getValue());
             }
+            for (Map.Entry<String, byte[]> file : p.files.entrySet()) {
+                put(blobs, st.base + "/" + FILES + "/" + file.getKey(), file.getValue());
+            }
             put(blobs, st.base + "/" + PROGRAM + "." + savePoint, p.program);
             put(blobs, st.base + "/" + RECORD + "." + savePoint, p.record);
         } catch (IOException e) {
@@ -233,6 +287,7 @@ public final class SavePoints {
                     st.pending = p;
                 } else {
                     st.pending.nodes.putAll(merge(p.nodes, st.pending.nodes));
+                    st.pending.files.putAll(merge(p.files, st.pending.files));
                 }
             }
             throw e;
