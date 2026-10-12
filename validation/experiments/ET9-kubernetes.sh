@@ -149,14 +149,15 @@ stage("use") { podTemplate { retry(count: 2, conditions: [kubernetesAgent(), non
   sleep 45; unstash "out"; sh "cat out.txt" } } } }'
 on "$REL-0" "/job/carry/build?delay=0sec" -X POST >/dev/null
 eventually 180 bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText 2>/dev/null | grep -q attempt-on" || true
+# while the build runs (stashes are deleted when it completes): the artifact manager put the stash in blob storage
+stash_keys=$(g_on "$REL-1" 'println jenkins.persistence.PersistenceStores.getBlobStore().list("artifacts/carry/1/stashes").join(" ")' | tr -d '\r')
 owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = 'jobs/carry/running/1.xml'" | sed -n 's/^controller=//p')
 info "4b carry #1 running on $owner_before"
 k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4b the build completes after its controller's pod was deleted" eventually 600 result_is carry 1 SUCCESS
 check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c 'attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
 check "4b ... and got the earlier stage's file from its stash" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q '^carried-by-stash'"
-stash_keys=$(g_on "$REL-1" 'println jenkins.persistence.PersistenceStores.getBlobStore().list("artifacts/carry/1/stashes").join(" ")' | tr -d '\r')
-info "4b the stash in blob storage: ${stash_keys:-none}"
+info "4b the stash in blob storage while the build ran: ${stash_keys:-none}"
 check "4b ... which the artifact manager had put in blob storage" test -n "$stash_keys"
 # evidence of 4b while it is still there (the pods are replaced later)
 curl -gs -u "$AUTH" "http://localhost:$SVC/job/carry/1/consoleText" > "$OUT/4b-carry-console.txt" 2>/dev/null || true

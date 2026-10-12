@@ -65,9 +65,30 @@ public class PipelineAdopter implements BuildAdopter {
                 Util.deleteRecursive(staging.toFile());
                 return null;
             }
+            // the flow nodes: those of every save point up to the committed one, in order (later ones overwrite), and
+            // none of a later save point an owner uploaded but did not commit
+            long[] committed = SavePoints.parseSavePoint(savePoint);
+            java.util.TreeMap<long[], java.util.List<String>> bySavePoint = new java.util.TreeMap<>(SavePoints::compareSavePoints);
+            java.util.List<String> unversioned = new java.util.ArrayList<>();
             String nodes = base + "/" + SavePoints.NODES;
             for (String key : blobs.list(nodes)) {
+                String rest = key.substring(nodes.length());
+                if (rest.startsWith("/")) {
+                    unversioned.add(key); // saved before nodes were kept per save point
+                } else if (rest.startsWith(".") && rest.indexOf('/') > 0) {
+                    long[] sp = SavePoints.parseSavePoint(rest.substring(1, rest.indexOf('/')));
+                    if (sp != null && committed != null && SavePoints.compareSavePoints(sp, committed) <= 0) {
+                        bySavePoint.computeIfAbsent(sp, k -> new java.util.ArrayList<>()).add(key);
+                    }
+                }
+            }
+            for (String key : unversioned) {
                 download(blobs, key, staging.resolve(SavePoints.NODES).resolve(key.substring(nodes.length() + 1)));
+            }
+            for (java.util.List<String> keys : bySavePoint.values()) {
+                for (String key : keys) {
+                    download(blobs, key, staging.resolve(SavePoints.NODES).resolve(key.substring(key.lastIndexOf('/') + 1)));
+                }
             }
             BlobLogStorage.fetch(blobs, build, staging.toFile());
         } catch (IOException | RuntimeException e) {

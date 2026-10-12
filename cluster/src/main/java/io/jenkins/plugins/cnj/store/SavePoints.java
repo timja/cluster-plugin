@@ -35,8 +35,11 @@ import org.jenkinsci.plugins.workflow.flow.FlowExecutionOwner;
  * (intermediate ones are coalesced), under keys unique to the owner's lease epoch and a sequence number:
  * <ul>
  * <li>{@code jobs/<item>/builds/<N>/running/program.dat.<epoch>.<seq>} and {@code .../build.xml.<epoch>.<seq>}
- * <li>{@code .../running/workflow/<id>.xml}, uploaded only when changed
+ * <li>{@code .../running/workflow.<epoch>.<seq>/<id>.xml}: the flow nodes changed since the previous save point
  * </ul>
+ * An adopter applies the nodes of every save point up to the committed one, in order, and none of later ones: an owner
+ * dying after uploading a save point's nodes but before committing it leaves nodes newer than the program it would
+ * resume (Target 15: the resumed program then allocated a node id the staged nodes had used for another step).
  * It is then committed by recording {@code savePoint=<epoch>.<seq>} in the build's placeholder
  * ({@link RunningBuilds#update}), a compare-and-set which fails once another controller has taken the build over;
  * this controller then stops the build ({@link RunningBuilds#lost}).
@@ -146,6 +149,23 @@ public final class SavePoints {
         }
     }
 
+    /**
+     * Orders save point ids ({@code <epoch>.<seq>}) numerically; null if not one.
+     */
+    @CheckForNull
+    static long[] parseSavePoint(String id) {
+        int dot = id.indexOf('.');
+        try {
+            return dot <= 0 ? null : new long[] {Long.parseLong(id.substring(0, dot)), Long.parseLong(id.substring(dot + 1))};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    static int compareSavePoints(long[] a, long[] b) {
+        return a[0] != b[0] ? Long.compare(a[0], b[0]) : Long.compare(a[1], b[1]);
+    }
+
     private static Map<String, byte[]> merge(Map<String, byte[]> older, Map<String, byte[]> newer) {
         Map<String, byte[]> all = new HashMap<>(older);
         all.putAll(newer);
@@ -223,7 +243,7 @@ public final class SavePoints {
         }
         try {
             for (Map.Entry<String, byte[]> node : p.nodes.entrySet()) {
-                put(blobs, st.base + "/" + NODES + "/" + node.getKey(), node.getValue());
+                put(blobs, st.base + "/" + NODES + "." + savePoint + "/" + node.getKey(), node.getValue());
             }
             put(blobs, st.base + "/" + PROGRAM + "." + savePoint, p.program);
             put(blobs, st.base + "/" + RECORD + "." + savePoint, p.record);
@@ -246,6 +266,7 @@ public final class SavePoints {
             // lost the build meanwhile: the save point just uploaded is not one; remove it
             blobs.delete(st.base + "/" + PROGRAM + "." + savePoint);
             blobs.delete(st.base + "/" + RECORD + "." + savePoint);
+            blobs.delete(st.base + "/" + NODES + "." + savePoint + "/");
             st.stopped = true;
             states.remove(st.base);
             deleteIfCompleted(blobs, st);
