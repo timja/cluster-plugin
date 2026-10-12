@@ -41,6 +41,20 @@ public final class SharedQueueMaintenance {
                 if (n > 0) {
                     LOGGER.info(() -> "Put " + n + " queue item(s) claimed by gone controllers back into the queue");
                 }
+                // started by a controller that died before the build's placeholder was written: the build never began
+                for (PostgresPersistenceStore.StartedItem item : store.startedByGone()) {
+                    hudson.model.Job<?, ?> job = jenkins.model.Jenkins.get().getItemByFullName(item.task(), hudson.model.Job.class);
+                    String jobKey = job == null ? null : PersistenceStores.keyFor(job.getRootDir());
+                    if (jobKey == null) {
+                        continue;
+                    }
+                    int number = item.buildNumber();
+                    if (store.read(jobKey + "/running/" + number + ".xml") == null
+                            && store.read(jobKey + "/builds/" + number + "/build.xml") == null) {
+                        LOGGER.info(() -> item.task() + " #" + number + " was started by a gone controller and never began; queued again");
+                        store.requeueStarted(item.id());
+                    }
+                }
             }
         }
 

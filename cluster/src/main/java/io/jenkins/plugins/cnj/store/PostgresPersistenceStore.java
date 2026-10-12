@@ -871,6 +871,63 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         });
     }
 
+    /** A queue item a controller recorded as started. */
+    record StartedItem(long id, String task, int buildNumber) {}
+
+    /**
+     * Queue items recorded as started, in the last hour, by controllers which are gone (Target 15): a controller can die
+     * between recording a start and writing the build's placeholder, which leaves the item with neither.
+     */
+    List<StartedItem> startedByGone() throws IOException {
+        if (!canJudgeLiveness()) {
+            return List.of();
+        }
+        return run("list queue items started by gone controllers", c -> {
+            List<StartedItem> items = new ArrayList<>();
+            try (PreparedStatement ps = c.prepareStatement("select id, task, build_number from jenkins_queue"
+                    + " where state = 'STARTED' and build_number > 0 and updated_at > now() - interval '1 hour'"
+                    + " and claimed_by not in (select origin from jenkins_members"
+                    + " where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ")")) {
+                ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        items.add(new StartedItem(rs.getLong(1), rs.getString(2), rs.getInt(3)));
+                    }
+                }
+            }
+            return items;
+        });
+    }
+
+    /**
+     * Puts a started item back into the queue (its build never began here or anywhere), or cancels it if an equal
+     * item is waiting already (which stands for it).
+     */
+    void requeueStarted(long id) throws IOException {
+        run("requeue a queue item", c -> {
+            int n;
+            try (PreparedStatement ps = c.prepareStatement("update jenkins_queue set state = 'WAITING', claimed_by = null,"
+                    + " build_number = 0, updated_at = now() where id = ? and state = 'STARTED'")) {
+                ps.setLong(1, id);
+                n = ps.executeUpdate();
+            } catch (SQLException e) {
+                if (!"23505".equals(e.getSQLState())) {
+                    throw e;
+                }
+                c.rollback();
+                try (PreparedStatement ps = c.prepareStatement(
+                        "update jenkins_queue set state = 'CANCELLED', updated_at = now() where id = ? and state = 'STARTED'")) {
+                    ps.setLong(1, id);
+                    n = ps.executeUpdate();
+                }
+            }
+            if (n > 0) {
+                event(c, ChangeEvent.Kind.WRITTEN, QUEUE_PREFIX + id, null, nextVersion(c));
+            }
+            return null;
+        });
+    }
+
     /**
      * Starts recording this controller as a live member every {@link #HEARTBEAT_MILLIS}.
      */

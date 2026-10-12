@@ -488,6 +488,19 @@ class PostgresPersistenceStoreTest {
                     seenByB.stream()
                             .anyMatch(r -> r.id() == id4 && b.getOrigin().equals(r.claimedBy())),
                     "changes reach the other controller");
+
+            // an item a gone controller recorded as started, with a number but nothing else (it died before the
+            // build's placeholder): listed, and queued again
+            long id5 = qa.nextId();
+            qa.publish(waiting(id5, "r", a.getOrigin()));
+            assertTrue(qa.claim(id5));
+            qa.started(id5, 9);
+            assertEquals(java.util.List.of(new PostgresPersistenceStore.StartedItem(id5, "r", 9)),
+                    b.startedByGone().stream().filter(i -> i.id() == id5).toList());
+            assertTrue(b.startedByGone().stream().noneMatch(i -> i.id() == id1), "started by a live controller");
+            b.requeueStarted(id5);
+            assertEquals(jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id5).state());
+            assertEquals(0, qb.get(id5).buildNumber());
         }
     }
 
