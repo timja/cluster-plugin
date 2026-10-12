@@ -67,6 +67,14 @@ psql_q "insert into jenkins_store (key, content, sha256, version, updated_by, si
   from jenkins_store s, generate_series(2, $PER) n where s.key ~ '^jobs/h[0-9]+/builds/1/build.xml\$'" >/dev/null
 psql_q "update jenkins_store set content = convert_to('$((PER + 1))', 'UTF8'), size = length('$((PER + 1))'), version = nextval('jenkins_store_version')
   where key ~ '^jobs/h[0-9]+/nextBuildNumber\$'" >/dev/null
+# their permalinks, as the controllers completing them would have stored them (Target 15: StoredPermalinks)
+psql_q "insert into jenkins_store (key, content, sha256, version, updated_by, size)
+  select k, c, sha256(c), nextval('jenkins_store_version'), 'synthetic', length(c) from (
+    select regexp_replace(key, '/nextBuildNumber\$', '/builds/permalinks') k,
+      convert_to('lastCompletedBuild $PER' || chr(10) || 'lastFailedBuild -1' || chr(10) || 'lastStableBuild $PER' || chr(10)
+        || 'lastSuccessfulBuild $PER' || chr(10) || 'lastUnstableBuild -1' || chr(10) || 'lastUnsuccessfulBuild -1' || chr(10), 'UTF8') c
+    from jenkins_store where key ~ '^jobs/h[0-9]+/nextBuildNumber\$') p
+  on conflict (key) do update set content = excluded.content, sha256 = excluded.sha256, version = excluded.version, size = excluded.size" >/dev/null
 info "1 build records inserted in $((SECONDS - start)) s: $(psql_q "select count(*) from jenkins_store where key like 'jobs/h%/builds/%'") records"
 # the newest builds' snapshots (what job pages show), copied in blob storage
 et1 start jenkins-a >/dev/null 2>&1; wait_up $A 600
