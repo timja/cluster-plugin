@@ -29,6 +29,8 @@ under() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }'; }
 json() { curl -gsf -m 60 -u "$AUTH" "http://localhost:$1$2"; }
 jq_() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 heap() { docker exec "$1" sh -c 'jcmd $(pgrep -f jenkins.war | head -1) GC.heap_info' 2>/dev/null | grep -o 'used [0-9]*K' | head -1; }
+# the Docker VM's swap: a full one starves a restarting controller (seen: C not up in 600 s while kind also ran)
+vmswap() { docker exec et1-postgres-1 awk '/^Swap(Total|Free)/ { v[$1] = $2 } END { printf "%d of %d MiB", (v["SwapTotal:"] - v["SwapFree:"]) / 1024, v["SwapTotal:"] / 1024 }' /proc/meminfo 2>/dev/null; }
 
 [[ -f "$ET1/war/jenkins.war" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
 
@@ -138,7 +140,7 @@ start=$SECONDS
 for i in $(seq 1 $PROJECTS); do for p in $A $B $C; do curl -gs -u "$AUTH" -X POST "http://localhost:$p/job/mb$i/build?delay=0" -o /dev/null & done; done; wait
 sleep "${KILL_AFTER:-20}" # later kills catch more builds in flight
 docker kill -s KILL et1-jenkins-c-1 >/dev/null
-info "3 C killed $((SECONDS - start)) s into the storm"
+info "3 C killed $((SECONDS - start)) s into the storm; VM swap used $(vmswap)"
 want=$((PROJECTS * BRANCHES))
 branches_on() { groovy "$1" 'println Jenkins.get().allItems(org.jenkinsci.plugins.workflow.job.WorkflowJob).findAll { it.parent instanceof org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject }.size()' | tr -d '\r\n '; }
 all_branches() { [[ $(branches_on $A) == $want && $(branches_on $B) == $want ]]; }
@@ -196,7 +198,7 @@ twice=$(psql_q "select b from (select substring(key from '^(jobs/mb[0-9]+/branch
 check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
 c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
 info "3 conflicts and merges (A;B;C) before: $c0 after (A;B): $c1"
-info "3 heap: A $(heap et1-jenkins-a-1), B $(heap et1-jenkins-b-1)"
+info "3 heap: A $(heap et1-jenkins-a-1), B $(heap et1-jenkins-b-1); VM swap used $(vmswap)"
 psql_q "select round(total_exec_time) || ' ms, ' || calls || ' calls: ' || left(regexp_replace(query, '\s+', ' ', 'g'), 120) from pg_stat_statements order by total_exec_time desc limit 8" > "$OUT/top-statements.txt" 2>&1 || true
 info "3 top statement: $(head -1 "$OUT/top-statements.txt")"
 et1 start jenkins-c >/dev/null 2>&1; wait_up $C 600
