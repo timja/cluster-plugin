@@ -49,7 +49,9 @@ public final class StoreFingerprintStorage extends FingerprintStorage {
      * What each fingerprint object in memory was last read or written as: the base of its next merge. Per object, not
      * per id: Jenkins may hold several objects for one fingerprint (its cache is weak), each with its own history.
      */
-    private final Map<Fingerprint, Base> bases = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    // static: not part of the saved configuration (a WeakHashMap cannot be saved), and kept when Configure System binds a
+    // new instance of this storage
+    private static final Map<Fingerprint, Base> bases = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     private record Base(long version, Map<String, String> usages) {}
 

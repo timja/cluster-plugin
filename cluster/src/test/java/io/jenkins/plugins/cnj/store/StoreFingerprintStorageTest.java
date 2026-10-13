@@ -16,6 +16,13 @@ class StoreFingerprintStorageTest {
     }
 
     @Test
+    void canBeSavedWithTheFingerprintConfiguration() {
+        // GlobalFingerprintConfiguration.xml holds the chosen storage; saving it failed on the in-memory merge bases
+        String xml = new hudson.util.XStream2().toXML(new StoreFingerprintStorage());
+        assertEquals("<io.jenkins.plugins.cnj.store.StoreFingerprintStorage/>", xml);
+    }
+
+    @Test
     void usagesAddedElsewhereAreKept() {
         // we read {a: 1}; we add a#2; meanwhile another controller added b#1
         assertEquals(
