@@ -10,7 +10,7 @@ source "$(dirname "$0")/../lib.sh"
 # three controllers in one Docker VM (8 GB, shared with whatever else runs): bounded heaps (it uses about 200 MB)
 export CNJ_JAVA_OPTS="${CNJ_JAVA_OPTS:-} -Xmx768m"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 C=8083 OUT="$RAW_DIR/ET17" ET1="$VALIDATION_DIR/.et1"
+A=8081 B=8082 C=8083 OUT="$RAW_DIR/ET17${KILL_AFTER:+-kill$KILL_AFTER}" ET1="$VALIDATION_DIR/.et1"
 HJOBS=${HJOBS:-10} PER=${PER:-20000} SNAPSHOTS=${SNAPSHOTS:-100} PROJECTS=${PROJECTS:-30} BRANCHES=${BRANCHES:-10}
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et17.yaml" --profile et17 "$@"; }
 # the third controller must not outlive this experiment (the others do not know its profile)
@@ -154,8 +154,8 @@ branch_records() { psql_q "$branch_builds where n >= 1"; }
 built_once() { [[ $(branch_records) == $want ]]; }
 check "3 every branch built (a published record each: none lost)" eventually 600 built_once
 lost_branches() { # branch jobs with no published build record, and what the store, the queue and the controllers say of each
-  psql_q "select b from (select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/config.xml\$') b from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/config.xml\$') j
-    where not exists (select 1 from jenkins_store s where s.key like j.b || '/builds/%/build.xml')"
+  psql_q "select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/config.xml\$') from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/config.xml\$'
+    except select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/') from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$'"
 }
 if ! built_once; then
   mkdir -p "$OUT"; f="$OUT/lost-branches.txt"; : > "$f"
@@ -166,6 +166,14 @@ if ! built_once; then
       echo "-- queue rows"; psql_q "select id || ' ' || state || ' origin=' || origin || ' claimed_by=' || coalesce(claimed_by, '-') || ' build=' || build_number || ' ' || updated_at from jenkins_queue where task like '%$m%$br%' order by id"
       echo "-- events"; psql_q "select seq || ' ' || kind || ' ' || key || ' ' || origin || ' ' || at from jenkins_store_events where key like '$b/%' order by seq"
       for c in a b c; do echo "-- jenkins-$c log"; docker logs et1-jenkins-$c-1 2>&1 | grep -F "$m » $br" | head -20 || true; done
+    } >> "$f"
+  done
+  for m in $(lost_branches | sed 's#^jobs/##; s#/.*##' | sort -u); do # the projects' scans, from each controller
+    { echo "== jobs/$m"
+      echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like 'jobs/$m/%' and key not like 'jobs/$m/branches/%/builds/%' order by key"
+      echo "-- queue rows"; psql_q "select id || ' ' || state || ' origin=' || origin || ' claimed_by=' || coalesce(claimed_by, '-') || ' build=' || coalesce(build_number::text, '-') || ' ' || task || ' ' || updated_at from jenkins_queue where task like '%$m%' order by id"
+      for p in $A $B; do echo "-- indexing log on $p"; curl -gsf -m 60 -u "$AUTH" "http://localhost:$p/job/$m/indexing/consoleText" || true; done
+      for c in a b c; do echo "-- jenkins-$c log"; docker logs et1-jenkins-$c-1 2>&1 | grep -F "$m" | head -40 || true; done
     } >> "$f"
   done
   info "3 lost branches: $(lost_branches | tr '\n' ' ') (details in $f)"

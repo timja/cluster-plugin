@@ -88,6 +88,17 @@ if [[ -d "$JSQL" ]]; then
   cp "$JSQL/target/junit-sql-storage.hpi" "$ET1/plugins/"
 fi
 
+# Target 15: branch-api whose indexing takes the revision of a branch's automatic build when none is recorded (an
+# indexing on a controller that died after scheduling the build) (skipped if the worktree is absent)
+BAPI=${BAPI:-/Users/timja/code/jenkins/branch-api-plugin-cnj}
+BAPI_REF=${BAPI_REF:-cnj/t15-first-build-revision}
+if [[ -d "$BAPI" ]]; then
+  echo "branch-api $BAPI_REF ($(git -C "$BAPI" rev-parse --short "$BAPI_REF"))"
+  git -C "$BAPI" checkout -q "$BAPI_REF"
+  (cd "$BAPI" && $MVN package)
+  cp "$BAPI/target/branch-api.hpi" "$ET1/plugins/"
+fi
+
 # Target 15: configuration-as-code with keepUndeclaredNodes (skipped if the worktree is absent)
 CASC=${CASC:-/Users/timja/code/jenkins/configuration-as-code-plugin-cnj}
 CASC_REF=${CASC_REF:-cnj/t15-keep-undeclared-nodes}
@@ -110,6 +121,7 @@ cp "$HERE/../impl/persistence-store-postgresql/target/persistence-store-postgres
   [[ -d "$CREDS" ]] && echo "credentials $CREDS_REF $(git -C "$CREDS" rev-parse "$CREDS_REF")"
   [[ -d "$PBS" ]] && echo "pipeline-build-step $PBS_REF $(git -C "$PBS" rev-parse "$PBS_REF")"
   [[ -d "$JSQL" ]] && echo "junit-sql-storage $JSQL_REF $(git -C "$JSQL" rev-parse "$JSQL_REF")"
+  [[ -d "$BAPI" ]] && echo "branch-api $BAPI_REF $(git -C "$BAPI" rev-parse "$BAPI_REF")"
   [[ -d "$CASC" ]] && echo "configuration-as-code $CASC_REF $(git -C "$CASC" rev-parse "$CASC_REF")"
   echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
