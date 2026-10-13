@@ -14,8 +14,9 @@ A=8081 B=8082 C=8083 OUT="$RAW_DIR/ET17${KILL_AFTER:+-kill$KILL_AFTER}" ET1="$VA
 HJOBS=${HJOBS:-10} PER=${PER:-20000} SNAPSHOTS=${SNAPSHOTS:-100} PROJECTS=${PROJECTS:-30} BRANCHES=${BRANCHES:-10}
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et17.yaml" --profile et17 "$@"; }
 # the third controller must not outlive this experiment (the others do not know its profile)
-trap 'et1 rm -sf jenkins-c >/dev/null 2>&1 || true' EXIT
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
+# the logs are kept however it ends (a controller that never comes back is gone once the script exits)
+trap 'for c in a b c; do et1 logs jenkins-$c > "$OUT/jenkins-$c.log" 2>&1; done; et1 rm -sf jenkins-c >/dev/null 2>&1 || true' EXIT
 : > "$OUT/results.md"
 r() { echo "$*" | tee -a "$OUT/results.md" >&2; }
 FAILED=0
@@ -201,7 +202,6 @@ info "3 top statement: $(head -1 "$OUT/top-statements.txt")"
 et1 start jenkins-c >/dev/null 2>&1; wait_up $C 600
 check "3 C, restarted, has every branch job" eventually 300 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $C 'println Jenkins.get().allItems(org.jenkinsci.plugins.workflow.job.WorkflowJob).findAll { it.parent instanceof org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject }.size()' | tr -d '\r\n ') == $want ]]"
 
-for c in a b c; do et1 logs jenkins-$c > "$OUT/jenkins-$c.log" 2>&1; done
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true
 r ""
 r "Failures: $FAILED"
