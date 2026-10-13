@@ -900,6 +900,22 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     /**
+     * Cancels the items recorded as started for an item, and for the items inside it, when it is deleted or renamed: the
+     * builds they stand for went with it, and an item later created under that name must not have them requeued.
+     */
+    void cancelStartedOf(String fullName) throws IOException {
+        run("cancel started queue items of " + fullName, c -> {
+            try (PreparedStatement ps = c.prepareStatement("update jenkins_queue set state = 'CANCELLED', updated_at = now()"
+                    + " where state = 'STARTED' and (task = ? or starts_with(task, ?))")) {
+                ps.setString(1, fullName);
+                ps.setString(2, fullName + "/");
+                ps.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    /**
      * Puts a started item back into the queue (its build never began here or anywhere), or cancels it if an equal
      * item is waiting already (which stands for it).
      */

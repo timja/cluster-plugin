@@ -501,6 +501,21 @@ class PostgresPersistenceStoreTest {
             b.requeueStarted(id5);
             assertEquals(jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id5).state());
             assertEquals(0, qb.get(id5).buildNumber());
+
+            // the started items of a deleted (or renamed) item, and of the items inside it, are forgotten: an item
+            // created later under that name must not have them queued again
+            long id6 = qa.nextId();
+            qa.publish(waiting(id6, "d/x", a.getOrigin()));
+            assertTrue(qa.claim(id6));
+            qa.started(id6, 1);
+            long id7 = qa.nextId();
+            qa.publish(waiting(id7, "dx", a.getOrigin()));
+            assertTrue(qa.claim(id7));
+            qa.started(id7, 1);
+            b.cancelStartedOf("d");
+            assertEquals(jenkins.persistence.ClusterQueue.State.CANCELLED, qb.get(id6).state());
+            assertEquals(jenkins.persistence.ClusterQueue.State.STARTED, qb.get(id7).state(), "not inside d");
+            assertTrue(b.startedByGone().stream().noneMatch(i -> i.id() == id6));
         }
     }
 

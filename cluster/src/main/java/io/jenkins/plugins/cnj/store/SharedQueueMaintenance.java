@@ -2,8 +2,10 @@ package io.jenkins.plugins.cnj.store;
 
 import hudson.Extension;
 import hudson.model.AsyncPeriodicWork;
+import hudson.model.Item;
 import hudson.model.PeriodicWork;
 import hudson.model.TaskListener;
+import hudson.model.listeners.ItemListener;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -61,6 +63,33 @@ public final class SharedQueueMaintenance {
         @Override
         protected Level getNormalLoggingLevel() {
             return Level.FINE;
+        }
+    }
+
+    /**
+     * Forgets the started items of a deleted or renamed item, which {@link Reclaim} would otherwise requeue on an item
+     * created later under the same name.
+     */
+    @Extension
+    public static final class Forget extends ItemListener {
+        @Override
+        public void onDeleted(Item item) {
+            cancel(item.getFullName());
+        }
+
+        @Override
+        public void onLocationChanged(Item item, String oldFullName, String newFullName) {
+            cancel(oldFullName);
+        }
+
+        private static void cancel(String fullName) {
+            if (PersistenceStores.get() instanceof PostgresPersistenceStore store && store.queue() != null) {
+                try {
+                    store.cancelStartedOf(fullName);
+                } catch (IOException e) {
+                    LOGGER.log(Level.WARNING, "Cannot forget the started queue items of " + fullName, e);
+                }
+            }
         }
     }
 
