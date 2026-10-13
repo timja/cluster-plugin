@@ -153,6 +153,23 @@ branch_builds="select count(*) from (select substring(key from '^(jobs/mb[0-9]+/
 branch_records() { psql_q "$branch_builds where n >= 1"; }
 built_once() { [[ $(branch_records) == $want ]]; }
 check "3 every branch built (a published record each: none lost)" eventually 600 built_once
+lost_branches() { # branch jobs with no published build record, and what the store, the queue and the controllers say of each
+  psql_q "select b from (select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/config.xml\$') b from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/config.xml\$') j
+    where not exists (select 1 from jenkins_store s where s.key like j.b || '/builds/%/build.xml')"
+}
+if ! built_once; then
+  mkdir -p "$OUT"; f="$OUT/lost-branches.txt"; : > "$f"
+  for b in $(lost_branches); do
+    m=${b#jobs/}; m=${m%%/*}; br=${b##*/}
+    { echo "== $b"
+      echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like '$b/%' order by key"
+      echo "-- queue rows"; psql_q "select id || ' ' || state || ' origin=' || origin || ' claimed_by=' || coalesce(claimed_by, '-') || ' build=' || build_number || ' ' || updated_at from jenkins_queue where task like '%$m%$br%' order by id"
+      echo "-- events"; psql_q "select seq || ' ' || kind || ' ' || key || ' ' || origin || ' ' || at from jenkins_store_events where key like '$b/%' order by seq"
+      for c in a b c; do echo "-- jenkins-$c log"; docker logs et1-jenkins-$c-1 2>&1 | grep -F "$m » $br" | head -20 || true; done
+    } >> "$f"
+  done
+  info "3 lost branches: $(lost_branches | tr '\n' ' ') (details in $f)"
+fi
 aborted=$(psql_q "select count(*) from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' and convert_from(content, 'UTF8') like '%<result>ABORTED</result>%'")
 info "3 successful: $(psql_q "$branch_builds where ok >= 1"); closed as aborted (were running on C when it was killed): $aborted"
 closed_by_c() { # up to 5 of the aborted builds: their console says C was gone
