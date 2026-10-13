@@ -25,6 +25,7 @@ import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
 import org.jenkinsci.Symbol;
+import org.kohsuke.stapler.DataBoundConstructor;
 
 /**
  * Fingerprints in the persistence store (Target 8), so that every controller sees every usage, whichever controller
@@ -51,6 +52,10 @@ public final class StoreFingerprintStorage extends FingerprintStorage {
     private final Map<Fingerprint, Base> bases = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     private record Base(long version, Map<String, String> usages) {}
+
+    /** For the Configure System form, which binds the chosen fingerprint storage, as for {@link FileFingerprintStorage}. */
+    @DataBoundConstructor
+    public StoreFingerprintStorage() {}
 
     /** Uses the store for fingerprints when one is active, unless a storage other than the file default was chosen. */
     @Initializer(after = InitMilestone.SYSTEM_CONFIG_ADAPTED)

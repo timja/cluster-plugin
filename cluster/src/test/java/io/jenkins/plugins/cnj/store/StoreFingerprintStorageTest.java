@@ -3,9 +3,17 @@ package io.jenkins.plugins.cnj.store;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.Map;
+import org.kohsuke.stapler.ClassDescriptor;
 import org.junit.jupiter.api.Test;
 
 class StoreFingerprintStorageTest {
+
+    @Test
+    void canBeBoundFromTheConfigureSystemForm() {
+        // saving Configure System binds the chosen fingerprint storage from the form; without a @DataBoundConstructor
+        // that failed with NoStaplerConstructorException
+        assertEquals(0, new ClassDescriptor(StoreFingerprintStorage.class).loadConstructorParamNames().length);
+    }
 
     @Test
     void usagesAddedElsewhereAreKept() {
