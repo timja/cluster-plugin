@@ -39,18 +39,18 @@ cli() { java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$1/" -auth "$A
 # ------------------------------------------------------------------ setup (as ET6, plus rr)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed"; mkdir -p "$ET1/seed"
-docker rm -f et1-seed >/dev/null 2>&1 || true
+docker rm -fv et1-seed >/dev/null 2>&1 || true
 docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
 wait_up 8089
 groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -f et1-seed >/dev/null
+docker rm -fv et1-seed >/dev/null
 et1 up -d postgres azurite >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
-docker rm -f et20-ala >/dev/null 2>&1 || true
+docker rm -fv et20-ala >/dev/null 2>&1 || true
 r "## ET20 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -105,15 +105,15 @@ check "3 build -s -v on B waits for the build A ran, with its log" bash -c "grep
 
 # ------------------------------------------------------------------ 4. a controller without the cluster's keys (Target 15)
 log "scenario 4: a controller started against the store without the cluster's seeded keys"
-docker rm -f et20-noseed >/dev/null 2>&1 || true
+docker rm -fv et20-noseed >/dev/null 2>&1 || true
 et1 run -d --no-deps --name et20-noseed -e CNJ_SEED_DIR= -e CNJ_NAME=noseed -e CNJ_INTERNAL_URL=http://et20-noseed:8080/ jenkins-a >/dev/null 2>&1 || true
 refuses() { local l; l=$(docker logs et20-noseed 2>&1); grep -q "does not have the key material of the cluster" <<<"$l"; }
 check "4 it refuses to start, saying why" eventually 180 refuses
 check "4 ... and never became a member" bash -c "! curl -gsf -u '$AUTH' http://localhost:$A/manage/cluster/api/json | grep -q '\"noseed\"'"
 docker logs et20-noseed > "$OUT/noseed.log" 2>&1 || true
-docker rm -f et20-noseed >/dev/null 2>&1 || true
+docker rm -fv et20-noseed >/dev/null 2>&1 || true
 
-docker rm -f et20-ala >/dev/null 2>&1 || true
+docker rm -fv et20-ala >/dev/null 2>&1 || true
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true
 r ""

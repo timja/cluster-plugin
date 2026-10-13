@@ -50,7 +50,7 @@ start_on_a() { post $A "/job/$1/build?delay=0sec" >/dev/null; eventually 30 owne
 # ------------------------------------------------------------------ setup (as ET4, plus rr and a git repo)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -f et1-seed >/dev/null 2>&1 || true
+docker rm -fv et1-seed >/dev/null 2>&1 || true
 docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
@@ -58,7 +58,7 @@ wait_up 8089
 groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 agent_secret 8089 agent1 > "$ET1/agent1.secret"
 docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -f et1-seed >/dev/null
+docker rm -fv et1-seed >/dev/null
 for repo in poll mb; do
   ( mkdir -p "$ET1/repo/$repo" && cd "$ET1/repo/$repo" && git init -q -b main && git config user.email et7@example.com && git config user.name et7
     echo 'echo "branch ${env.BRANCH_NAME}"' > Jenkinsfile && git add Jenkinsfile && git commit -qm init )

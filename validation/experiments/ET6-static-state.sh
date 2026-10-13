@@ -32,14 +32,14 @@ rm -rf "$ET1/seed" "$ET1/repo" "$ET1/casc-et6"; mkdir -p "$ET1/seed" "$ET1/repo"
 # the controllers' JCasC declares no nodes (its `jenkins.nodes` list is replace-all): base.yaml only
 cp "$VALIDATION_DIR/jenkins/casc-et1/base.yaml" "$ET1/casc-et6/"
 export CNJ_CASC_DIR="$ET1/casc-et6"
-docker rm -f et1-seed >/dev/null 2>&1 || true
+docker rm -fv et1-seed >/dev/null 2>&1 || true
 docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
 wait_up 8089
 groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -f et1-seed >/dev/null
+docker rm -fv et1-seed >/dev/null
 info "seeded keys: $(ls "$ET1/seed/secrets" | tr '\n' ' ')"
 et1 up -d postgres azurite >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
@@ -109,13 +109,13 @@ g $A 'Jenkins.get().addNode(new hudson.slaves.DumbSlave("n6", "/tmp/n6", new hud
 check "5 the node appears on B" eventually 10 g_is $B 'println Jenkins.get().getNode("n6") != null && Jenkins.get().getComputer("n6") != null' true
 secret_a=$(agent_secret $A n6); secret_b=$(agent_secret $B n6)
 check "5 its agent secret is the same on A and B" test -n "$secret_a" -a "$secret_a" = "$secret_b"
-docker rm -f et6-n6 >/dev/null 2>&1 || true
+docker rm -fv et6-n6 >/dev/null 2>&1 || true
 docker run -d --name et6-n6 --network et1_default jenkins/inbound-agent:latest-jdk21 -url http://jenkins-b:8080/ -secret "$secret_b" -name n6 -webSocket -workDir /home/jenkins/agent >/dev/null
 check "5 the agent connects through B" eventually 60 g_is $B 'println Jenkins.get().getComputer("n6")?.isOnline()' true
 g $A 'Jenkins.get().removeNode(Jenkins.get().getNode("n6"))' >/dev/null
 check "5 deleted on A, it is gone on B" eventually 10 g_is $B 'println Jenkins.get().getNode("n6") == null' true
 check "5 and B dropped its connection" eventually 30 bash -c "docker logs et6-n6 2>&1 | grep -qiE 'terminated|closed|disconnected|reconnect'"
-docker rm -f et6-n6 >/dev/null 2>&1 || true
+docker rm -fv et6-n6 >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------ 6. keys created at runtime
 log "scenario 6: a confidential key first used at runtime"

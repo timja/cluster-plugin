@@ -56,7 +56,7 @@ PY
 # ------------------------------------------------------------------ setup (as ET3, plus agent1)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -f et1-seed >/dev/null 2>&1 || true
+docker rm -fv et1-seed >/dev/null 2>&1 || true
 docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
@@ -65,7 +65,7 @@ groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkins
 # the agent's secret is an HMAC whose key is part of the seed, so it is valid on every controller
 agent_secret 8089 agent1 > "$ET1/agent1.secret"
 docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -f et1-seed >/dev/null
+docker rm -fv et1-seed >/dev/null
 [[ -s "$ET1/agent1.secret" ]] || { echo "no agent secret" >&2; exit 2; }
 
 et1 up -d postgres azurite >/dev/null 2>&1; wait_postgres
