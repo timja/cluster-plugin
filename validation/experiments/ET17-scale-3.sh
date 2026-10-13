@@ -135,7 +135,7 @@ sleep 10
 c0=$(for p in $A $B $C; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
 start=$SECONDS
 for i in $(seq 1 $PROJECTS); do for p in $A $B $C; do curl -gs -u "$AUTH" -X POST "http://localhost:$p/job/mb$i/build?delay=0" -o /dev/null & done; done; wait
-sleep 20
+sleep "${KILL_AFTER:-20}" # later kills catch more builds in flight
 docker kill -s KILL et1-jenkins-c-1 >/dev/null
 info "3 C killed $((SECONDS - start)) s into the storm"
 want=$((PROJECTS * BRANCHES))
