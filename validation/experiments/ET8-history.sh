@@ -194,7 +194,9 @@ import json
 a, b = (json.load(open(\"$OUT/cluster-%s.json\" % p)) for p in ($A, $B))
 strip = lambda d: {\"members\": sorted(m[\"name\"] for m in d[\"members\"]), \"runningBuilds\": d[\"runningBuilds\"], \"channels\": d[\"channels\"]}
 exit(0 if strip(a) == strip(b) else 1)'"
-check "4b dk #1, running on A while B discarded, completed: its record was published" eventually 90 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store_events where key = 'jobs/dk/builds/1/build.xml' and kind = 'WRITTEN'\") -ge 1 ]]"
+# A's own discarder deletes #1 as soon as it completes (the oldest of three), and a record deleted while being published
+# is not written; either way A, not an adopter, closes it and removes its placeholder
+check "4b dk #1, running on A while B discarded, completed on A: its record published, or its placeholder removed by A" eventually 90 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store_events where (key = 'jobs/dk/builds/1/build.xml' and kind = 'WRITTEN') or (key = 'jobs/dk/running/1.xml' and kind = 'DELETED' and origin in (select origin from jenkins_members where name = 'jenkins-a'))\") -ge 1 ]]"
 check "4b then, the oldest of three, it was discarded: both keep [2 3]" eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$A/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' && \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' ]]"
 sleep 5; info "4b dk builds after: A [$(builds_of $A dk)] B [$(builds_of $B dk)]"
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1  # before they are replaced
