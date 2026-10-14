@@ -135,7 +135,7 @@ services:
     # the secret is derived from the seeded key material, written by the experiment
     entrypoint: ["sh", "-c", "JENKINS_SECRET=$$(cat /et1/agent1.secret) exec /usr/local/bin/jenkins-agent"]
     volumes:
-      - ./.et1:/et1:ro
+      - ${ET1_DIR:-./.et1}:/et1:ro
 
   # Target 6: a load balancer which does not pin browsers (round robin), for browsers and API clients
   rr:
