@@ -138,3 +138,15 @@ claim_ns() {
 # The blob store of the run: Azurite (cluster-azure-blob) by default, Garage (cluster-s3) in the S3 variant
 # (experiments/with-s3.sh sets CLUSTER_S3_BUCKET)
 if [[ -n "${CLUSTER_S3_BUCKET:-}" ]]; then BLOB_SERVICE=garage BLOB_CLASS=S3BlobStore; else BLOB_SERVICE=azurite BLOB_CLASS=AzureBlobStore; fi
+
+# kind_load <cluster> <image>: loads a local image into a kind cluster. With Docker's containerd image store, an image
+# pulled for one platform of a multi-platform index fails kind's --all-platforms import ("content digest … not found"):
+# then it is loaded from an archive of this machine's platform only.
+kind_load() {
+  local cluster=$1 image=$2 tar rc
+  kind load docker-image --name "$cluster" "$image" >/dev/null 2>&1 && return 0
+  tar=$(mktemp "${TMPDIR:-/tmp}/kind-load.XXXXXX") || return 1
+  docker save --platform "linux/$(docker version -f '{{.Server.Arch}}')" -o "$tar" "$image" \
+    && kind load image-archive --name "$cluster" "$tar" >/dev/null
+  rc=$?; rm -f "$tar"; return $rc
+}

@@ -13,6 +13,9 @@
 cd "$(dirname "$0")/.." || exit 2
 SWEEP_OUT=${SWEEP_OUT:-$PWD/out/sweep}
 mkdir -p "$SWEEP_OUT"
+# temporary files under the repository: Docker Desktop (e.g. on Linux) shares only some host paths, not /tmp, with
+# containers, and experiments bind-mount files they make with mktemp
+export TMPDIR="$PWD/out/tmp"; mkdir -p "$TMPDIR"
 limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 run() { # name command...
   local name=$1; shift

@@ -20,6 +20,6 @@ if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
   exit 0
 fi
 for image in cnj/jenkins:k8s postgres:16 mcr.microsoft.com/azure-storage/azurite:3.34.0 jenkins/inbound-agent:latest-jdk21; do
-  kind load docker-image --name "$CLUSTER" "$image" >/dev/null || exit 5
+  kind_load "$CLUSTER" "$image" || exit 5
 done
 echo "cnj/jenkins:k8s built and loaded into kind cluster $CLUSTER"

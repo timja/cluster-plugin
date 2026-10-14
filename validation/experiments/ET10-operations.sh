@@ -38,7 +38,7 @@ docker build -q -t cnj/jenkins:k8s-next - <<'EOF' >/dev/null
 FROM cnj/jenkins:k8s
 LABEL io.jenkins.cnj.next=true
 EOF
-kind load docker-image --name "$CLUSTER" cnj/jenkins:k8s-next >/dev/null
+kind_load "$CLUSTER" cnj/jenkins:k8s-next
 r "## ET10 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
