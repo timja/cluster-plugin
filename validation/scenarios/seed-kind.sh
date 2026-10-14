@@ -56,14 +56,26 @@ pipeline hello-k8s 'pipeline {
 pipeline parallel-mixed 'pipeline {
   agent none
   stages {
-    stage("Prepare") { agent { label "mock" } steps { echo "preparing" } }
+    stage("Prepare") {
+      agent { label "mock" }
+      steps { echo "preparing" }
+    }
     stage("Build") {
       parallel {
-        stage("On a mock agent") { agent { label "mock" } steps { sh "echo mock side on \$(hostname); sleep 20" } }
-        stage("In a pod") { agent { label "k8s" } steps { sh "echo k8s side on \$(hostname); sleep 20" } }
+        stage("On a mock agent") {
+          agent { label "mock" }
+          steps { sh "echo mock side on \$(hostname); sleep 20" }
+        }
+        stage("In a pod") {
+          agent { label "k8s" }
+          steps { sh "echo k8s side on \$(hostname); sleep 20" }
+        }
       }
     }
-    stage("Report") { agent { label "mock" } steps { echo "both sides done" } }
+    stage("Report") {
+      agent { label "mock" }
+      steps { echo "both sides done" }
+    }
   }
 }' 'Both kinds of agents at once, in parallel stages.'
 
@@ -90,7 +102,10 @@ pipeline wait-for-input 'pipeline {
   stages {
     stage("Build") { steps { echo "built" } }
     stage("Approve") { steps { input message: "Carry on?", ok: "Yes" } }
-    stage("Deploy") { agent { label "mock" } steps { echo "deploying from ${env.NODE_NAME}" } }
+    stage("Deploy") {
+      agent { label "mock" }
+      steps { echo "deploying from ${env.NODE_NAME}" }
+    }
   }
 }' 'Waits for input: approve it from either controller.'
 
