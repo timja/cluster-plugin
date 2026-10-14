@@ -41,7 +41,7 @@ services:
     hostname: jenkins-a
     environment:
       <<: *jenkins-env
-      CNJ_NAME: jenkins-a
+      JENKINS_CLUSTER_NAME: jenkins-a
       CNJ_URL: http://localhost:8081/
     volumes:
       - ./jenkins/casc:/casc:ro
@@ -57,7 +57,7 @@ services:
     hostname: jenkins-b
     environment:
       <<: *jenkins-env
-      CNJ_NAME: jenkins-b
+      JENKINS_CLUSTER_NAME: jenkins-b
       CNJ_URL: http://localhost:8082/
     volumes:
       - ./jenkins/casc:/casc:ro

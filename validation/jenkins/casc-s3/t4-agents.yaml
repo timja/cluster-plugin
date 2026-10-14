@@ -1,0 +1,15 @@
+# Target 4: a permanent inbound agent, identical on every controller (it connects to one at a time,
+# through the failover URL of the `lb` service), and the durability running builds need to be adopted.
+jenkins:
+  nodes:
+    - permanent:
+        name: agent1
+        remoteFS: /home/jenkins/agent
+        numExecutors: 2
+        labelString: linux
+        launcher:
+          inbound:
+            webSocket: true
+unclassified:
+  globalDefaultFlowDurabilityLevel:
+    durabilityHint: MAX_SURVIVABILITY

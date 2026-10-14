@@ -43,7 +43,7 @@ spec:
   selector: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-postgres}
   ports: [{port: 5432, targetPort: 5432}]
 {{- end }}
-{{- if .Values.blob.inChart }}
+{{- if and (ne .Values.blob.type "s3") .Values.blob.inChart }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet

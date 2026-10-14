@@ -63,7 +63,7 @@ r "## ET8 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
 r "|---|---|"
-check "both controllers use the store for fingerprints" bash -c "for p in $A $B; do [[ \$(cd $VALIDATION_DIR && source lib.sh && groovy \$p 'println jenkins.fingerprints.FingerprintStorage.get().class.simpleName') == StoreFingerprintStorage* ]] || exit 1; done"
+check "both controllers use the store for fingerprints" bash -c "for p in $A $B; do [[ \$(cd $VALIDATION_DIR && source lib.sh && groovy \$p 'println jenkins.fingerprints.FingerprintStorage.get().class.simpleName') == ClusterFingerprintStorage* ]] || exit 1; done"
 check "agent1 is connected to A" eventually 60 agent_online_on $A
 
 # ------------------------------------------------------------------ 1. fingerprints from both controllers

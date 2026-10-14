@@ -7,7 +7,7 @@
 # Prerequisite: CORE_REF=cnj/t14-m1-resilience experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cnj.store.AzureBlobStore.maxSegmentBlocks=20 -Dio.jenkins.plugins.cnj.store.BlobLogStorage.coalesceMillis=500"
+export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.azure.AzureBlobStore.maxSegmentBlocks=20 -Dio.jenkins.plugins.cluster.BlobLogStorage.coalesceMillis=500"
 A=8081 B=8082 OUT="$RAW_DIR/ET15" ET1="$VALIDATION_DIR/.et1"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"

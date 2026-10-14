@@ -73,7 +73,7 @@ info "1 live members after the rollout: $members"
 
 # ------------------------------------------------------------------ 2. refusing to start next to an older protocol
 log "scenario 2: a controller requiring a newer peer protocol than the live peers speak"
-h upgrade "$REL" "$CHART" --reuse-values --set controllers=3 --set "javaOpts=-Dio.jenkins.plugins.cnj.store.minimumPeerProtocol=99" >/dev/null 2>&1
+h upgrade "$REL" "$CHART" --reuse-values --set controllers=3 --set "javaOpts=-Dio.jenkins.plugins.cluster.minimumPeerProtocol=99" >/dev/null 2>&1
 # only the new pod gets the property applied at start; the others restart too (javaOpts changed), so check the first that starts
 check "2 a controller requiring protocol 99 refuses to start, saying why" eventually 300 bash -c "for p in $REL-0 $REL-1 $REL-2; do kubectl --context kind-$CLUSTER -n $NS logs \$p -c jenkins 2>/dev/null | grep -q 'needs every peer to speak cluster protocol 99' && exit 0; done; exit 1"
 h upgrade "$REL" "$CHART" --reuse-values --set controllers=2 --set javaOpts= >/dev/null
@@ -151,8 +151,8 @@ spec:
       imagePullPolicy: Never
       envFrom: [{secretRef: {name: $REL-store}}]
       env:
-        - {name: CNJ_NAME, value: importer}
-        - {name: JAVA_OPTS, value: "-Djenkins.install.runSetupWizard=false -Dio.jenkins.plugins.cnj.store.importHome=true"}
+        - {name: JENKINS_CLUSTER_NAME, value: importer}
+        - {name: JAVA_OPTS, value: "-Djenkins.install.runSetupWizard=false -Dio.jenkins.plugins.cluster.importHome=true"}
         - {name: CASC_JENKINS_CONFIG, value: /casc/base.yaml}
       volumeMounts: [{name: home, mountPath: /var/jenkins_home}, {name: casc, mountPath: /casc}]
   volumes: [{name: home, persistentVolumeClaim: {claimName: old-home}}, {name: casc, configMap: {name: $REL-casc}}]
@@ -162,7 +162,7 @@ EOF
   sleep 5
 }
 importer
-k exec importer -c jenkins -- cat /var/jenkins_home/cnj-import-report.txt > "$OUT/import-report-1.txt" 2>/dev/null || true
+k exec importer -c jenkins -- cat /var/jenkins_home/cluster-import-report.txt > "$OUT/import-report-1.txt" 2>/dev/null || true
 info "3 the importer's quiet period: $(g_on importer 'println Jenkins.get().quietPeriod'); stored: $(k exec "$REL-postgres-0" -- psql -U jenkins -At -c "select substring(convert_from(content, 'UTF8') from '<quietPeriod>[0-9]+</quietPeriod>') from jenkins_store where key = 'config.xml'")"
 k exec "$REL-postgres-0" -- psql -U jenkins -At -c "select e.kind, e.version, e.origin, e.at from jenkins_store_events e where e.key = 'config.xml' order by seq" > "$OUT/config-events.txt" 2>&1 || true
 info "3 import: $(tail -1 "$OUT/import-report-1.txt")"
@@ -184,7 +184,7 @@ check "3 the old node and setting" bash -c "[[ \$(kubectl --context kind-$CLUSTE
 # again: nothing changes
 h upgrade "$REL" "$CHART" --reuse-values --set controllers=0 >/dev/null; sleep 10
 importer
-k exec importer -c jenkins -- cat /var/jenkins_home/cnj-import-report.txt > "$OUT/import-report-2.txt" 2>/dev/null || true
+k exec importer -c jenkins -- cat /var/jenkins_home/cluster-import-report.txt > "$OUT/import-report-2.txt" 2>/dev/null || true
 k delete pod importer --wait=true >/dev/null
 info "3 import again: $(tail -1 "$OUT/import-report-2.txt")"
 check "3 importing again changes nothing" bash -c "tail -1 '$OUT/import-report-2.txt' | grep -q 'files imported 0, .*builds imported 0'"

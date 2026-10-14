@@ -10,12 +10,29 @@ data:
     unclassified:
       artifactManager:
         artifactManagerFactories:
+{{- if eq .Values.blob.type "s3" }}
+          - jclouds:
+              provider: s3
+    aws:
+      s3:
+        container: {{ .Values.blob.s3.bucket | quote }}
+        prefix: {{ printf "%s%s" .Values.blob.s3.prefix .Values.artifactManager.prefix | quote }}
+{{- with .Values.blob.s3.endpoint }}
+        customEndpoint: {{ regexReplaceAll "^https?://" . "" | quote }}
+        useHttp: {{ hasPrefix "http://" . }}
+{{- end }}
+{{- with .Values.blob.s3.region }}
+        customSigningRegion: {{ . | quote }}
+{{- end }}
+        usePathStyleUrl: {{ .Values.blob.s3.pathStyle }}
+{{- else }}
           - azure:
               config:
                 container: {{ .Values.blob.container | quote }}
                 prefix: {{ .Values.artifactManager.prefix | quote }}
                 storageCredentialId: cnj-blob
                 disableExternalUrl: true
+{{- end }}
 {{- end }}
 {{- if .Values.kubernetesCloud.enabled }}
   cloud.yaml: |

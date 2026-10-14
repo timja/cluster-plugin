@@ -165,7 +165,7 @@ PY
 create_both fs6
 post $A "/job/fs6/build?delay=0sec" >/dev/null; sleep 8; post $B "/job/fs6/build?delay=0sec" >/dev/null; sleep 8
 (cd "$VALIDATION_DIR/journey" && mvn -B -ntp -q compile exec:java -Dexec.args="http://localhost:$RR/ u3 u3-password-1 u3-password-2 fs6") > "$OUT/journey.txt" 2>&1 || true
-fwd=$(( $(g $A 'println io.jenkins.plugins.cnj.store.BoundRequestForwarder.getForwardedCount()') + $(g $B 'println io.jenkins.plugins.cnj.store.BoundRequestForwarder.getForwardedCount()') ))
+fwd=$(( $(g $A 'println io.jenkins.plugins.cluster.BoundRequestForwarder.getForwardedCount()') + $(g $B 'println io.jenkins.plugins.cluster.BoundRequestForwarder.getForwardedCount()') ))
 while read -r kind ok rest; do
   case "$kind" in
     RESULT) check "8 $rest" test "$ok" = ok ;;

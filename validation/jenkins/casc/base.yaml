@@ -1,5 +1,5 @@
 jenkins:
-  systemMessage: "cloud-native-jenkins harness (${CNJ_NAME})"
+  systemMessage: "cloud-native-jenkins harness (${JENKINS_CLUSTER_NAME})"
   numExecutors: 2
   securityRealm:
     local:

@@ -143,7 +143,7 @@ check "4 one at a time again: a controller answered throughout" never_both_down 
 # ------------------------------------------------------------------ 5. guards
 log "scenario 5: guards"
 check "5 a downgrade is refused" refused /updateCenter/downgrade
-check "5 changing the store plugin is refused" refused /manage/pluginManager/plugin/persistence-store-postgresql/makeDisabled
+check "5 changing a cluster plugin is refused" refused /manage/pluginManager/plugin/cluster-postgresql/makeDisabled
 # a corrupt entry: an archive whose checksum does not match is never installed, and causes no restart
 s0=$(started_of "$REL-0"); s1=$(started_of "$REL-1")
 blob=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = 'cluster/plugins.json'" | python3 -c "import json,sys; print(json.load(sys.stdin)['plugins']['$DEP']['blob'])")

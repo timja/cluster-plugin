@@ -32,7 +32,7 @@ console_has() { text "$1" "$2/consoleText" 2>/dev/null | grep -q -- "$3"; }
 owner_is() { [[ "$(json $B "$1/api/json?tree=actions[builds[number,controller]]" 2>/dev/null \
   | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "builds" in a for b in a["builds"])')" == *"$2@$3"* ]]; }
 agent_online_on() { [[ "$(g "$1" 'print(jenkins.model.Jenkins.get().getComputer("agent1")?.isOnline())' 2>/dev/null)" == true ]]; }
-counter() { g "$1" "println io.jenkins.plugins.cnj.store.OwnerRoutingFilter.$2()"; }
+counter() { g "$1" "println io.jenkins.plugins.cluster.OwnerRoutingFilter.$2()"; }
 pipeline_job() { # name script
   python3 - "$OUT_DIR/$1.xml" "$2" <<'PY'
 import sys
@@ -81,7 +81,7 @@ create_both tick
 start_on_a tick
 check "2 the build page answers on B" eventually 10 bash -c "[[ \$(curl -gs -o /dev/null -w '%{http_code}' -u '$AUTH' http://localhost:$B/job/tick/1/) == 200 ]]"
 check "2 its REST API on B says it is building" building $B /job/tick/1
-check "2 answered by A (forwarded)" test "$(header $B /job/tick/1/api/json X-CNJ-Forwarded-From)" = jenkins-a
+check "2 answered by A (forwarded)" test "$(header $B /job/tick/1/api/json X-Jenkins-Cluster-Forwarded-From)" = jenkins-a
 check "2 through rr too" bash -c "for i in 1 2 3 4; do [[ \$(curl -gs -o /dev/null -w '%{http_code}' -u '$AUTH' http://localhost:$RR/job/tick/1/api/json) == 200 ]] || exit 1; done"
 # progressive console from B, as the console page polls it: each poll from the last offset
 offset=0; seen=""; lag_ok=0; polls=0
@@ -155,7 +155,7 @@ check "6 and grows" eventually 10 console_has $B /job/fstick/1 'fs tick 7'
 # ------------------------------------------------------------------ 7a. agent pages from B
 log "scenario 7: agent1 (on A) from B"
 check "7 on B, agent1's page says online (answered by A)" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/computer/agent1/api/json?tree=offline') == *'\"offline\":false'* ]]"
-check "7 forwarded to A" test "$(header $B /computer/agent1/api/json X-CNJ-Forwarded-From)" = jenkins-a
+check "7 forwarded to A" test "$(header $B /computer/agent1/api/json X-Jenkins-Cluster-Forwarded-From)" = jenkins-a
 check "7 its log answers on B" bash -c "curl -gsf -u '$AUTH' 'http://localhost:$B/computer/agent1/logText/progressiveText?start=0' | grep -qi 'connected\|remoting'"
 check "7 its script console works from B" bash -c "[[ \$(curl -gsf -u '$AUTH' --data-urlencode 'script=println(\"agent says \" + hudson.remoting.Channel.current().getName())' http://localhost:$B/computer/agent1/scriptText) == *'agent says'* ]]"
 check "7 the channel table names A" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select m.name from jenkins_channels c join jenkins_members m on m.origin = c.origin where c.agent = 'agent1'\") == jenkins-a ]]"
@@ -231,7 +231,7 @@ check "10 requests for a completed build are not forwarded ($fwd_before -> $fwd_
 pipeline_job loop 'echo "loop started"; sleep 60'
 create_both loop
 start_on_a loop
-code=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -H 'X-CNJ-Forwarded-From: jenkins-a' "http://localhost:$B/job/loop/1/api/json")
+code=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -H 'X-Jenkins-Cluster-Forwarded-From: jenkins-a' "http://localhost:$B/job/loop/1/api/json")
 check "10 an already forwarded request is not forwarded again (answered by B itself: $code)" test "$code" = 404
 post $B "/job/loop/1/stop" >/dev/null
 info "forwarded build requests: A=$(counter $A getForwardedBuildRequests) B=$(counter $B getForwardedBuildRequests); computer requests: A=$(counter $A getForwardedComputerRequests) B=$(counter $B getForwardedComputerRequests)"

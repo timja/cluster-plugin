@@ -6,14 +6,18 @@
 #
 # Populated by experiments/ET1-shared-items.sh under .et1/:
 #   war/jenkins.war   core from the cnj/t1 integration branch
-#   plugins/*.hpi     persistence-store-postgresql, cloudbees-folder from cnj/t1 branches
+#   plugins/*.hpi     the Cluster plugins (cluster, cluster-postgresql, cluster-azure-blob), and the forked plugins
 #   seed/             S0 key material (findings/E8)
 #   repo/             git repository shared by both controllers (multibranch scenario)
 name: et1
 
 x-jenkins: &jenkins
   image: cnj/jenkins:dev
-  depends_on: [postgres, azurite]
+  depends_on:
+    postgres: {condition: service_started}
+    azurite: {condition: service_started}
+    # the S3 variant (profile "s3", experiments/with-s3.sh): started with the controllers when the profile is on
+    garage: {condition: service_started, required: false}
   tmpfs:
     - /var/jenkins_home:uid=1000,gid=1000,mode=0755,size=2g
   environment: &env
@@ -27,16 +31,24 @@ x-jenkins: &jenkins
       -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true
       -Dio.jenkins.plugins.casc.core.JenkinsConfigurator.keepUndeclaredNodes=true
       ${CNJ_JAVA_OPTS:-}
-    CNJ_STORE_URL: jdbc:postgresql://postgres:5432/jenkins
-    CNJ_STORE_USER: jenkins
-    CNJ_STORE_PASSWORD: jenkins
+    CLUSTER_POSTGRES_URL: jdbc:postgresql://postgres:5432/jenkins
+    CLUSTER_POSTGRES_USER: jenkins
+    CLUSTER_POSTGRES_PASSWORD: jenkins
     # Target 3: build snapshots and Pipeline logs (Azurite's well-known development account)
-    CNJ_BLOB_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+    CLUSTER_AZURE_BLOB_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
     # Target 15: the artifact manager's storage credential (cnj-blob), made at startup if absent (init.groovy.d)
     CNJ_BLOB_ACCOUNT_NAME: devstoreaccount1
     CNJ_BLOB_ACCOUNT_KEY: "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
     CNJ_BLOB_ENDPOINT: "http://azurite:10000/devstoreaccount1"
-    CNJ_BLOB_CONTAINER: jenkins
+    CLUSTER_AZURE_BLOB_CONTAINER: jenkins
+    # the S3 variant (experiments/with-s3.sh) sets these; empty, the S3 blob store plugin stays off
+    CLUSTER_S3_BUCKET: ${CLUSTER_S3_BUCKET:-}
+    CLUSTER_S3_ENDPOINT: ${CLUSTER_S3_ENDPOINT:-}
+    CLUSTER_S3_REGION: ${CLUSTER_S3_REGION:-}
+    CLUSTER_S3_PATH_STYLE: ${CLUSTER_S3_PATH_STYLE:-}
+    AWS_ACCESS_KEY_ID: ${CLUSTER_S3_ACCESS_KEY:-}
+    AWS_SECRET_ACCESS_KEY: ${CLUSTER_S3_SECRET_KEY:-}
+    AWS_REGION: ${CLUSTER_S3_REGION:-us-east-1}
     CNJ_SEED_DIR: /et1/seed
     CNJ_INOTIFY: ${CNJ_INOTIFY:-0}
     # the shared repo is bind-mounted with a host owner
@@ -48,7 +60,7 @@ x-jenkins: &jenkins
     - ./out:/inventory
     - ./.et1:/et1
     - ./.et1/war:/war-override:ro
-    - ./.et1/plugins:/extra-plugins:ro
+    - ${CLUSTER_PLUGINS_DIR:-./.et1/plugins}:/extra-plugins:ro
     - ./.et1/repo:/repo
 
 services:
@@ -63,13 +75,26 @@ services:
     image: mcr.microsoft.com/azure-storage/azurite:3.34.0
     command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
 
+  # the S3 variant (profile "s3"): Garage, an S3-compatible object store, single node, with the bucket and key made at
+  # startup
+  garage:
+    image: dxflrs/garage:v2.4.1
+    profiles: [s3]
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_DEFAULT_ACCESS_KEY: ${CLUSTER_S3_ACCESS_KEY:-GKcluster0test0key}
+      GARAGE_DEFAULT_SECRET_KEY: ${CLUSTER_S3_SECRET_KEY:-cluster-test-secret-key-0123456789}
+      GARAGE_DEFAULT_BUCKET: ${CLUSTER_S3_BUCKET:-jenkins}
+    volumes:
+      - ./s3/garage.toml:/etc/garage.toml:ro
+
   jenkins-a:
     <<: *jenkins
     hostname: jenkins-a
     environment:
       <<: *env
-      CNJ_NAME: jenkins-a
-      CNJ_INTERNAL_URL: http://jenkins-a:8080/
+      JENKINS_CLUSTER_NAME: jenkins-a
+      JENKINS_CLUSTER_INTERNAL_URL: http://jenkins-a:8080/
     ports: ["8081:8080"]
 
   jenkins-b:
@@ -77,8 +102,8 @@ services:
     hostname: jenkins-b
     environment:
       <<: *env
-      CNJ_NAME: jenkins-b
-      CNJ_INTERNAL_URL: http://jenkins-b:8080/
+      JENKINS_CLUSTER_NAME: jenkins-b
+      JENKINS_CLUSTER_INTERNAL_URL: http://jenkins-b:8080/
     ports: ["8082:8080"]
 
   # ET17 (profile "et17"): a third controller, started only when named
@@ -88,8 +113,8 @@ services:
     hostname: jenkins-c
     environment:
       <<: *env
-      CNJ_NAME: jenkins-c
-      CNJ_INTERNAL_URL: http://jenkins-c:8080/
+      JENKINS_CLUSTER_NAME: jenkins-c
+      JENKINS_CLUSTER_INTERNAL_URL: http://jenkins-c:8080/
     ports: ["8083:8080"]
 
   # Target 4 (profile "agents"): an inbound WebSocket agent behind a failover URL

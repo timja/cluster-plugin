@@ -189,7 +189,7 @@ check "4 a new branch is built by periodic indexing" eventually 240 f2
 sleep 150; snap /job/mbp/job/feature2 $A $B; snap /job/mbp/job/main $A $B
 check "4 the new branch was built exactly once cluster-wide ($(count /job/mbp/job/feature2))" test "$(count /job/mbp/job/feature2)" = 1
 check "4 existing branches still built once" test "$(count /job/mbp/job/main)" = 1
-r "| ℹ️ | 4 periodic indexing owner: $(groovy $A 'print(io.jenkins.plugins.cnj.store.PostgresTriggerCoordinator.currentOwnerOf("mbp") == jenkins.persistence.PersistenceStores.get().getOrigin() ? "A" : "B")') |"
+r "| ℹ️ | 4 periodic indexing owner: $(groovy $A 'print(io.jenkins.plugins.cluster.ClusterTriggerCoordinator.currentOwnerOf("mbp") == jenkins.persistence.PersistenceStores.get().getOrigin() ? "A" : "B")') |"
 
 # ------------------------------------------------------------------ 5. failover
 survivor=$([[ $owner_port == "$A" ]] && echo $B || echo $A)

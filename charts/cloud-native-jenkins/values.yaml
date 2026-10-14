@@ -46,7 +46,7 @@ kubernetesCloud:
 
 # Shared state. In-chart Postgres and Azurite are for development; point at managed services in production.
 # The stores' connection settings (Target 15: managed services). existingSecret names a Secret with
-# CNJ_STORE_URL, CNJ_STORE_USER, CNJ_STORE_PASSWORD, CNJ_BLOB_CONNECTION_STRING and CNJ_BLOB_CONTAINER, used instead
+# CLUSTER_POSTGRES_URL, CLUSTER_POSTGRES_USER, CLUSTER_POSTGRES_PASSWORD, CLUSTER_AZURE_BLOB_CONNECTION_STRING and CLUSTER_AZURE_BLOB_CONTAINER, used instead
 # of postgres.url/user/password and blob.connectionString/container (which then need not be in values at all).
 store:
   existingSecret: ""
@@ -82,7 +82,18 @@ artifactManager:
   accountName: ""
   blobEndpoint: ""       # e.g. https://myaccount.blob.core.windows.net/
 blob:
-  inChart: true
+  # Where the cluster's blobs (build snapshots, Pipeline logs and save points, plugin archives) go:
+  #   azure: Azure Blob Storage (cluster-azure-blob); in-chart Azurite by default
+  #   s3: Amazon S3 or an S3-compatible store (cluster-s3); always external (blob.s3); credentials from the AWS default
+  #       chain: e.g. IRSA (serviceAccount annotations), or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in store.existingSecret
+  type: azure
+  inChart: true          # azure only: in-chart Azurite
   image: mcr.microsoft.com/azure-storage/azurite:3.34.0
-  connectionString: ""   # when not in-chart
-  container: jenkins
+  connectionString: ""   # azure, when not in-chart
+  container: jenkins     # azure: the container
+  s3:
+    bucket: ""
+    prefix: ""           # e.g. jenkins/
+    region: ""
+    endpoint: ""         # an S3-compatible store, e.g. https://s3.example.com
+    pathStyle: false

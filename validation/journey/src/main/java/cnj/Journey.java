@@ -47,7 +47,7 @@ public final class Journey {
     }
 
     private static void record(WebResponse r) {
-        String upstream = r.getResponseHeaderValue("X-CNJ-Controller"); // set by the store plugin on every answer
+        String upstream = r.getResponseHeaderValue("X-Jenkins-Cluster-Controller"); // set by the store plugin on every answer
         if (upstream == null) {
             upstream = r.getResponseHeaderValue("X-Upstream"); // nginx (rr)
         }
@@ -181,7 +181,7 @@ public final class Journey {
             java.util.List<String> readers = new java.util.ArrayList<>();
             for (int i = 0; i < 20 && !there; i++) {
                 org.htmlunit.Page p = wc.getPage(base + "job/" + job + "/api/json?tree=description");
-                readers.add(p.getWebResponse().getResponseHeaderValue("X-CNJ-Controller"));
+                readers.add(p.getWebResponse().getResponseHeaderValue("X-Jenkins-Cluster-Controller"));
                 there = p.getWebResponse().getContentAsString().contains("saved by the browser journey");
                 if (!there) {
                     Thread.sleep(500);

@@ -73,13 +73,13 @@ info "2 plugins chosen: $P (update center, through rr), $P2 (CLI, from a file)"
 JAR="$OUT_DIR/et19-cookies"; rm -f "$JAR"
 curl -gs -u "$AUTH" -c "$JAR" -b "$JAR" -D "$OUT/install.headers" -o /dev/null -X POST "http://localhost:$RR/manage/pluginManager/install" \
   --data "plugin.$P.default=on&dynamicLoad=Install"
-INSTALLER=$(grep -i '^X-CNJ-Controller' "$OUT/install.headers" | tr -d '\r' | awk '{print $2}')
+INSTALLER=$(grep -i '^X-Jenkins-Cluster-Controller' "$OUT/install.headers" | tr -d '\r' | awk '{print $2}')
 info "2 the install was served by $INSTALLER"
-check "2 the install set the routing cookie" grep -q "CNJ-UC" "$JAR"
+check "2 the install set the routing cookie" grep -q "jenkins-cluster-uc" "$JAR"
 : > "$OUT/progress.txt"
 for i in $(seq 1 12); do
   curl -gs -u "$AUTH" -c "$JAR" -b "$JAR" -D - -o "$OUT/progress-$i.html" -X POST "http://localhost:$RR/manage/pluginManager/updates/body" \
-    | grep -i '^X-CNJ-Controller' | tr -d '\r' | awk '{print $2}' >> "$OUT/progress.txt"
+    | grep -i '^X-Jenkins-Cluster-Controller' | tr -d '\r' | awk '{print $2}' >> "$OUT/progress.txt"
 done
 info "2 progress polls answered by: $(sort "$OUT/progress.txt" | uniq -c | tr '\n' ' ')"
 check "2 every progress poll through rr was answered by the installing controller" bash -c "[[ \$(sort -u '$OUT/progress.txt') == '$INSTALLER' ]]"
@@ -98,7 +98,7 @@ cli() { java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$1/" -auth "$A
 cli $B install-plugin = -deploy < "$OUT_DIR/$P2.hpi" > "$OUT/cli-install.txt" 2>&1 || true
 check "3 the CLI install succeeded on B" active_on $B "$P2"
 check "3 ... and A has it too, live" eventually 120 active_on $A "$P2"
-rc=0; cli $A install-plugin = < "$ET1/plugins/persistence-store-postgresql.hpi" > "$OUT/cli-protected.txt" 2>&1 || rc=$?; echo "exit $rc" >> "$OUT/cli-protected.txt"
+rc=0; cli $A install-plugin = < "$ET1/plugins/cluster-postgresql.hpi" > "$OUT/cli-protected.txt" 2>&1 || rc=$?; echo "exit $rc" >> "$OUT/cli-protected.txt"
 check "3 installing the store plugin with the CLI is refused" bash -c "grep -q 'cannot be changed at runtime' '$OUT/cli-protected.txt' && ! grep -q '^exit 0' '$OUT/cli-protected.txt'"
 
 # ------------------------------------------------------------------ 4. executors and the queue on the cluster page

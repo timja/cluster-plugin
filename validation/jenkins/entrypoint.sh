@@ -5,7 +5,7 @@ set -e
 
 if [[ "${CNJ_INOTIFY:-0}" == "1" ]]; then
   mkdir -p /inventory
-  log="/inventory/${CNJ_NAME:-jenkins}.inotify.log"
+  log="/inventory/${JENKINS_CLUSTER_NAME:-jenkins}.inotify.log"
   # inotifywait only has 1s timestamps; perl stamps each event with ms precision so events
   # can be correlated with Jenkins init milestones in the (docker -t) log.
   inotifywait -m -r -q \
@@ -41,8 +41,8 @@ if [[ -d /extra-plugins ]]; then
 fi
 
 # Target 6: each controller prefixes its bound object ids with its name, so requests for them can be forwarded to it
-if [[ -n "${CNJ_NAME:-}" ]]; then
-  export JAVA_OPTS="${JAVA_OPTS:-} -Dorg.kohsuke.stapler.bind.BoundObjectTable.idPrefix=${CNJ_NAME} -Djenkins.persistence.RunningBuilds.controllerName=${CNJ_NAME}"
+if [[ -n "${JENKINS_CLUSTER_NAME:-}" ]]; then
+  export JAVA_OPTS="${JAVA_OPTS:-} -Dorg.kohsuke.stapler.bind.BoundObjectTable.idPrefix=${JENKINS_CLUSTER_NAME} -Djenkins.persistence.RunningBuilds.controllerName=${JENKINS_CLUSTER_NAME}"
 fi
 
 if [[ -f /war-override/jenkins.war ]]; then

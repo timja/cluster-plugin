@@ -7,7 +7,7 @@
 #
 # Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
-export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cnj.store.WebSocketEcho.enabled=true"
+export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.WebSocketEcho.enabled=true"
 A=8081 B=8082 OUT="$RAW_DIR/ET20" ET1="$VALIDATION_DIR/.et1"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
@@ -62,10 +62,10 @@ log "scenario 1: WebSocket relay"
 pipeline wsp 'pipeline { agent none; stages { stage("run") { steps { echo "running"; sleep 60 } } } }'
 post $A "/job/wsp/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/wsp/1 running
-java "$VALIDATION_DIR/tools/WsEcho.java" "ws://localhost:$B/job/wsp/1/cnj-ws-echo/" "$AUTH" hello > "$OUT/ws-b.txt" 2>&1 || true
+java "$VALIDATION_DIR/tools/WsEcho.java" "ws://localhost:$B/job/wsp/1/cluster-ws-echo/" "$AUTH" hello > "$OUT/ws-b.txt" 2>&1 || true
 info "1 B answered: $(head -c 200 "$OUT/ws-b.txt")"
 check "1 a WebSocket opened on B for A's running build is answered by A" grep -q "hello from jenkins-a" "$OUT/ws-b.txt"
-java "$VALIDATION_DIR/tools/WsEcho.java" "ws://localhost:$A/job/wsp/1/cnj-ws-echo/" "$AUTH" direct > "$OUT/ws-a.txt" 2>&1 || true
+java "$VALIDATION_DIR/tools/WsEcho.java" "ws://localhost:$A/job/wsp/1/cluster-ws-echo/" "$AUTH" direct > "$OUT/ws-a.txt" 2>&1 || true
 check "1 ... as when opened on A itself" grep -q "direct from jenkins-a" "$OUT/ws-a.txt"
 
 # ------------------------------------------------------------------ 2. console -f on B for a build running on A
@@ -106,7 +106,7 @@ check "3 build -s -v on B waits for the build A ran, with its log" bash -c "grep
 # ------------------------------------------------------------------ 4. a controller without the cluster's keys (Target 15)
 log "scenario 4: a controller started against the store without the cluster's seeded keys"
 docker rm -fv et20-noseed >/dev/null 2>&1 || true
-et1 run -d --no-deps --name et20-noseed -e CNJ_SEED_DIR= -e CNJ_NAME=noseed -e CNJ_INTERNAL_URL=http://et20-noseed:8080/ jenkins-a >/dev/null 2>&1 || true
+et1 run -d --no-deps --name et20-noseed -e CNJ_SEED_DIR= -e JENKINS_CLUSTER_NAME=noseed -e JENKINS_CLUSTER_INTERNAL_URL=http://et20-noseed:8080/ jenkins-a >/dev/null 2>&1 || true
 refuses() { local l; l=$(docker logs et20-noseed 2>&1); grep -q "does not have the key material of the cluster" <<<"$l"; }
 check "4 it refuses to start, saying why" eventually 180 refuses
 check "4 ... and never became a member" bash -c "! curl -gsf -u '$AUTH' http://localhost:$A/manage/cluster/api/json | grep -q '\"noseed\"'"

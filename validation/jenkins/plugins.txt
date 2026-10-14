@@ -14,3 +14,7 @@ windows-azure-storage
 instance-identity
 coverage
 avatar
+postgresql-api
+azure-sdk
+aws-java-sdk2-s3
+artifact-manager-s3

@@ -1,0 +1,29 @@
+# S0: byte-identical on every controller (no per-controller values).
+jenkins:
+  systemMessage: "cloud-native-jenkins ET1"
+  numExecutors: 4
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: admin
+  authorizationStrategy: loggedInUsersCanDoAnything
+  # Target 6: crumbs valid on every controller (forms rendered by one may be submitted to another)
+  crumbIssuer: cluster
+# Target 15: artifacts and stashes go to blob storage as they are made, so an adopted build finds them there; the S3
+# variant uses artifact-manager-s3 in the cluster's bucket (Garage: custom endpoint, path style, no session token)
+unclassified:
+  artifactManager:
+    artifactManagerFactories:
+      - jclouds:
+          provider: s3
+aws:
+  s3:
+    container: jenkins
+    prefix: "artifacts/"
+    customEndpoint: "garage:3900"
+    customSigningRegion: garage
+    usePathStyleUrl: true
+    useHttp: true
+    disableSessionToken: true
