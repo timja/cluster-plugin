@@ -22,7 +22,7 @@ public final class ChannelPublisher extends ComputerListener {
 
     @Override
     public void onOnline(Computer c, TaskListener listener) {
-        if (c != Jenkins.get().toComputer() && PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+        if (c != Jenkins.get().toComputer() && PersistenceStores.get() instanceof ClusterStore store) {
             try {
                 store.channelConnected(c.getName());
             } catch (IOException e) {
@@ -33,7 +33,7 @@ public final class ChannelPublisher extends ComputerListener {
 
     @Override
     public void onOffline(Computer c, hudson.slaves.OfflineCause cause) {
-        if (c != Jenkins.get().toComputer() && PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+        if (c != Jenkins.get().toComputer() && PersistenceStores.get() instanceof ClusterStore store) {
             try {
                 store.channelDisconnected(c.getName());
             } catch (IOException e) {

@@ -54,10 +54,10 @@ public final class UpdateCenterRouting implements Filter {
      * is trusted as is: right after the install, the others have not seen that controller's next heartbeat yet.
      */
     @CheckForNull
-    static PostgresPersistenceStore.Member target(List<PostgresPersistenceStore.Member> members, @CheckForNull String preferred) {
-        PostgresPersistenceStore.Member best = null;
+    static ClusterStore.Member target(List<ClusterStore.Member> members, @CheckForNull String preferred) {
+        ClusterStore.Member best = null;
         long bestAt = -1;
-        for (PostgresPersistenceStore.Member m : members) {
+        for (ClusterStore.Member m : members) {
             if (!m.alive() || m.url() == null) {
                 continue;
             }
@@ -78,11 +78,11 @@ public final class UpdateCenterRouting implements Filter {
         if (request instanceof HttpServletRequest req
                 && response instanceof HttpServletResponse rsp
                 && !Forwarding.wasForwarded(req)
-                && PersistenceStores.get() instanceof PostgresPersistenceStore store
+                && PersistenceStores.get() instanceof ClusterStore store
                 && PROGRESS.matcher(req.getRequestURI().substring(req.getContextPath().length())).matches()) {
             try {
-                PostgresPersistenceStore.Member t = target(store.members(), cookie(req));
-                if (t != null && !PostgresPersistenceStore.NAME.equals(t.name()) && Forwarding.forward(req, rsp, t.name(), t.url())) {
+                ClusterStore.Member t = target(store.members(), cookie(req));
+                if (t != null && !ClusterMember.NAME.equals(t.name()) && Forwarding.forward(req, rsp, t.name(), t.url())) {
                     return;
                 }
             } catch (IOException | RuntimeException e) {
@@ -109,7 +109,7 @@ public final class UpdateCenterRouting implements Filter {
     static void installedHere(HttpServletRequest req, HttpServletResponse rsp) {
         MemberStatus.lastInstallAt = System.currentTimeMillis();
         MemberStatus.publish();
-        Cookie c = new Cookie(COOKIE, PostgresPersistenceStore.NAME);
+        Cookie c = new Cookie(COOKIE, ClusterMember.NAME);
         c.setPath(req.getContextPath().isEmpty() ? "/" : req.getContextPath());
         c.setMaxAge((int) TimeUnit.MILLISECONDS.toSeconds(RECENT_MILLIS));
         c.setHttpOnly(true);

@@ -31,9 +31,9 @@ public final class ConflictMonitor extends AdministrativeMonitor {
 
     public List<Counts> getCounts() {
         List<Counts> result = new ArrayList<>();
-        if (PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+        if (PersistenceStores.get() instanceof ClusterStore store) {
             try {
-                for (PostgresPersistenceStore.Member m : store.members()) {
+                for (ClusterStore.Member m : store.members()) {
                     if (m.alive()) {
                         MemberStatus.Info i = MemberStatus.Info.parse(m.info());
                         result.add(new Counts(m.name(), i.merged(), i.overwritten(), i.refused()));

@@ -21,7 +21,7 @@ public final class ClusterCliPlugins implements PluginArchiveListener {
 
     @Override
     public void beforeInstall(@NonNull String shortName, @NonNull File archive) throws AbortException {
-        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore)) {
+        if (!(PersistenceStores.get() instanceof ClusterStore)) {
             return;
         }
         String refusal = ClusterPluginSet.refusal(ClusterPluginSet.MODE, new ClusterPluginSet.Change("install", shortName), ClusterPlugins.active());

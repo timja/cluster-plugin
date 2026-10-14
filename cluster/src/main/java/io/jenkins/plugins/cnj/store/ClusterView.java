@@ -35,7 +35,7 @@ public final class ClusterView extends ManagementLink {
 
     @Override
     public String getIconFileName() {
-        return PersistenceStores.get() instanceof PostgresPersistenceStore ? "symbol-computer" : null;
+        return PersistenceStores.get() instanceof ClusterStore ? "symbol-computer" : null;
     }
 
     @Override
@@ -77,8 +77,8 @@ public final class ClusterView extends ManagementLink {
     }
 
     @CheckForNull
-    private static PostgresPersistenceStore store() {
-        return PersistenceStores.get() instanceof PostgresPersistenceStore p ? p : null;
+    private static ClusterStore store() {
+        return PersistenceStores.get() instanceof ClusterStore p ? p : null;
     }
 
     /**
@@ -94,7 +94,7 @@ public final class ClusterView extends ManagementLink {
     /** The name of this controller. */
     @Exported
     public String getSelf() {
-        return PostgresPersistenceStore.NAME;
+        return ClusterMember.NAME;
     }
 
     /**
@@ -104,9 +104,9 @@ public final class ClusterView extends ManagementLink {
     @Exported
     public List<MemberInfo> getMembers() throws IOException {
         List<MemberInfo> result = new ArrayList<>();
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         if (store != null) {
-            for (PostgresPersistenceStore.Member m : visible(store.members(), System.currentTimeMillis())) {
+            for (ClusterStore.Member m : visible(store.members(), System.currentTimeMillis())) {
                 result.add(new MemberInfo(m));
             }
         }
@@ -175,29 +175,29 @@ public final class ClusterView extends ManagementLink {
     static final long GONE_SHOWN_MILLIS = java.util.concurrent.TimeUnit.HOURS.toMillis(1);
 
     /** @param members newest first */
-    static List<PostgresPersistenceStore.Member> visible(List<PostgresPersistenceStore.Member> members, long now) {
+    static List<ClusterStore.Member> visible(List<ClusterStore.Member> members, long now) {
         java.util.Set<String> named = new java.util.HashSet<>();
-        for (PostgresPersistenceStore.Member m : members) {
+        for (ClusterStore.Member m : members) {
             if (m.alive()) {
                 named.add(m.name());
             }
         }
-        List<PostgresPersistenceStore.Member> result = new ArrayList<>();
-        for (PostgresPersistenceStore.Member m : members) {
+        List<ClusterStore.Member> result = new ArrayList<>();
+        for (ClusterStore.Member m : members) {
             if (m.alive()) {
                 result.add(m);
             } else if (named.add(m.name()) && now - m.heartbeatAt() < GONE_SHOWN_MILLIS) {
                 result.add(m); // the newest incarnation of a controller that is down
             }
         }
-        result.sort(java.util.Comparator.comparing(PostgresPersistenceStore.Member::name));
+        result.sort(java.util.Comparator.comparing(ClusterStore.Member::name));
         return result;
     }
 
     @Exported
     public List<RunningBuild> getRunningBuilds() throws IOException {
         List<RunningBuild> result = new ArrayList<>();
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         if (store != null) {
             for (Map.Entry<String, byte[]> e : store.runningPlaceholders().entrySet()) {
                 Matcher m = RUNNING.matcher(e.getKey());
@@ -216,11 +216,11 @@ public final class ClusterView extends ManagementLink {
     @Exported
     public List<Channel> getChannels() throws IOException {
         List<Channel> result = new ArrayList<>();
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         if (store != null) {
             // each agent's executors, as reported by the controller holding its channel
             java.util.Map<String, int[]> executors = new java.util.HashMap<>();
-            for (PostgresPersistenceStore.Member m : store.members()) {
+            for (ClusterStore.Member m : store.members()) {
                 if (m.alive()) {
                     MemberStatus.Info.parse(m.info()).agents().forEach((agent, counts) -> executors.put(m.name() + "/" + agent, counts));
                 }
@@ -231,11 +231,11 @@ public final class ClusterView extends ManagementLink {
     }
 
     /** Background schema migrations and how far they got (Target 15). */
-    public List<SchemaMigrations.Progress> getMigrations() {
-        PostgresPersistenceStore store = store();
+    public List<ClusterStore.Migration> getMigrations() {
+        ClusterStore store = store();
         try {
-            return store == null ? List.of() : store.migrations.progress();
-        } catch (java.sql.SQLException | RuntimeException e) {
+            return store == null ? List.of() : store.migrations();
+        } catch (IOException | RuntimeException e) {
             return List.of();
         }
     }
@@ -243,7 +243,7 @@ public final class ClusterView extends ManagementLink {
     /** Shared-queue items waiting for a controller to start them, and claimed by one (Target 15). */
     @Exported
     public java.util.Map<String, Integer> getQueue() throws IOException {
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         return store == null ? java.util.Map.of() : store.queueCounts();
     }
 
@@ -254,9 +254,9 @@ public final class ClusterView extends ManagementLink {
 
     @ExportedBean(defaultVisibility = 2)
     public static final class MemberInfo {
-        private final PostgresPersistenceStore.Member m;
+        private final ClusterStore.Member m;
 
-        MemberInfo(PostgresPersistenceStore.Member m) {
+        MemberInfo(ClusterStore.Member m) {
             this.m = m;
         }
 

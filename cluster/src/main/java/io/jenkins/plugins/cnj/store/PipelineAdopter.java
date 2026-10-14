@@ -41,7 +41,7 @@ public class PipelineAdopter implements BuildAdopter {
     @Override
     public Adoption prepare(@NonNull Job<?, ?> job, @NonNull RunningBuilds.Placeholder placeholder) throws IOException {
         String savePoint = placeholder.getProperties().get(SavePoints.SAVE_POINT);
-        AzureBlobStore blobs = BlobLogStorage.blobs();
+        ClusterBlobStore blobs = BlobLogStorage.blobs();
         String jobKey = PersistenceStores.keyFor(job.getRootDir());
         if (savePoint == null
                 || blobs == null
@@ -132,7 +132,7 @@ public class PipelineAdopter implements BuildAdopter {
         };
     }
 
-    private static boolean download(AzureBlobStore blobs, String key, Path target) throws IOException {
+    private static boolean download(ClusterBlobStore blobs, String key, Path target) throws IOException {
         Files.createDirectories(target.getParent());
         boolean found;
         try (OutputStream out = Files.newOutputStream(target)) {

@@ -70,7 +70,7 @@ public final class BoundRequestForwarder implements Filter {
         }
         String owner = ownerOf(req.getRequestURI());
         String url = null;
-        if (owner != null && PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+        if (owner != null && PersistenceStores.get() instanceof ClusterStore store) {
             url = store.urlOf(owner);
         }
         if (url == null) {

@@ -30,7 +30,7 @@ public final class KeyCheck {
      * Called as soon as the store is created (before this controller heartbeats, and before anything reads secrets
      * from it, which would fail less clearly).
      */
-    static void verify(PostgresPersistenceStore store) throws IOException {
+    static void verify(PersistenceStore store) throws IOException {
         if (SystemProperties.getBoolean(KeyCheck.class.getName() + ".skip")) {
             return;
         }
@@ -48,7 +48,13 @@ public final class KeyCheck {
         if (s == null || !VALUE.equals(s.getPlainText())) {
             // leave the cluster before failing: a Jenkins that failed to start keeps running (its error page), and must
             // not go on heartbeating as a member
-            store.close();
+            if (store instanceof AutoCloseable c) {
+                try {
+                    c.close();
+                } catch (Exception x) {
+                    // best effort: failing to start is what matters
+                }
+            }
             throw new IllegalStateException("This controller does not have the key material of the cluster it shares a store with:"
                     + " it cannot decrypt the cluster's secrets, and would write secrets the others cannot read. Start it with"
                     + " the cluster's seeded keys (secret.key, secrets/; the chart's seed Secret), or set"

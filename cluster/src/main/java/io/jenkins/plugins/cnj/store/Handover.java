@@ -39,7 +39,7 @@ public final class Handover {
 
     @Initializer(after = InitMilestone.JOB_LOADED)
     public static void start() {
-        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return;
         }
         store.subscribe(e -> {
@@ -52,7 +52,7 @@ public final class Handover {
 
     /** Hands over builds waiting for a label only another controller has. */
     static void offer() {
-        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return;
         }
         long now = System.currentTimeMillis();
@@ -124,7 +124,7 @@ public final class Handover {
     }
 
     /** Counts a handover of a build; false if it was handed over {@link #MAX_HOPS} times already. */
-    private static boolean countHop(PostgresPersistenceStore store, String key) throws IOException {
+    private static boolean countHop(ClusterStore store, String key) throws IOException {
         for (int attempt = 0; attempt < 10; attempt++) {
             PersistenceStore.Entry e = store.read(key);
             int hops = e == null ? 0 : Integer.parseInt(new String(e.content(), StandardCharsets.UTF_8).trim());
@@ -146,7 +146,7 @@ public final class Handover {
     public static final class Done extends hudson.model.listeners.RunListener<Run<?, ?>> {
         @Override
         public void onFinalized(Run<?, ?> run) {
-            if (PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+            if (PersistenceStores.get() instanceof ClusterStore store) {
                 String job = PersistenceStores.keyFor(run.getParent().getRootDir());
                 if (job != null) {
                     try {
@@ -177,7 +177,7 @@ public final class Handover {
 
     /** The origin of a live controller holding the channel of an agent with this label, or null. */
     @CheckForNull
-    private static String holderOf(PostgresPersistenceStore store, Label label) throws IOException {
+    private static String holderOf(ClusterStore store, Label label) throws IOException {
         for (Node n : label.getNodes()) {
             String[] holder = store.channelHolder(n.getNodeName());
             if (holder != null) {
@@ -188,7 +188,7 @@ public final class Handover {
     }
 
     /** The target side: take over a build handed over to this controller, retrying until its lease is free. */
-    static void takeOver(PostgresPersistenceStore store, String key) {
+    static void takeOver(ClusterStore store, String key) {
         try {
             PersistenceStore.Entry e = store.read(key);
             if (e == null || !store.getOrigin().equals(new String(e.content(), StandardCharsets.UTF_8))) {

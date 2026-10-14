@@ -22,13 +22,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
-import jenkins.persistence.BlobStore;
 
 /**
  * A {@link BlobStore} in one Azure Blob Storage container, which also holds append blobs for streamed logs.
  * Keys are used as blob names unchanged.
  */
-public class AzureBlobStore implements BlobStore {
+public class AzureBlobStore implements ClusterBlobStore {
 
     /** Largest block an append blob accepts in one call. */
     static final int MAX_APPEND_BLOCK = 4 * 1024 * 1024;
@@ -101,6 +100,7 @@ public class AzureBlobStore implements BlobStore {
      *
      * @return false if there is no such blob
      */
+    @Override
     public boolean download(@NonNull String key, @NonNull OutputStream out) throws IOException {
         try {
             container.getBlobClient(key).downloadStream(out);
@@ -116,6 +116,7 @@ public class AzureBlobStore implements BlobStore {
     /**
      * The size of a blob, or 0 if there is no such blob.
      */
+    @Override
     public long size(@NonNull String key) throws IOException {
         try {
             return container.getBlobClient(key).getProperties().getBlobSize();
@@ -202,6 +203,85 @@ public class AzureBlobStore implements BlobStore {
     }
 
     // ------------------------------------------------------------------ segmented append blobs (Target 14)
+
+    private final LogBlobs logs = new SegmentedLogs();
+
+    @NonNull
+    @Override
+    public LogBlobs logs() {
+        return logs;
+    }
+
+    /**
+     * Logs as segmented append blobs ({@code log}, {@code log.1}, …): a new segment starts before the current one reaches
+     * {@link #MAX_SEGMENT_BLOCKS} blocks. Each append is conditional on the segment's length, so an append by another
+     * writer meanwhile is detected.
+     */
+    private final class SegmentedLogs implements LogBlobs {
+
+        /** Where a log appended to here stands: its last segment, where that segment starts, and its block count. */
+        private record Tail(int segment, long segmentStart, int blocks, long end) {}
+
+        private final Map<String, Tail> tails = new java.util.concurrent.ConcurrentHashMap<>();
+
+        private Tail tail(String log) throws IOException {
+            int segment = 0;
+            long start = 0;
+            int blocks = 0;
+            long end = 0;
+            for (Segment seg : segments(log)) {
+                segment = seg.index();
+                start = end;
+                blocks = seg.blocks();
+                end += seg.size();
+            }
+            return new Tail(segment, start, blocks, end);
+        }
+
+        @Override
+        public long size(@NonNull String log) throws IOException {
+            return segmentedSize(log);
+        }
+
+        @Override
+        public boolean appendAt(@NonNull String log, @NonNull byte[] bytes, int off, int len, long position) throws IOException {
+            Tail t = tails.get(log);
+            if (t == null || t.end() != position) {
+                t = tail(log);
+                if (t.end() != position) {
+                    tails.remove(log);
+                    return false;
+                }
+            }
+            int blocks = (len + MAX_APPEND_BLOCK - 1) / MAX_APPEND_BLOCK;
+            if (t.blocks() > 0 && t.blocks() + blocks > MAX_SEGMENT_BLOCKS) {
+                t = new Tail(t.segment() + 1, t.end(), 0, t.end());
+            }
+            if (!AzureBlobStore.this.appendAt(segment(log, t.segment()), bytes, off, len, position - t.segmentStart())) {
+                tails.remove(log);
+                return false;
+            }
+            tails.put(log, new Tail(t.segment(), t.segmentStart(), t.blocks() + blocks, position + len));
+            return true;
+        }
+
+        @Override
+        public boolean download(@NonNull String log, @NonNull OutputStream out) throws IOException {
+            return downloadSegmented(log, out);
+        }
+
+        @CheckForNull
+        @Override
+        public byte[] readFrom(@NonNull String log, long offset) throws IOException {
+            return readSegmentedFrom(log, offset);
+        }
+
+        @Override
+        public void delete(@NonNull String log) throws IOException {
+            tails.remove(log);
+            deleteSegmented(log);
+        }
+    }
 
     /**
      * Most blocks appended to one segment of a log before the next segment starts. An append blob takes at most
@@ -301,6 +381,7 @@ public class AzureBlobStore implements BlobStore {
     /**
      * Names of the blob with this key and every blob below it, for cleanup and diagnostics.
      */
+    @Override
     @NonNull
     public List<String> list(@NonNull String prefix) throws IOException {
         List<String> keys = new ArrayList<>();

@@ -99,7 +99,7 @@ public final class HomeWrites {
     /** The controller answering. */
     @Exported
     public String getController() {
-        return PostgresPersistenceStore.NAME;
+        return ClusterMember.NAME;
     }
 
     /** The findings, rescanned at most every 30 s. */

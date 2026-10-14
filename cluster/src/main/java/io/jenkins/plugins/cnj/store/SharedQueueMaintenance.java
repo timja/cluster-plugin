@@ -38,13 +38,13 @@ public final class SharedQueueMaintenance {
 
         @Override
         protected void execute(TaskListener listener) throws IOException {
-            if (PersistenceStores.get() instanceof PostgresPersistenceStore store && store.queue() != null) {
+            if (PersistenceStores.get() instanceof ClusterStore store && store.queue() != null) {
                 int n = store.reclaimAndPrune();
                 if (n > 0) {
                     LOGGER.info(() -> "Put " + n + " queue item(s) claimed by gone controllers back into the queue");
                 }
                 // started by a controller that died before the build's placeholder was written: the build never began
-                for (PostgresPersistenceStore.StartedItem item : store.startedByGone()) {
+                for (ClusterStore.StartedItem item : store.startedByGone()) {
                     hudson.model.Job<?, ?> job = jenkins.model.Jenkins.get().getItemByFullName(item.task(), hudson.model.Job.class);
                     String jobKey = job == null ? null : PersistenceStores.keyFor(job.getRootDir());
                     if (jobKey == null) {
@@ -83,7 +83,7 @@ public final class SharedQueueMaintenance {
         }
 
         private static void cancel(String fullName) {
-            if (PersistenceStores.get() instanceof PostgresPersistenceStore store && store.queue() != null) {
+            if (PersistenceStores.get() instanceof ClusterStore store && store.queue() != null) {
                 try {
                     store.cancelStartedOf(fullName);
                 } catch (IOException e) {
@@ -100,7 +100,7 @@ public final class SharedQueueMaintenance {
     public static final class Coordinator implements PeriodicWorkCoordinator {
         @Override
         public boolean shouldRun(PeriodicWork work, long period) {
-            if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+            if (!(PersistenceStores.get() instanceof ClusterStore store)) {
                 return true;
             }
             try {

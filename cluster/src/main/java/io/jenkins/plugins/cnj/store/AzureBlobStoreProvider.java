@@ -26,7 +26,7 @@ public class AzureBlobStoreProvider implements BlobStoreProvider {
             return null;
         }
         String container = setting("blobContainer", "CNJ_BLOB_CONTAINER");
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(PostgresPersistenceStoreProvider.STARTUP_WAIT_SECONDS);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
         long delay = 1000;
         while (true) {
             try {

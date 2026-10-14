@@ -40,7 +40,7 @@ import org.postgresql.PGConnection;
  * subscribers read that log in order, woken by {@code NOTIFY} and by a polling fallback,
  * so no change is missed across reconnects.
  */
-public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable {
+public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
     private static final Logger LOGGER = Logger.getLogger(PostgresPersistenceStore.class.getName());
     static final String CHANNEL = "jenkins_store";
@@ -411,11 +411,13 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * How many times this controller's membership may have lapsed (heartbeats missing for longer than the timeout).
      * When this changes, work done on behalf of leases should check that they are still held.
      */
-    long lapseCount() {
+    @Override
+    public long lapseCount() {
         return lapses.get();
     }
 
-    boolean mayHaveLapsed() {
+    @Override
+    public boolean mayHaveLapsed() {
         long since = System.nanoTime() - lastHeartbeatOk;
         if (since > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS)) {
             return true;
@@ -523,7 +525,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         stableSince = System.nanoTime() - TimeUnit.HOURS.toNanos(1);
     }
 
-    boolean canJudgeLiveness() {
+    @Override
+    public boolean canJudgeLiveness() {
         return !mayHaveLapsed()
                 && System.nanoTime() - stableSince > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS + HEARTBEAT_MILLIS);
     }
@@ -845,7 +848,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      *
      * @return how many items were put back
      */
-    int reclaimAndPrune() throws IOException {
+    @Override
+    public int reclaimAndPrune() throws IOException {
         boolean judge = canJudgeLiveness();
         return run("reclaim queue items", c -> {
             List<Long> ids = new ArrayList<>();
@@ -872,13 +876,12 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     /** A queue item a controller recorded as started. */
-    record StartedItem(long id, String task, int buildNumber) {}
-
     /**
      * Queue items recorded as started, in the last hour, by controllers which are gone (Target 15): a controller can die
      * between recording a start and writing the build's placeholder, which leaves the item with neither.
      */
-    List<StartedItem> startedByGone() throws IOException {
+    @Override
+    public List<StartedItem> startedByGone() throws IOException {
         if (!canJudgeLiveness()) {
             return List.of();
         }
@@ -891,7 +894,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        items.add(new StartedItem(rs.getLong(1), rs.getString(2), rs.getInt(3)));
+                        items.add(new ClusterStore.StartedItem(rs.getLong(1), rs.getString(2), rs.getInt(3)));
                     }
                 }
             }
@@ -903,7 +906,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * Cancels the items recorded as started for an item, and for the items inside it, when it is deleted or renamed: the
      * builds they stand for went with it, and an item later created under that name must not have them requeued.
      */
-    void cancelStartedOf(String fullName) throws IOException {
+    @Override
+    public void cancelStartedOf(@NonNull String fullName) throws IOException {
         run("cancel started queue items of " + fullName, c -> {
             try (PreparedStatement ps = c.prepareStatement("update jenkins_queue set state = 'CANCELLED', updated_at = now()"
                     + " where state = 'STARTED' and (task = ? or starts_with(task, ?))")) {
@@ -919,7 +923,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * Puts a started item back into the queue (its build never began here or anywhere), or cancels it if an equal
      * item is waiting already (which stands for it).
      */
-    void requeueStarted(long id) throws IOException {
+    @Override
+    public void requeueStarted(long id) throws IOException {
         run("requeue a queue item", c -> {
             int n;
             try (PreparedStatement ps = c.prepareStatement("update jenkins_queue set state = 'WAITING', claimed_by = null,"
@@ -1086,12 +1091,12 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                                 + " version = excluded.version, protocol = excluded.protocol, plugins = excluded.plugins, info = excluded.info,"
                                 + " lock_key = excluded.lock_key")) {
                     ps.setString(1, origin);
-                    ps.setString(2, NAME);
-                    ps.setString(3, INTERNAL_URL);
-                    ps.setString(4, VERSION);
-                    ps.setInt(5, PROTOCOL);
-                    ps.setString(6, pluginsStatus);
-                    ps.setString(7, memberInfo);
+                    ps.setString(2, ClusterMember.NAME);
+                    ps.setString(3, ClusterMember.INTERNAL_URL);
+                    ps.setString(4, ClusterMember.VERSION);
+                    ps.setInt(5, ClusterMember.PROTOCOL);
+                    ps.setString(6, ClusterMember.pluginsStatus);
+                    ps.setString(7, ClusterMember.memberInfo);
                     Integer key = lockHeld ? LOCK_KEY : null;
                     if (key == null) {
                         ps.setNull(8, java.sql.Types.INTEGER);
@@ -1148,35 +1153,22 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         return aliveMembers();
     }
 
-    /** This controller's name, as other controllers see it (and as the prefix of its bound object ids). */
-    static final String NAME = env("CNJ_NAME", hostName());
-    /** How other controllers reach this one directly, e.g. to forward requests for objects only it holds. */
-    static final String INTERNAL_URL = env("CNJ_INTERNAL_URL", "http://" + hostName() + ":8080/");
-
-    /**
-     * The version of the cluster protocol this controller speaks: what it stores and expects of its peers.
-     * Raised when a change cannot coexist with older peers (which then must be gone before this version starts).
-     */
-    static final int PROTOCOL = 2; // 2 (Target 15): writes jenkins_store.size (SchemaMigrations.STORE_SIZE)
-
-    /** What this controller runs: core and plugin versions, shown in the cluster view. */
-    static final String VERSION = jenkins.model.Jenkins.VERSION + " / " + java.util.Objects.requireNonNullElse(
-            PostgresPersistenceStore.class.getPackage().getImplementationVersion(), "dev");
-
-    /** What this controller has applied of the cluster's plugin set ({@link ClusterPlugins}), published with each heartbeat. */
-    static volatile String pluginsStatus;
-
-    /** What else this controller reports to the cluster (JSON, {@link MemberStatus}), published with each heartbeat. */
-    static volatile String memberInfo;
-
-    /** Peers older than this protocol must not be alive when this controller starts (Target 10). */
-    static final int MINIMUM_PEER_PROTOCOL = Integer.getInteger(PostgresPersistenceStore.class.getPackageName() + ".minimumPeerProtocol", 0);
-
     /**
      * Live controllers other than this one speaking an older protocol than {@code minimum}, as {@code name (protocol)}.
      */
     @NonNull
-    List<String> peersBelow(int minimum) throws IOException {
+    @Override
+    public List<ClusterStore.Migration> migrations() throws IOException {
+        try {
+            return migrations.progress().stream().map(p -> new ClusterStore.Migration(p.id(), p.state(), p.owner(), p.rows())).toList();
+        } catch (SQLException e) {
+            throw new IOException("Failed to read schema migrations", e);
+        }
+    }
+
+    @NonNull
+    @Override
+    public List<String> peersBelow(int minimum) throws IOException {
         return run("check peer versions", c -> {
             List<String> result = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("select coalesce(name, origin), coalesce(protocol, 0) from jenkins_members"
@@ -1194,26 +1186,14 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         });
     }
 
-    private static String env(String name, String fallback) {
-        String v = System.getenv(name);
-        return v == null || v.isEmpty() ? fallback : v;
-    }
-
-    private static String hostName() {
-        try {
-            return java.net.InetAddress.getLocalHost().getHostName();
-        } catch (java.io.IOException e) {
-            return "localhost";
-        }
-    }
-
     /**
      * The internal URL of a live controller, by name.
      *
      * @return null if no live controller has that name
      */
     @CheckForNull
-    String urlOf(@NonNull String name) throws IOException {
+    @Override
+    public String urlOf(@NonNull String name) throws IOException {
         return run("look up controller " + name, c -> {
             try (PreparedStatement ps = c.prepareStatement("select url from jenkins_members where name = ?"
                     + " and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + " order by heartbeat_at desc limit 1")) {
@@ -1226,13 +1206,10 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
         });
     }
 
-    /** A controller in the membership table (Target 8 cluster view). */
-    record Member(String origin, String name, String url, long heartbeatAt, long startedAt, boolean alive, String version, int protocol,
-            String plugins, String info) {}
-
     /** Every controller in the membership table, newest first. */
     @NonNull
-    List<Member> members() throws IOException {
+    @Override
+    public List<Member> members() throws IOException {
         return run("list members", c -> {
             List<Member> result = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("select origin, name, url, heartbeat_at, started_at,"
@@ -1241,7 +1218,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        result.add(new Member(rs.getString(1), rs.getString(2), rs.getString(3),
+                        result.add(new ClusterStore.Member(rs.getString(1), rs.getString(2), rs.getString(3),
                                 rs.getTimestamp(4).getTime(), rs.getTimestamp(5).getTime(), rs.getBoolean(6), rs.getString(7), rs.getInt(8), rs.getString(9), rs.getString(10)));
                     }
                 }
@@ -1252,7 +1229,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     /** How many shared-queue items are in each state ({@code WAITING}, {@code CLAIMED}), for the cluster view. */
     @NonNull
-    Map<String, Integer> queueCounts() throws IOException {
+    @Override
+    public Map<String, Integer> queueCounts() throws IOException {
         return run("count queue items", c -> {
             Map<String, Integer> result = new java.util.TreeMap<>();
             try (PreparedStatement ps = c.prepareStatement(
@@ -1268,7 +1246,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     /** Running-build placeholders, by key, with their content (Target 8 cluster view). */
     @NonNull
-    Map<String, byte[]> runningPlaceholders() throws IOException {
+    @Override
+    public Map<String, byte[]> runningPlaceholders() throws IOException {
         return run("list running builds", c -> {
             Map<String, byte[]> result = new TreeMap<>();
             try (PreparedStatement ps = c.prepareStatement(
@@ -1285,7 +1264,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     /** Agent channels and the name of the controller holding each (Target 8 cluster view). */
     @NonNull
-    Map<String, String> channels() throws IOException {
+    @Override
+    public Map<String, String> channels() throws IOException {
         return run("list channels", c -> {
             Map<String, String> result = new TreeMap<>();
             try (PreparedStatement ps = c.prepareStatement("select ch.agent, coalesce(m.name, ch.origin) from jenkins_channels ch"
@@ -1309,7 +1289,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * @param caps scope → cap
      * @return false, changing nothing, if a cap would be exceeded
      */
-    boolean addWithinCaps(@NonNull Map<String, Integer> caps, int delta) throws IOException {
+    @Override
+    public boolean addWithinCaps(@NonNull Map<String, Integer> caps, int delta) throws IOException {
         return run("count " + caps.keySet(), c -> {
             try (Statement s = c.createStatement()) {
                 s.execute("select pg_advisory_xact_lock(" + COUNTERS_LOCK + ")");
@@ -1337,7 +1318,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     /** Subtracts from this controller's share of each scope, not below zero. */
-    void subtractFromCounters(@NonNull Set<String> scopes, int delta) throws IOException {
+    @Override
+    public void subtractFromCounters(@NonNull Set<String> scopes, int delta) throws IOException {
         run("release " + scopes, c -> {
             for (String scope : scopes) {
                 addToCounter(c, scope, -delta);
@@ -1381,7 +1363,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     /** Records that this controller now holds the channel of an agent (Target 7). */
-    void channelConnected(@NonNull String agent) throws IOException {
+    @Override
+    public void channelConnected(@NonNull String agent) throws IOException {
         run("record the channel of " + agent, c -> {
             try (PreparedStatement ps = c.prepareStatement("insert into jenkins_channels (agent, origin) values (?, ?)"
                     + " on conflict (agent) do update set origin = excluded.origin, since = now()")) {
@@ -1394,7 +1377,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
     }
 
     /** Records that this controller no longer holds the channel of an agent, unless another one took it meanwhile. */
-    void channelDisconnected(@NonNull String agent) throws IOException {
+    @Override
+    public void channelDisconnected(@NonNull String agent) throws IOException {
         run("forget the channel of " + agent, c -> {
             try (PreparedStatement ps = c.prepareStatement("delete from jenkins_channels where agent = ? and origin = ?")) {
                 ps.setString(1, agent);
@@ -1411,7 +1395,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * @return its name and internal URL, or null
      */
     @CheckForNull
-    String[] channelHolder(@NonNull String agent) throws IOException {
+    @Override
+    public String[] channelHolder(@NonNull String agent) throws IOException {
         return run("look up the channel of " + agent, c -> {
             try (PreparedStatement ps = c.prepareStatement("select m.name, m.url, m.origin from jenkins_channels ch"
                     + " join jenkins_members m on m.origin = ch.origin"
@@ -1434,7 +1419,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * @return null if that controller is not alive
      */
     @CheckForNull
-    String urlOfOrigin(@NonNull String memberOrigin) throws IOException {
+    @Override
+    public String urlOfOrigin(@NonNull String memberOrigin) throws IOException {
         return run("look up controller " + memberOrigin, c -> {
             try (PreparedStatement ps = c.prepareStatement("select url from jenkins_members where origin = ?"
                     + " and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + "")) {
@@ -1451,6 +1437,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      * Origins of controllers whose heartbeat is recent, always including this one.
      */
     @NonNull
+    @Override
     public Set<String> aliveMembers() throws IOException {
         try {
             return withControl(c -> {
@@ -1474,7 +1461,8 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
 
     /** The origin which claimed the latest tick of a trigger of an item (Target 15: whose log of it is the latest), or null. */
     @CheckForNull
-    String lastClaimant(@NonNull String item, @NonNull String trigger) throws IOException {
+    @Override
+    public String lastClaimant(@NonNull String item, @NonNull String trigger) throws IOException {
         return run("look up the last claim of " + trigger + " of " + item, c -> {
             try (PreparedStatement ps = c.prepareStatement(
                     "select origin from jenkins_trigger_claims where item = ? and trigger = ? order by tick desc limit 1")) {
@@ -1492,6 +1480,7 @@ public class PostgresPersistenceStore implements PersistenceStore, AutoCloseable
      *
      * @return true if this controller is the first (and only) one to claim it
      */
+    @Override
     public boolean claim(@NonNull String item, @NonNull String trigger, long tick) throws IOException {
         try {
             return withTransaction(c -> {

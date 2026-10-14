@@ -250,8 +250,8 @@ public final class ClusterPlugins {
     private static volatile boolean restarting;
 
     @CheckForNull
-    private static PostgresPersistenceStore store() {
-        return PersistenceStores.get() instanceof PostgresPersistenceStore s ? s : null;
+    private static ClusterStore store() {
+        return PersistenceStores.get() instanceof ClusterStore s ? s : null;
     }
 
     static boolean active() {
@@ -260,7 +260,7 @@ public final class ClusterPlugins {
 
     @Initializer(after = InitMilestone.JOB_LOADED)
     public static void start() {
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         if (store == null || !active()) {
             return;
         }
@@ -301,7 +301,7 @@ public final class ClusterPlugins {
             }
             marker(name, true);
             staged.put(name, version);
-            record(name, new Entry(State.installed, version, sha256, blob, PostgresPersistenceStore.NAME, System.currentTimeMillis()));
+            record(name, new Entry(State.installed, version, sha256, blob, ClusterMember.NAME, System.currentTimeMillis()));
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.WARNING, "Could not share the installation of " + archive + " with the cluster", e);
         }
@@ -317,8 +317,8 @@ public final class ClusterPlugins {
             long now = System.currentTimeMillis();
             Entry entry = state == State.installed && previous != null && previous.blob() != null
                     // enabling a plugin the cluster installed: keep its archive
-                    ? new Entry(State.installed, previous.version(), previous.sha256(), previous.blob(), PostgresPersistenceStore.NAME, now)
-                    : new Entry(state, null, null, null, PostgresPersistenceStore.NAME, now);
+                    ? new Entry(State.installed, previous.version(), previous.sha256(), previous.blob(), ClusterMember.NAME, now)
+                    : new Entry(state, null, null, null, ClusterMember.NAME, now);
             staged.put(name, state.name());
             record(name, entry);
         } catch (IOException | RuntimeException e) {
@@ -327,7 +327,7 @@ public final class ClusterPlugins {
     }
 
     private static void record(String name, Entry entry) throws IOException {
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         for (int attempt = 0; ; attempt++) {
             PersistenceStore.Entry current = store.read(KEY);
             Overlay next = Overlay.parse(current == null ? null : current.content()).with(name, entry);
@@ -354,7 +354,7 @@ public final class ClusterPlugins {
     // ------------------------------------------------------------------ apply (every controller)
 
     static synchronized void reconcile() {
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         if (store == null || !active() || restarting) {
             return;
         }
@@ -386,7 +386,7 @@ public final class ClusterPlugins {
             }
             appliedGeneration = overlay.generation();
             restartPending = restart;
-            PostgresPersistenceStore.pluginsStatus = status(appliedGeneration, restart, restartRefused, null, failed);
+            ClusterMember.pluginsStatus = status(appliedGeneration, restart, restartRefused, null, failed);
             if (restart) {
                 requestRestart(store, overlay.generation());
             } else {
@@ -419,7 +419,7 @@ public final class ClusterPlugins {
         String stagedAs = staged.get(name);
         if (action != Action.NONE && !(stagedAs != null && stagedAs.equals(desired.version() != null ? desired.version() : desired.state().name()))) {
             LOGGER.info(() -> "Applying the cluster's plugin set: " + name + " " + action + (desired.version() == null ? "" : " " + desired.version()));
-            PostgresPersistenceStore.pluginsStatus = status(appliedGeneration, restartPending, restartRefused, name, java.util.List.of());
+            ClusterMember.pluginsStatus = status(appliedGeneration, restartPending, restartRefused, name, java.util.List.of());
             switch (action) {
                 case LOAD, REPLACE -> {
                     File target = new File(pm.rootDir, name + ".jpi");
@@ -528,7 +528,7 @@ public final class ClusterPlugins {
 
     // ------------------------------------------------------------------ rolling restarts
 
-    private static void requestRestart(PostgresPersistenceStore store, long generation) throws IOException {
+    private static void requestRestart(ClusterStore store, long generation) throws IOException {
         File guard = new File(Jenkins.get().getPluginManager().rootDir, RESTARTED_FOR);
         if (guard.isFile() && Files.readString(guard.toPath()).trim().equals(String.valueOf(generation))) {
             if (!restartRefused) {
@@ -543,7 +543,7 @@ public final class ClusterPlugins {
         PersistenceStore.Entry lock = store.read(RESTART_KEY);
         if (lock != null) {
             JSONObject holder = JSONObject.fromObject(new String(lock.content(), StandardCharsets.UTF_8));
-            if (PostgresPersistenceStore.NAME.equals(holder.optString("name"))) {
+            if (ClusterMember.NAME.equals(holder.optString("name"))) {
                 if (!store.getOrigin().equals(holder.optString("origin"))) {
                     store.delete(RESTART_KEY, lock.version()); // ours from before a restart: take it again below
                     lock = null;
@@ -562,7 +562,7 @@ public final class ClusterPlugins {
             }
         }
         JSONObject me = new JSONObject();
-        me.put("name", PostgresPersistenceStore.NAME);
+        me.put("name", ClusterMember.NAME);
         me.put("origin", store.getOrigin());
         me.put("since", System.currentTimeMillis());
         me.put("generation", generation);
@@ -606,11 +606,11 @@ public final class ClusterPlugins {
         }
     }
 
-    private static void releaseLock(PostgresPersistenceStore store) throws IOException {
+    private static void releaseLock(ClusterStore store) throws IOException {
         PersistenceStore.Entry lock = store.read(RESTART_KEY);
         if (lock != null) {
             JSONObject holder = JSONObject.fromObject(new String(lock.content(), StandardCharsets.UTF_8));
-            if (PostgresPersistenceStore.NAME.equals(holder.optString("name"))) {
+            if (ClusterMember.NAME.equals(holder.optString("name"))) {
                 try {
                     store.delete(RESTART_KEY, lock.version());
                     LOGGER.info("Released the plugin restart lock: this controller is up to date with the cluster's plugin set");

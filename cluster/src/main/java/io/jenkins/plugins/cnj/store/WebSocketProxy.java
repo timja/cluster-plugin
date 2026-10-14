@@ -70,7 +70,7 @@ final class WebSocketProxy {
                 }
             }
         }
-        b.header(Forwarding.FORWARDED, PostgresPersistenceStore.NAME);
+        b.header(Forwarding.FORWARDED, ClusterMember.NAME);
         String protocols = req.getHeader("Sec-WebSocket-Protocol");
         if (protocols != null && !protocols.isBlank()) {
             String[] p = protocols.split("\\s*,\\s*");

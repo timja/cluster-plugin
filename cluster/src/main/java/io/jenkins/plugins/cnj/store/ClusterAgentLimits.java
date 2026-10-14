@@ -30,7 +30,7 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
 
     @Override
     public boolean register(String cloudName, int containerCap, String templateId, int instanceCap, int numExecutors) {
-        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return true;
         }
         Map<String, Integer> caps = new LinkedHashMap<>();
@@ -46,7 +46,7 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
 
     @Override
     public void unregister(String cloudName, String templateId, int numExecutors) {
-        if (PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+        if (PersistenceStores.get() instanceof ClusterStore store) {
             try {
                 store.subtractFromCounters(Set.of(cloudScope(cloudName), templateScope(cloudName, templateId)), numExecutors);
             } catch (IOException e) {

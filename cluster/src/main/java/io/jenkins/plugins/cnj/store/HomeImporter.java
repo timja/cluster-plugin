@@ -56,7 +56,7 @@ public final class HomeImporter {
      * Configuration and fingerprints: as the store is created, before anything can read from it, so that Jenkins loads
      * them from the store (an initialiser would race with loading the global configuration).
      */
-    static void importFiles(PostgresPersistenceStore store) throws IOException {
+    static void importFiles(ClusterStore store) throws IOException {
         if (!IMPORT) {
             return;
         }
@@ -99,7 +99,7 @@ public final class HomeImporter {
     /** Completed builds, once jobs are loaded: records and snapshots (T3), and Pipeline logs into their blobs. */
     @Initializer(after = InitMilestone.JOB_CONFIG_ADAPTED)
     public static void importBuilds() throws IOException {
-        if (!IMPORT || !(PersistenceStores.get() instanceof PostgresPersistenceStore)) {
+        if (!IMPORT || !(PersistenceStores.get() instanceof ClusterStore)) {
             return;
         }
         int builds = 0;
@@ -137,17 +137,28 @@ public final class HomeImporter {
 
     /** A Pipeline log kept in append blobs (T3): upload the old log and its index if the blobs are not there. */
     private static void importLog(Run<?, ?> run) throws IOException {
-        AzureBlobStore blobs = BlobLogStorage.blobs();
+        ClusterBlobStore blobs = BlobLogStorage.blobs();
         String key = BlobLogStorage.buildKey(run.getRootDir());
         if (blobs == null || key == null) {
             return;
         }
         for (String name : List.of(BlobLogStorage.LOG, BlobLogStorage.INDEX)) {
             File local = new File(run.getRootDir(), name);
-            if (local.isFile() && blobs.size(key + "/" + name) == 0) {
+            String log = key + "/" + name;
+            if (local.isFile() && blobs.logs().size(log) == 0) {
+                // appended as a log is shipped, so that the backend stores it as it stores logs
+                byte[] buf = new byte[4 * 1024 * 1024];
+                long position = 0;
                 try (InputStream in = new FileInputStream(local)) {
-                    blobs.put(key + "/" + name, in, local.length());
+                    int n;
+                    while ((n = in.readNBytes(buf, 0, buf.length)) > 0) {
+                        if (!blobs.logs().appendAt(log, buf, 0, n, position)) {
+                            throw new IOException("The log of " + run + " was written to meanwhile");
+                        }
+                        position += n;
+                    }
                 }
+                blobs.logs().complete(log);
             }
         }
     }

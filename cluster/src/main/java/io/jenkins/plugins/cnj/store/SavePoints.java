@@ -206,7 +206,7 @@ public final class SavePoints {
     }
 
     private static void shipLocked(State st) throws IOException {
-        AzureBlobStore blobs = BlobLogStorage.blobs();
+        ClusterBlobStore blobs = BlobLogStorage.blobs();
         Pending p;
         synchronized (st) {
             p = st.pending;
@@ -215,7 +215,7 @@ public final class SavePoints {
         if (p == null || st.stopped || blobs == null) {
             return;
         }
-        if (jenkins.persistence.PersistenceStores.get() instanceof PostgresPersistenceStore store
+        if (jenkins.persistence.PersistenceStores.get() instanceof ClusterStore store
                 && store.mayHaveLapsed()) {
             // e.g. just woke from a pause: another controller may own the build by now; ship once the heartbeat is back
             synchronized (st) {
@@ -289,7 +289,7 @@ public final class SavePoints {
      * A fenced owner (e.g. one woken from a pause) may have uploaded flow nodes after the new owner completed the build
      * and deleted its save points: once the build has no running placeholder any more, nothing needs them.
      */
-    private static void deleteIfCompleted(AzureBlobStore blobs, State st) {
+    private static void deleteIfCompleted(ClusterBlobStore blobs, State st) {
         try {
             String placeholder = PersistenceStores.keyFor(st.run.getParent().getRootDir()) + "/running/" + st.run.getNumber() + ".xml";
             if (PersistenceStores.get().read(placeholder) == null) {
@@ -300,7 +300,7 @@ public final class SavePoints {
         }
     }
 
-    private static void put(AzureBlobStore blobs, String key, byte[] content) throws IOException {
+    private static void put(ClusterBlobStore blobs, String key, byte[] content) throws IOException {
         blobs.put(key, new ByteArrayInputStream(content), content.length);
     }
 
@@ -322,7 +322,7 @@ public final class SavePoints {
                     // wait for a save point shipping meanwhile (e.g. a build adopted moments before it completed)
                 }
             }
-            AzureBlobStore blobs = BlobLogStorage.blobs();
+            ClusterBlobStore blobs = BlobLogStorage.blobs();
             if (blobs != null && RunningBuilds.owns(run)) { // a new owner still needs them otherwise
                 try {
                     blobs.delete(base);

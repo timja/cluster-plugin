@@ -57,7 +57,7 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
         if (url == null) {
             return null;
         }
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(STARTUP_WAIT_SECONDS);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
         long delay = 1000;
         while (true) {
             PostgresPersistenceStore store = null;
@@ -109,9 +109,6 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
             }
         }
     }
-
-    /** How long a starting controller waits for its persistence store (and blob store) before failing to start. */
-    static final long STARTUP_WAIT_SECONDS = Long.getLong(PostgresPersistenceStoreProvider.class.getPackageName() + ".startupWaitSeconds", 600);
 
     @CheckForNull
     private static String setting(String property, String env) {

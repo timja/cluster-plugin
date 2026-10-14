@@ -40,7 +40,7 @@ public class PostgresTriggerCoordinator implements TriggerCoordinator {
 
     @Override
     public boolean shouldRun(@NonNull TriggeredItem item, @NonNull Trigger<?> trigger, @NonNull Calendar tick) {
-        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return true;
         }
         String fullName = item.getFullName();
@@ -60,7 +60,7 @@ public class PostgresTriggerCoordinator implements TriggerCoordinator {
         }
     }
 
-    private synchronized Set<String> members(PostgresPersistenceStore store) throws IOException {
+    private synchronized Set<String> members(ClusterStore store) throws IOException {
         long now = System.currentTimeMillis();
         if (members == null || now - membersFetched > MEMBERS_CACHE_MILLIS) {
             members = store.aliveMembers();
@@ -93,7 +93,7 @@ public class PostgresTriggerCoordinator implements TriggerCoordinator {
      * For diagnostics (script console): the origin that owns an item now, according to this controller.
      */
     public static String currentOwnerOf(String fullName) throws IOException {
-        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore store)) {
+        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return null;
         }
         return ownerOf(topLevel(fullName), store.aliveMembers());

@@ -86,7 +86,7 @@ final class Forwarding {
                 }
             }
         }
-        b.header(FORWARDED, PostgresPersistenceStore.NAME);
+        b.header(FORWARDED, ClusterMember.NAME);
         byte[] body = body(req);
         b.method(req.getMethod(), body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
         HttpResponse<InputStream> r;

@@ -163,12 +163,12 @@ public final class OwnerRoutingFilter implements Filter {
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
         if (response instanceof HttpServletResponse r) {
-            r.setHeader(SERVED_BY, PostgresPersistenceStore.NAME); // a forwarded answer overrides it with the owner's
+            r.setHeader(SERVED_BY, ClusterMember.NAME); // a forwarded answer overrides it with the owner's
         }
         if (request instanceof HttpServletRequest req
                 && response instanceof HttpServletResponse rsp
                 && !Forwarding.wasForwarded(req)
-                && PersistenceStores.get() instanceof PostgresPersistenceStore store) {
+                && PersistenceStores.get() instanceof ClusterStore store) {
             String path = req.getRequestURI().substring(req.getContextPath().length());
             try {
                 BuildPath build = buildPath(path);

@@ -124,8 +124,8 @@ public final class ClusterUpdateSites implements Filter {
     // ------------------------------------------------------------------ lifecycle
 
     @CheckForNull
-    private static PostgresPersistenceStore store() {
-        return PersistenceStores.get() instanceof PostgresPersistenceStore s ? s : null;
+    private static ClusterStore store() {
+        return PersistenceStores.get() instanceof ClusterStore s ? s : null;
     }
 
     static boolean active() {
@@ -148,7 +148,7 @@ public final class ClusterUpdateSites implements Filter {
 
     @Initializer(after = InitMilestone.JOB_LOADED)
     public static void start() {
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         if (store == null || !active()) {
             return;
         }
@@ -189,7 +189,7 @@ public final class ClusterUpdateSites implements Filter {
      * Takes newer files from the cluster and, if {@code publish}, shares local files newer than the cluster's.
      */
     static synchronized void sync(boolean publish) {
-        PostgresPersistenceStore store = store();
+        ClusterStore store = store();
         if (store == null || !active()) {
             return;
         }
@@ -255,7 +255,7 @@ public final class ClusterUpdateSites implements Filter {
         }
     }
 
-    private static void publish(PostgresPersistenceStore store, File local) throws IOException {
+    private static void publish(ClusterStore store, File local) throws IOException {
         String name = local.getName();
         long timestamp = local.lastModified();
         String sha256 = ClusterPlugins.sha256(local);
@@ -277,8 +277,8 @@ public final class ClusterUpdateSites implements Filter {
                 uploaded = true;
             }
             Shared next = sameContent
-                    ? new Shared(timestamp, sha256, previous.blob(), previous.previousBlob(), PostgresPersistenceStore.NAME)
-                    : new Shared(timestamp, sha256, blob, previous == null ? null : previous.blob(), PostgresPersistenceStore.NAME);
+                    ? new Shared(timestamp, sha256, previous.blob(), previous.previousBlob(), ClusterMember.NAME)
+                    : new Shared(timestamp, sha256, blob, previous == null ? null : previous.blob(), ClusterMember.NAME);
             files.put(name, next);
             try {
                 store.write(KEY, toBytes(files), current == null ? PersistenceStore.ABSENT : current.version());

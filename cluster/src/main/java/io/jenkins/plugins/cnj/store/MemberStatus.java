@@ -20,7 +20,7 @@ import net.sf.json.JSONObject;
 
 /**
  * What each controller reports to the cluster besides being alive (Target 15), published with every heartbeat as
- * {@link PostgresPersistenceStore#memberInfo}: its executors (busy and total, per agent it holds) for the cluster view,
+ * {@link ClusterMember#memberInfo}: its executors (busy and total, per agent it holds) for the cluster view,
  * and its update-center install jobs, so that the install progress page is answered by the controller running them
  * ({@link UpdateCenterRouting}).
  *
@@ -84,7 +84,7 @@ public final class MemberStatus {
 
     @Initializer(after = InitMilestone.JOB_LOADED)
     public static void start() {
-        if (!(PersistenceStores.get() instanceof PostgresPersistenceStore)) {
+        if (!(PersistenceStores.get() instanceof ClusterStore)) {
             return;
         }
         Timer.get().scheduleWithFixedDelay(MemberStatus::publish, 0, 2, TimeUnit.SECONDS);
@@ -92,7 +92,7 @@ public final class MemberStatus {
 
     static void publish() {
         try {
-            PostgresPersistenceStore.memberInfo = compute().toJson();
+            ClusterMember.memberInfo = compute().toJson();
         } catch (RuntimeException e) {
             LOGGER.log(Level.FINE, "Could not compute this controller's status", e);
         }

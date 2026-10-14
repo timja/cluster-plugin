@@ -116,7 +116,7 @@ public final class ClusterPluginSet implements Filter {
             throws IOException, ServletException {
         if (!(request instanceof HttpServletRequest req)
                 || !(response instanceof HttpServletResponse rsp)
-                || !(PersistenceStores.get() instanceof PostgresPersistenceStore)) {
+                || !(PersistenceStores.get() instanceof ClusterStore)) {
             chain.doFilter(request, response);
             return;
         }

@@ -42,7 +42,7 @@ public final class WebSocketEcho implements Action {
         return WebSockets.upgrade(new WebSocketSession() {
             @Override
             protected void text(String message) throws IOException {
-                sendText(message + " from " + PostgresPersistenceStore.NAME);
+                sendText(message + " from " + ClusterMember.NAME);
             }
         });
     }
