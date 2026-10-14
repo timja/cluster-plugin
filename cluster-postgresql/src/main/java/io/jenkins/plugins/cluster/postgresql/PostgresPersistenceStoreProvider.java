@@ -34,12 +34,12 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
                     + "|promotions/[^/]+/config\\.xml|configurations(/[^/]+/[^/]+)+/config\\.xml)");
 
     /**
-     * Static state (Target 6): global configuration and descriptors at the root, users, nodes.
+     * Static state (Target 6): global configuration and descriptors at the root, users, nodes, log recorders.
      * Per-controller files at the root are excluded, as are files mixing configuration with runtime state:
      * lockable-resources' (declared resources with each controller's waiting builds; Target 5 shares its locks).
      */
     static final Pattern STATIC = Pattern.compile(
-            "users/[^/]+/config\\.xml|nodes/[^/]+/config\\.xml"
+            "users/[^/]+/config\\.xml|nodes/[^/]+/config\\.xml|log/[^/]+\\.xml"
                     + "|(?!queue\\.xml$|nodeMonitors\\.xml$|hudson\\.model\\.UpdateCenter\\.xml$|jenkins\\.install\\.|.*FlowExecutionList\\.xml$"
                     + "|org\\.jenkins\\.plugins\\.lockableresources\\.LockableResourcesManager\\.xml$)[^/]+\\.xml");
 

@@ -17,6 +17,7 @@ class StaticStateOwnershipTest {
             "jenkins.model.JenkinsLocationConfiguration.xml",
             "users/alice_0123abcd/config.xml",
             "nodes/agent1/config.xml",
+            "log/my-recorder.xml",
             "jobs/p/config.xml"
         }) {
             assertTrue(PostgresPersistenceStoreProvider.owns(shared), shared);
@@ -30,7 +31,8 @@ class StaticStateOwnershipTest {
             "org.jenkins.plugins.lockableresources.LockableResourcesManager.xml",
             "users/alice_0123abcd/apiTokenStats.xml",
             "secrets/master.key",
-            "jobs/p/builds/1/build.xml"
+            "jobs/p/builds/1/build.xml",
+            "log/nested/recorder.xml"
         }) {
             assertFalse(PostgresPersistenceStoreProvider.owns(local), local);
         }

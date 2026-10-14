@@ -154,6 +154,18 @@ info "10 result $final, conflicting writes detected: $conflicts"
 check "10 both changes survive, or the overwrite was detected" bash -c "[[ '$final' == 9/4 || $conflicts -gt 0 ]]"
 check "10 A and B agree on the result" eventually 5 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $B 'println Jenkins.get().quietPeriod + \"/\" + Jenkins.get().scmCheckoutRetryCount' | tr -d '\r' | sed 's/[[:space:]]*\$//') == \$(cd $VALIDATION_DIR && source lib.sh && groovy $A 'println Jenkins.get().quietPeriod + \"/\" + Jenkins.get().scmCheckoutRetryCount' | tr -d '\r' | sed 's/[[:space:]]*\$//') ]]"
 
+# ------------------------------------------------------------------ 11. log recorders
+log "scenario 11: log recorders made, changed and deleted on A"
+REC='def rec(n) { Jenkins.get().log.recorders.find { it.name == n } }; '
+g $A 'def r = new hudson.logging.LogRecorder("et6-rec"); r.setLoggers([new hudson.logging.LogRecorder.Target("io.jenkins.plugins.cluster", "FINE")]); Jenkins.get().log.recorders.add(r); r.save()
+def d = new hudson.logging.LogRecorder("et6-gone"); Jenkins.get().log.recorders.add(d); d.save()' >/dev/null
+check "11 a recorder made on A is on B, with its logger" eventually 10 g_is $B "${REC}"'println rec("et6-rec")?.loggers?.collect { it.name + "@" + it.level }' '[io.jenkins.plugins.cluster@FINE]'
+check "11 B records with it: its logger is at FINE on B" g_is $B 'println java.util.logging.Logger.getLogger("io.jenkins.plugins.cluster").level' FINE
+g $A "${REC}"'def r = rec("et6-rec"); r.setLoggers(r.loggers + [new hudson.logging.LogRecorder.Target("hudson.model.Queue", "FINER")]); r.save()' >/dev/null
+check "11 a logger added on A is on B" eventually 10 g_is $B "${REC}"'println rec("et6-rec")?.loggers?.collect { it.name }?.sort()' '[hudson.model.Queue, io.jenkins.plugins.cluster]'
+g $A "${REC}"'rec("et6-gone").delete()' >/dev/null
+check "11 a recorder deleted on A is gone on B" eventually 10 g_is $B "${REC}"'println rec("et6-gone") == null && rec("et6-rec") != null' true
+
 # ------------------------------------------------------------------ 8. stateless browser journey through the round-robin LB
 log "scenario 8: a browser through the round-robin LB, then losing A"
 g $A 'Jenkins.get().securityRealm.createAccount("u3", "u3-password-1")' >/dev/null
@@ -189,6 +201,8 @@ check "7 the descriptor setting survives (B)" g_is $B 'println jenkins.model.Jen
 check "7 the credential survives (B)" g_is $B 'println com.cloudbees.plugins.credentials.SystemCredentialsProvider.getInstance().getCredentials().collect { it.id }.contains("s1")' true
 check "7 the UI-added node survives, the deleted one stays deleted" g_is $A 'println (Jenkins.get().getNode("n7") != null && Jenkins.get().getNode("n6") == null)' true
 check "7 the runtime key survives" g_is $B 'println new jenkins.security.HMACConfidentialKey("et6.runtime.key").mac("x")' "$mac_a"
+check "7 the log recorder survives, with both loggers (A)" g_is $A "${REC}"'println rec("et6-rec")?.loggers?.collect { it.name }?.sort()' '[hudson.model.Queue, io.jenkins.plugins.cluster]'
+check "7 the deleted log recorder stays deleted (B)" g_is $B "${REC}"'println rec("et6-gone") == null' true
 
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
 psql_q "select key, version, length(content) from jenkins_store where key not like 'jobs/%' order by key" > "$OUT/static-keys.txt"
