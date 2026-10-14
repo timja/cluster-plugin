@@ -1,0 +1,15 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core">
+  <div class="jenkins-alert jenkins-alert-warning">
+    <j:choose>
+      <j:when test="${it.refused}">
+        This controller restarted once for generation ${it.generation} of the cluster's plugin set, and its plugins still differ from it.
+        It will not restart again for it: see the log of <code>io.jenkins.plugins.cluster.ClusterPlugins</code>, fix the plugin, or restart it by hand.
+      </j:when>
+      <j:otherwise>
+        This controller restarts to apply the cluster's plugin changes (generation ${it.generation}) once it is its turn and it is idle;
+        controllers restart one at a time.
+      </j:otherwise>
+    </j:choose>
+  </div>
+</j:jelly>

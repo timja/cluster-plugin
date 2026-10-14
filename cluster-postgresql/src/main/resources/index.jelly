@@ -1,0 +1,1 @@
+<?jelly escape-by-default=true?><div>Keeps the shared state of a Jenkins cluster (configuration, build records, membership, the queue) in PostgreSQL.</div>

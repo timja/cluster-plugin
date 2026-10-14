@@ -1,0 +1,1 @@
+<?jelly escape-by-default=true?><div>Keeps the large files of a Jenkins cluster (build snapshots, Pipeline logs and save points, plugin archives) in Amazon S3 or an S3-compatible object store.</div>

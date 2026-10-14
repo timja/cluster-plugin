@@ -1,0 +1,10 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core">
+  <div class="jenkins-alert jenkins-alert-danger">
+    <p>No artifact manager is configured. In a cluster, artifacts and stashes must be kept in shared storage: without
+      it, they stay on the controller that made them, so a build adopted by another controller loses its stashes, and a
+      fresh controller lacks the artifacts of earlier builds. Configure one under
+      <a href="${rootURL}/manage/configure">System</a> (Artifact Management for Builds), for example azure-artifact-manager or artifact-manager-s3
+      with the cluster's container or bucket.</p>
+  </div>
+</j:jelly>

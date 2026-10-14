@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/maven-v4_0_0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.jenkins.plugins</groupId>
+  <artifactId>cluster-aggregator</artifactId>
+  <version>999999-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>Cluster plugins (build of all)</name>
+  <modules>
+    <module>cluster</module>
+    <module>cluster-postgresql</module>
+    <module>cluster-azure-blob</module>
+    <module>cluster-s3</module>
+  </modules>
+</project>

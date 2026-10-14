@@ -1,0 +1,8 @@
+/* the progress page's "restart when done": the cluster restarts its controllers by itself, one at a time */
+#scheduleRestartBlock {
+  display: none;
+}
+
+.jenkins-cluster-plugins__status table {
+  margin-bottom: 0;
+}
