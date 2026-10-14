@@ -12,7 +12,27 @@ if (!account) {
     return
 }
 def provider = SystemCredentialsProvider.getInstance()
-if (provider.getCredentials().any { it.hasProperty('id') && it.id == 'cluster-blob' }) {
+def existing = provider.getCredentials().findAll { it.hasProperty('id') && it.id == 'cluster-blob' }
+if (existing.size() > 1) {
+    // left by controllers which started together before only one made it: keep one
+    existing.drop(1).each { provider.getCredentials().remove(it) }
+    provider.save()
+    println "cluster: removed ${existing.size() - 1} duplicate(s) of the blob storage credential cluster-blob"
+}
+if (!existing.isEmpty()) {
+    return
+}
+// controllers starting together would each find it absent and each add it (the credentials file is merged, so all
+// additions are kept): only the one that claims making it does; the others get it when they apply that change
+def cluster = null
+try {
+    cluster = Jenkins.get().pluginManager.uberClassLoader.loadClass('io.jenkins.plugins.cluster.spi.ClusterStore').get()
+} catch (ClassNotFoundException ignored) {
+    // not a cluster: make it here
+}
+// claimed per 10 minutes: should the controller making it die first, a later start makes it
+if (cluster != null && !cluster.claim('_init', 'cluster-blob-credential', (long) (System.currentTimeMillis() / 600_000))) {
+    println "cluster: another controller makes the blob storage credential cluster-blob"
     return
 }
 def cls = Jenkins.get().pluginManager.uberClassLoader.loadClass('com.microsoftopentechnologies.windowsazurestorage.helper.AzureStorageAccount')
