@@ -18,12 +18,12 @@ service:
 
 # The S0 key material (pre-plugin keys), identical for every controller: a Secret with a seed.tgz key,
 # made once with scripts/make-seed-secret.sh.
-seedSecret: cnj-seed
+seedSecret: cluster-seed
 
 # Configuration as code, identical for every controller. Settings not declared here are edited in the UI and shared.
 casc: |
   jenkins:
-    systemMessage: "cloud-native-jenkins on Kubernetes"
+    systemMessage: "Jenkins cluster on Kubernetes"
     numExecutors: 0
     securityRealm:
       local:
@@ -61,7 +61,7 @@ postgres:
   inChart: true
   image: postgres:16
   url: ""                # e.g. jdbc:postgresql://db.example.com:5432/jenkins when not in-chart
-  # appended to the URL, e.g. sslmode=verify-full&sslrootcert=/etc/cnj-db/root.crt (mount it with extraVolumes)
+  # appended to the URL, e.g. sslmode=verify-full&sslrootcert=/etc/cluster-db/root.crt (mount it with extraVolumes)
   urlParameters: ""
   user: jenkins
   password: jenkins
@@ -75,7 +75,7 @@ persistence:
 artifactManager:
   enabled: true
   prefix: "artifacts/"
-  # Its storage credential (id cnj-blob) is made at startup if absent, from CNJ_BLOB_ACCOUNT_NAME, CNJ_BLOB_ACCOUNT_KEY
+  # Its storage credential (id cluster-blob) is made at startup if absent, from CNJ_BLOB_ACCOUNT_NAME, CNJ_BLOB_ACCOUNT_KEY
   # and CNJ_BLOB_ENDPOINT (in the store Secret; set by the chart for in-chart Azurite). Not declared in JCasC: JCasC
   # replaces the system credentials it declares, on every controller that starts, and so cluster-wide.
   # When not in-chart: the storage account (its key as CNJ_BLOB_ACCOUNT_KEY in store.existingSecret)

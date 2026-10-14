@@ -2,13 +2,13 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "cnj.fullname" . }}-postgres
+  name: {{ include "cluster.fullname" . }}-postgres
 spec:
-  serviceName: {{ include "cnj.fullname" . }}-postgres
+  serviceName: {{ include "cluster.fullname" . }}-postgres
   replicas: 1
-  selector: {matchLabels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-postgres}}
+  selector: {matchLabels: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-postgres}}
   template:
-    metadata: {labels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-postgres}}
+    metadata: {labels: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-postgres}}
     spec:
       containers:
         - name: postgres
@@ -38,9 +38,9 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: {{ include "cnj.fullname" . }}-postgres}
+metadata: {name: {{ include "cluster.fullname" . }}-postgres}
 spec:
-  selector: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-postgres}
+  selector: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-postgres}
   ports: [{port: 5432, targetPort: 5432}]
 {{- end }}
 {{- if and (ne .Values.blob.type "s3") .Values.blob.inChart }}
@@ -48,13 +48,13 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "cnj.fullname" . }}-azurite
+  name: {{ include "cluster.fullname" . }}-azurite
 spec:
-  serviceName: {{ include "cnj.fullname" . }}-azurite
+  serviceName: {{ include "cluster.fullname" . }}-azurite
   replicas: 1
-  selector: {matchLabels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-azurite}}
+  selector: {matchLabels: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-azurite}}
   template:
-    metadata: {labels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-azurite}}
+    metadata: {labels: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-azurite}}
     spec:
       containers:
         - name: azurite
@@ -79,8 +79,8 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: {{ include "cnj.fullname" . }}-azurite}
+metadata: {name: {{ include "cluster.fullname" . }}-azurite}
 spec:
-  selector: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-azurite}
+  selector: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-azurite}
   ports: [{port: 10000, targetPort: 10000}]
 {{- end }}

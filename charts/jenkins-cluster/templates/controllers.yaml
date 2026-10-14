@@ -1,30 +1,30 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "cnj.fullname" . }}
+  name: {{ include "cluster.fullname" . }}
 spec:
-  serviceName: {{ include "cnj.fullname" . }}-headless
+  serviceName: {{ include "cluster.fullname" . }}-headless
   replicas: {{ .Values.controllers }}
   podManagementPolicy: Parallel
   selector:
-    matchLabels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-controller}
+    matchLabels: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-controller}
   template:
     metadata:
-      labels: {app.kubernetes.io/name: {{ include "cnj.fullname" . }}-controller}
+      labels: {app.kubernetes.io/name: {{ include "cluster.fullname" . }}-controller}
       annotations:
         checksum/casc: {{ include (print $.Template.BasePath "/configmap-casc.yaml") . | sha256sum }}
     spec:
-      serviceAccountName: {{ include "cnj.fullname" . }}
+      serviceAccountName: {{ include "cluster.fullname" . }}
       securityContext: {fsGroup: 1000}
       containers:
         - name: jenkins
           image: {{ .Values.image }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports: [{containerPort: 8080, name: http}]
-          envFrom: [{secretRef: {name: {{ .Values.store.existingSecret | default (printf "%s-store" (include "cnj.fullname" .)) }}}}]
+          envFrom: [{secretRef: {name: {{ .Values.store.existingSecret | default (printf "%s-store" (include "cluster.fullname" .)) }}}}]
           env:
             - {name: JENKINS_CLUSTER_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
-            - {name: JENKINS_CLUSTER_INTERNAL_URL, value: "http://$(JENKINS_CLUSTER_NAME).{{ include "cnj.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:8080/"}
+            - {name: JENKINS_CLUSTER_INTERNAL_URL, value: "http://$(JENKINS_CLUSTER_NAME).{{ include "cluster.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:8080/"}
             - {name: KUBERNETES_JENKINS_URL, value: "$(JENKINS_CLUSTER_INTERNAL_URL)"}
             - {name: CASC_JENKINS_CONFIG, value: /casc}
             - {name: CNJ_SEED_TGZ, value: /seed/seed.tgz}
@@ -56,5 +56,5 @@ spec:
             - {name: seed, mountPath: /seed, readOnly: true}
       volumes:
         - {name: home, emptyDir: {}}
-        - {name: casc, configMap: {name: {{ include "cnj.fullname" . }}-casc}}
+        - {name: casc, configMap: {name: {{ include "cluster.fullname" . }}-casc}}
         - {name: seed, secret: {secretName: {{ .Values.seedSecret }}}}

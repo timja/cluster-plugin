@@ -8,7 +8,7 @@
 # controllers booting at once all write the shared admin user); experiments/ET9-build-image.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj REL=cnj SVC=8095 OUT="$RAW_DIR/ET9" CHART="$ROOT_DIR/charts/cloud-native-jenkins"
+CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj REL=cnj SVC=8095 OUT="$RAW_DIR/ET9" CHART="$ROOT_DIR/charts/jenkins-cluster"
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
 r() { echo "$*" | tee -a "$OUT/results.md" >&2; }

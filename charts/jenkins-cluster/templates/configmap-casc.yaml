@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "cnj.fullname" . }}-casc
+  name: {{ include "cluster.fullname" . }}-casc
 data:
   base.yaml: |
 {{ .Values.casc | indent 4 }}
@@ -30,7 +30,7 @@ data:
               config:
                 container: {{ .Values.blob.container | quote }}
                 prefix: {{ .Values.artifactManager.prefix | quote }}
-                storageCredentialId: cnj-blob
+                storageCredentialId: cluster-blob
                 disableExternalUrl: true
 {{- end }}
 {{- end }}

@@ -141,7 +141,7 @@ info "9 versions before: $before; after: $after"
 check "9 B's boot (JCasC) bumped no versions of unchanged config" test "$before" = "$after"
 check "9 a setting JCasC does not declare keeps its runtime value" g_is $B 'println Jenkins.get().quietPeriod' 7
 check "9 a user created at runtime survives B's boot" status_is $B "u9:u9-password-1" 200
-check "9 JCasC's declared setting is still JCasC's" g_is $B 'println Jenkins.get().systemMessage' "cloud-native-jenkins ET1"
+check "9 JCasC's declared setting is still JCasC's" g_is $B 'println Jenkins.get().systemMessage' "Jenkins cluster ET1"
 check "9 the node added in the UI survives B's boot" g_is $B 'println Jenkins.get().getNode("n7") != null' true
 
 # ------------------------------------------------------------------ 10. concurrent edits

@@ -36,7 +36,7 @@ x-jenkins: &jenkins
     CLUSTER_POSTGRES_PASSWORD: jenkins
     # Target 3: build snapshots and Pipeline logs (Azurite's well-known development account)
     CLUSTER_AZURE_BLOB_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
-    # Target 15: the artifact manager's storage credential (cnj-blob), made at startup if absent (init.groovy.d)
+    # Target 15: the artifact manager's storage credential (cluster-blob), made at startup if absent (init.groovy.d)
     CNJ_BLOB_ACCOUNT_NAME: devstoreaccount1
     CNJ_BLOB_ACCOUNT_KEY: "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
     CNJ_BLOB_ENDPOINT: "http://azurite:10000/devstoreaccount1"

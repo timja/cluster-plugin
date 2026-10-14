@@ -6,7 +6,7 @@
 # Prerequisites: CORE_REF=cnj/t12-m1-remainder experiments/ET1-build.sh; experiments/ET9-build-image.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj-plugins REL=plug OUT="$RAW_DIR/ET13" CHART="$ROOT_DIR/charts/cloud-native-jenkins"
+CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj-plugins REL=plug OUT="$RAW_DIR/ET13" CHART="$ROOT_DIR/charts/jenkins-cluster"
 P=build-timeout OLD=1.40 DEP=token-macro
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"

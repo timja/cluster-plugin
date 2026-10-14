@@ -41,7 +41,7 @@ It needs, installed locally:
 - workflow-cps and kubernetes at `999999-SNAPSHOT`, from their `cnj/*` branches on the timja forks
 
 ## The Helm chart
-[`charts/cloud-native-jenkins`](charts/cloud-native-jenkins) runs a cluster of controllers on Kubernetes. It includes PostgreSQL, and blob storage set by `blob.type`:
+[`charts/jenkins-cluster`](charts/jenkins-cluster) runs a cluster of controllers on Kubernetes. It includes PostgreSQL, and blob storage set by `blob.type`:
 - `azure`: in-chart Azurite
 - `s3`: an external bucket
 

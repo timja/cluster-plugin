@@ -1,5 +1,5 @@
 #!/bin/bash
-# Backs up a cloud-native Jenkins release with in-chart Postgres and Azurite (Target 10): the database first, then the blob
+# Backs up a Jenkins cluster release with in-chart Postgres and Azurite (Target 10): the database first, then the blob
 # container. Blobs are written before the records referring to them, so a dump taken first never refers to a missing blob.
 # usage: backup.sh <namespace> <release> <directory>
 set -euo pipefail

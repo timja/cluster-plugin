@@ -127,7 +127,7 @@ cp "$HERE/../cluster-s3/target/cluster-s3.hpi" "$ET1/plugins-s3/"
   [[ -d "$JSQL" ]] && echo "junit-sql-storage $JSQL_REF $(git -C "$JSQL" rev-parse "$JSQL_REF")"
   [[ -d "$BAPI" ]] && echo "branch-api $BAPI_REF $(git -C "$BAPI" rev-parse "$BAPI_REF")"
   [[ -d "$CASC" ]] && echo "configuration-as-code $CASC_REF $(git -C "$CASC" rev-parse "$CASC_REF")"
-  echo "cloud-native-jenkins $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
+  echo "cluster-plugin $(git -C "$HERE" rev-parse HEAD)"; } > "$ET1/BUILD"
 cat "$ET1/BUILD"; ls -la "$ET1/war" "$ET1/plugins"
 
 echo "harness image (entrypoint installs .et1/plugins and the S0 seed)"
