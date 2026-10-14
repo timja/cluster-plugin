@@ -7,7 +7,7 @@
 # Prerequisite: CORE_REF=cnj/t14-m1-resilience experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 OUT="$RAW_DIR/ET14" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET14" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -85,14 +85,14 @@ history_on_a() { for j in p1 f1 p2 f2 p3 f3 q4 p5 f5; do [[ "$(result_on $A "/jo
 # ------------------------------------------------------------------ setup (as ET6)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1
 until et1 exec -T postgres pg_isready -U jenkins >/dev/null 2>&1; do sleep 1; done
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
@@ -105,13 +105,13 @@ r "|---|---|"
 # ------------------------------------------------------------------ 1. a short Postgres outage
 log "scenario 1: Postgres paused for 10 s while builds run"
 start_pair 1
-docker pause et1-postgres-1 >/dev/null; sleep 10; docker unpause et1-postgres-1 >/dev/null
+docker pause ${P}postgres-1 >/dev/null; sleep 10; docker unpause ${P}postgres-1 >/dev/null
 survived 1
 
 # ------------------------------------------------------------------ 2. a long Postgres outage
 log "scenario 2: Postgres paused for 60 s while builds run"
 start_pair 2
-docker pause et1-postgres-1 >/dev/null
+docker pause ${P}postgres-1 >/dev/null
 sleep 30
 for page in / /api/json /job/p2/ /login; do
   for port in $A $B; do
@@ -122,7 +122,7 @@ done
 info "2 pages during the outage (port, page, status, seconds): $(tr '\n' ';' < "$OUT/pages-during-outage.txt")"
 check "2 every page answered within 10 s during the outage (degraded, not hung)" bash -c "awk '\$3 != 200 || \$4 > 10 { bad = 1 } END { exit bad }' '$OUT/pages-during-outage.txt'"
 sleep 30
-docker unpause et1-postgres-1 >/dev/null
+docker unpause ${P}postgres-1 >/dev/null
 survived 2
 groovy $A 'Jenkins.get().setSystemMessage("after the outage")' >/dev/null || true
 check "2 a configuration change works after the outage, and reaches the other controller" eventually 30 system_message_reaches_b
@@ -136,10 +136,10 @@ survived 3
 # ------------------------------------------------------------------ 4. a build queued during an outage
 log "scenario 4: a build requested while Postgres is paused"
 freestyle q4 'echo queued during the outage'
-docker pause et1-postgres-1 >/dev/null
+docker pause ${P}postgres-1 >/dev/null
 qcode=0; post $B "/job/q4/build?delay=0sec" -m 20 >/dev/null 2>&1 || qcode=$?
 sleep 20
-docker unpause et1-postgres-1 >/dev/null
+docker unpause ${P}postgres-1 >/dev/null
 info "4 the build request during the outage: curl exit $qcode"
 check "4 it ran once the store was back" eventually 180 is_result /job/q4/1 SUCCESS
 sleep 20

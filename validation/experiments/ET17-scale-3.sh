@@ -10,7 +10,7 @@ source "$(dirname "$0")/../lib.sh"
 # three controllers in one Docker VM (8 GB, shared with whatever else runs): bounded heaps (it uses about 200 MB)
 export CNJ_JAVA_OPTS="${CNJ_JAVA_OPTS:-} -Xmx768m"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 C=8083 OUT="$RAW_DIR/ET17${KILL_AFTER:+-kill$KILL_AFTER}" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B C=$PORT_C OUT="$RAW_DIR/ET17${KILL_AFTER:+-kill$KILL_AFTER}" ET1="$ET1_DIR"
 HJOBS=${HJOBS:-10} PER=${PER:-20000} SNAPSHOTS=${SNAPSHOTS:-100} PROJECTS=${PROJECTS:-30} BRANCHES=${BRANCHES:-10}
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et17.yaml" --profile et17 "$@"; }
 # the third controller must not outlive this experiment (the others do not know its profile)
@@ -30,20 +30,20 @@ json() { curl -gsf -m 60 -u "$AUTH" "http://localhost:$1$2"; }
 jq_() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 heap() { docker exec "$1" sh -c 'jcmd $(pgrep -f jenkins.war | head -1) GC.heap_info' 2>/dev/null | grep -o 'used [0-9]*K' | head -1; }
 # the Docker VM's swap: a full one starves a restarting controller (seen: C not up in 600 s while kind also ran)
-vmswap() { docker exec et1-postgres-1 awk '/^Swap(Total|Free)/ { v[$1] = $2 } END { printf "%d of %d MiB", (v["SwapTotal:"] - v["SwapFree:"]) / 1024, v["SwapTotal:"] / 1024 }' /proc/meminfo 2>/dev/null; }
+vmswap() { docker exec ${P}postgres-1 awk '/^Swap(Total|Free)/ { v[$1] = $2 } END { printf "%d of %d MiB", (v["SwapTotal:"] - v["SwapFree:"]) / 1024, v["SwapTotal:"] / 1024 }' /proc/meminfo 2>/dev/null; }
 
 [[ -f "$ET1/war/jenkins.war" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
 
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b jenkins-c >/dev/null 2>&1
 wait_up $A; wait_up $B; wait_up $C
@@ -106,7 +106,7 @@ for p in $A $B $C; do
   api=$(seconds $p "/job/h1/api/json?tree=builds%5Bnumber%5D%7B0,50%7D")
   last=$(seconds $p /job/h1/lastSuccessfulBuild/api/json)
   newest=$(seconds $p /job/h1/$PER/consoleText)
-  info "2 controller on $p: job page cold $cold s, warm $warm s; builds{0,50} $api s; lastSuccessfulBuild $last s; newest console $newest s; heap $(heap et1-jenkins-$( [[ $p == $A ]] && echo a || ([[ $p == $B ]] && echo b || echo c))-1)"
+  info "2 controller on $p: job page cold $cold s, warm $warm s; builds{0,50} $api s; lastSuccessfulBuild $last s; newest console $newest s; heap $(heap ${P}jenkins-$( [[ $p == $A ]] && echo a || ([[ $p == $B ]] && echo b || echo c))-1)"
   check "2 $p: the warm job page with $PER builds under 2 s" under "$warm" 2
 done
 check "2 the job lists its newest build" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$C/job/h1/api/json?tree=lastBuild%5Bnumber%5D') == *'\"number\":$PER'* ]]"
@@ -139,7 +139,7 @@ c0=$(for p in $A $B $C; do groovy $p 'println jenkins.persistence.PersistenceSto
 start=$SECONDS
 for i in $(seq 1 $PROJECTS); do for p in $A $B $C; do curl -gs -u "$AUTH" -X POST "http://localhost:$p/job/mb$i/build?delay=0" -o /dev/null & done; done; wait
 sleep "${KILL_AFTER:-20}" # later kills catch more builds in flight
-docker kill -s KILL et1-jenkins-c-1 >/dev/null
+docker kill -s KILL ${P}jenkins-c-1 >/dev/null
 info "3 C killed $((SECONDS - start)) s into the storm; VM swap used $(vmswap)"
 want=$((PROJECTS * BRANCHES))
 branches_on() { groovy "$1" 'println Jenkins.get().allItems(org.jenkinsci.plugins.workflow.job.WorkflowJob).findAll { it.parent instanceof org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject }.size()' | tr -d '\r\n '; }
@@ -168,7 +168,7 @@ if ! built_once; then
       echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like '$b/%' order by key"
       echo "-- queue rows"; psql_q "select id || ' ' || state || ' origin=' || origin || ' claimed_by=' || coalesce(claimed_by, '-') || ' build=' || build_number || ' ' || updated_at from jenkins_queue where task like '%$m%$br%' order by id"
       echo "-- events"; psql_q "select seq || ' ' || kind || ' ' || key || ' ' || origin || ' ' || at from jenkins_store_events where key like '$b/%' order by seq"
-      for c in a b c; do echo "-- jenkins-$c log"; docker logs et1-jenkins-$c-1 2>&1 | grep -F "$m » $br" | head -20 || true; done
+      for c in a b c; do echo "-- jenkins-$c log"; docker logs ${P}jenkins-$c-1 2>&1 | grep -F "$m » $br" | head -20 || true; done
     } >> "$f"
   done
   for m in $(lost_branches | sed 's#^jobs/##; s#/.*##' | sort -u); do # the projects' scans, from each controller
@@ -176,7 +176,7 @@ if ! built_once; then
       echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like 'jobs/$m/%' and key not like 'jobs/$m/branches/%/builds/%' order by key"
       echo "-- queue rows"; psql_q "select id || ' ' || state || ' origin=' || origin || ' claimed_by=' || coalesce(claimed_by, '-') || ' build=' || coalesce(build_number::text, '-') || ' ' || task || ' ' || updated_at from jenkins_queue where task like '%$m%' order by id"
       for p in $A $B; do echo "-- indexing log on $p"; curl -gsf -m 60 -u "$AUTH" "http://localhost:$p/job/$m/indexing/consoleText" || true; done
-      for c in a b c; do echo "-- jenkins-$c log"; docker logs et1-jenkins-$c-1 2>&1 | grep -F "$m" | head -40 || true; done
+      for c in a b c; do echo "-- jenkins-$c log"; docker logs ${P}jenkins-$c-1 2>&1 | grep -F "$m" | head -40 || true; done
     } >> "$f"
   done
   info "3 lost branches: $(lost_branches | tr '\n' ' ') (details in $f)"
@@ -198,7 +198,7 @@ twice=$(psql_q "select b from (select substring(key from '^(jobs/mb[0-9]+/branch
 check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
 c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
 info "3 conflicts and merges (A;B;C) before: $c0 after (A;B): $c1"
-info "3 heap: A $(heap et1-jenkins-a-1), B $(heap et1-jenkins-b-1); VM swap used $(vmswap)"
+info "3 heap: A $(heap ${P}jenkins-a-1), B $(heap ${P}jenkins-b-1); VM swap used $(vmswap)"
 psql_q "select round(total_exec_time) || ' ms, ' || calls || ' calls: ' || left(regexp_replace(query, '\s+', ' ', 'g'), 120) from pg_stat_statements order by total_exec_time desc limit 8" > "$OUT/top-statements.txt" 2>&1 || true
 info "3 top statement: $(head -1 "$OUT/top-statements.txt")"
 et1 start jenkins-c >/dev/null 2>&1; wait_up $C 600

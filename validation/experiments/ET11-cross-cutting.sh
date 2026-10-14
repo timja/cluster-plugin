@@ -5,7 +5,7 @@
 # Prerequisite: CORE_REF=cnj/t10-m1-import-api experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 OUT="$RAW_DIR/ET11" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET11" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -28,14 +28,14 @@ findings() { json "$1" '/manage/cluster/compatibility/api/json?depth=1' | jq_ '"
 # ------------------------------------------------------------------ setup (as ET6, JCasC with nodes for agent1 unused)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B

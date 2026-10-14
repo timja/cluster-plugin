@@ -8,7 +8,7 @@
 # Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.WebSocketEcho.enabled=true"
-A=8081 B=8082 OUT="$RAW_DIR/ET20" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET20" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -39,18 +39,18 @@ cli() { java -jar "$OUT_DIR/jenkins-cli.jar" -s "http://localhost:$1/" -auth "$A
 # ------------------------------------------------------------------ setup (as ET6, plus rr)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed"; mkdir -p "$ET1/seed"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
-docker rm -fv et20-ala >/dev/null 2>&1 || true
+docker rm -fv ${P}et20-ala >/dev/null 2>&1 || true
 r "## ET20 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -91,7 +91,7 @@ check "2b console -f -webSocket on B follows A's build to the end" bash -c "grep
 log "scenario 3: CLI build -s -v on B, the job runs on A (agent ala)"
 groovy $A 'def n = new hudson.slaves.DumbSlave("ala", "/home/jenkins/agent", new hudson.slaves.JNLPLauncher()); n.setLabelString("ala"); n.setNumExecutors(1); Jenkins.get().addNode(n)' >/dev/null
 eventually 15 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $B 'println Jenkins.get().getNode(\"ala\") != null' | tr -d '\r\n ') == true ]]"
-docker run -d --name et20-ala --network et1_default jenkins/inbound-agent:latest-jdk21 -url http://jenkins-a:8080/ \
+docker run -d --name ${P}et20-ala --network ${PROJ}_default jenkins/inbound-agent:latest-jdk21 -url http://jenkins-a:8080/ \
   -secret "$(agent_secret $A ala)" -name ala -webSocket -workDir /home/jenkins/agent >/dev/null
 eventually 60 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $A 'println Jenkins.get().getComputer(\"ala\").isOnline()' | tr -d '\r\n ') == true ]]"
 cat > "$OUT_DIR/onala.xml" <<'XML'
@@ -105,15 +105,15 @@ check "3 build -s -v on B waits for the build A ran, with its log" bash -c "grep
 
 # ------------------------------------------------------------------ 4. a controller without the cluster's keys (Target 15)
 log "scenario 4: a controller started against the store without the cluster's seeded keys"
-docker rm -fv et20-noseed >/dev/null 2>&1 || true
-et1 run -d --no-deps --name et20-noseed -e CNJ_SEED_DIR= -e JENKINS_CLUSTER_NAME=noseed -e JENKINS_CLUSTER_INTERNAL_URL=http://et20-noseed:8080/ jenkins-a >/dev/null 2>&1 || true
-refuses() { local l; l=$(docker logs et20-noseed 2>&1); grep -q "does not have the key material of the cluster" <<<"$l"; }
+docker rm -fv ${P}et20-noseed >/dev/null 2>&1 || true
+et1 run -d --no-deps --name ${P}et20-noseed -e CNJ_SEED_DIR= -e JENKINS_CLUSTER_NAME=noseed -e JENKINS_CLUSTER_INTERNAL_URL=http://${P}et20-noseed:8080/ jenkins-a >/dev/null 2>&1 || true
+refuses() { local l; l=$(docker logs ${P}et20-noseed 2>&1); grep -q "does not have the key material of the cluster" <<<"$l"; }
 check "4 it refuses to start, saying why" eventually 180 refuses
 check "4 ... and never became a member" bash -c "! curl -gsf -u '$AUTH' http://localhost:$A/manage/cluster/api/json | grep -q '\"noseed\"'"
-docker logs et20-noseed > "$OUT/noseed.log" 2>&1 || true
-docker rm -fv et20-noseed >/dev/null 2>&1 || true
+docker logs ${P}et20-noseed > "$OUT/noseed.log" 2>&1 || true
+docker rm -fv ${P}et20-noseed >/dev/null 2>&1 || true
 
-docker rm -fv et20-ala >/dev/null 2>&1 || true
+docker rm -fv ${P}et20-ala >/dev/null 2>&1 || true
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true
 r ""

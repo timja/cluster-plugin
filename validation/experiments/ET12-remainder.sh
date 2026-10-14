@@ -7,7 +7,7 @@
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 export CNJ_JAVA_OPTS="-Djenkins.persistence.BuildRecords.lateFilesPeriodSeconds=5"
-A=8081 B=8082 OUT="$RAW_DIR/ET12" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET12" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -38,16 +38,16 @@ PY
 
 # ------------------------------------------------------------------ setup (as ET6, plus the agent lin on B)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
-docker rm -fv et12-lin >/dev/null 2>&1 || true
+docker rm -fv ${P}et12-lin >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
@@ -57,7 +57,7 @@ r "| | Check |"
 r "|---|---|"
 g $A 'def n = new hudson.slaves.DumbSlave("lin", "/home/jenkins/agent", new hudson.slaves.JNLPLauncher()); n.setLabelString("lin"); n.setNumExecutors(1); Jenkins.get().addNode(n)' >/dev/null
 eventually 15 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $B 'println Jenkins.get().getNode(\"lin\") != null' | tr -d '\r\n ') == true ]]"
-docker run -d --name et12-lin --network et1_default jenkins/inbound-agent:latest-jdk21 -url http://jenkins-b:8080/ \
+docker run -d --name ${P}et12-lin --network ${PROJ}_default jenkins/inbound-agent:latest-jdk21 -url http://jenkins-b:8080/ \
   -secret "$(agent_secret $B lin)" -name lin -webSocket -workDir /home/jenkins/agent >/dev/null
 check "lin is connected to B only" eventually 60 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $B 'println Jenkins.get().getComputer(\"lin\").isOnline()' | tr -d '\r\n ') == true && \$(cd $VALIDATION_DIR && source lib.sh && groovy $A 'println Jenkins.get().getComputer(\"lin\").isOnline()' | tr -d '\r\n ') == false ]]"
 
@@ -96,7 +96,7 @@ log "scenario 1d: ... and A is killed while it waits"
 pipeline up2 'pipeline { agent none; stages { stage("call") { steps { script { def b = build job: "down", wait: true; echo "down result ${b.result} #${b.number}" } } } } }'
 post $A "/job/up2/build?delay=0sec" >/dev/null
 eventually 120 bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/up2/1/consoleText | grep -q 'Starting building'" || true
-docker kill -s KILL et1-jenkins-a-1 >/dev/null
+docker kill -s KILL ${P}jenkins-a-1 >/dev/null
 check "1d B adopts up2, which completes with the downstream result" eventually 300 bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/up2/1/consoleText | grep -q 'down result SUCCESS' && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/up2/1/api/json?tree=result') == *SUCCESS* ]]"
 et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
 
@@ -126,7 +126,7 @@ post $A "/job/sleeper/build?delay=0sec" >/dev/null; post $A "/job/long/build?del
 eventually 60 console_has $A /job/sleeper/1 before
 eventually 60 bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/long/1/api/json?tree=building | grep -q true"
 sleep 5 # a save point
-docker kill -s KILL et1-jenkins-a-1 et1-jenkins-b-1 >/dev/null
+docker kill -s KILL ${P}jenkins-a-1 ${P}jenkins-b-1 >/dev/null
 et1 rm -sf jenkins-a jenkins-b >/dev/null 2>&1
 sleep 25 # past the membership timeout
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1; wait_up $A; wait_up $B
@@ -137,8 +137,8 @@ check "3 the freestyle build is closed as aborted" eventually 240 bash -c "for p
 check "3 with a console saying why, on both controllers" bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/long/1/consoleText | grep -q 'closed as aborted' && curl -gsf -u '$AUTH' http://localhost:$B/job/long/1/consoleText | grep -q 'closed as aborted'"
 check "4 no routing warnings after the restart" bash -c "! (cd $VALIDATION_DIR && docker compose -f compose.et1.yaml logs jenkins-a jenkins-b 2>&1 | grep -q 'Could not route')"
 
-et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1; docker logs et12-lin > "$OUT/lin.log" 2>&1
-docker rm -fv et12-lin >/dev/null 2>&1 || true
+et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1; docker logs ${P}et12-lin > "$OUT/lin.log" 2>&1
+docker rm -fv ${P}et12-lin >/dev/null 2>&1 || true
 cp "$ET1/BUILD" "$OUT/BUILD" 2>/dev/null || true
 r ""
 r "Failures: $FAILED"

@@ -8,6 +8,35 @@ RAW_DIR="$ROOT_DIR/findings/raw"
 # the S3 variant (experiments/with-s3.sh) keeps its evidence apart from the default stack's
 [[ -n "${CLUSTER_S3_BUCKET:-}" ]] && RAW_DIR="$ROOT_DIR/findings/raw-s3"
 OUT_DIR="$VALIDATION_DIR/out"
+
+# Slots (experiments/sweep.sh runs experiments side by side): each experiment runs in a slot of its own, with its own
+# Compose project, host ports, container names, scratch directory and copy of the harness' mutable files (seed, repo,
+# agent secrets), sharing the built war and plugins. Slot 0 is the default: project et1, ports 8081, 8082, 8083, 8089
+# (the seed controller) and 8090 (the round-robin load balancer). Slot N > 0: project et1sN, ports 20N81, 20N82, ….
+export SLOT=${SLOT:-0}
+if [[ $SLOT == 0 ]]; then PROJ=et1; PORT_BASE=8000; else PROJ=et1s$SLOT; PORT_BASE=$((20000 + 100 * SLOT)); fi
+export COMPOSE_PROJECT_NAME=$PROJ PROJ
+P="$PROJ-" # container names: ${P}jenkins-a-1, ${P}seed, …
+export PORT_A=$((PORT_BASE + 81)) PORT_B=$((PORT_BASE + 82)) PORT_C=$((PORT_BASE + 83)) PORT_SEED=$((PORT_BASE + 89)) PORT_RR=$((PORT_BASE + 90))
+if [[ $SLOT == 0 ]]; then
+  export ET1_DIR="$VALIDATION_DIR/.et1"
+else
+  export ET1_DIR="$VALIDATION_DIR/.et1-slots/$SLOT" # made by prepare_slot
+  OUT_DIR="$OUT_DIR/slot-$SLOT"
+fi
+[[ -n "${SCRATCH:-}" ]] && OUT_DIR="$OUT_DIR/$SCRATCH" # e.g. the kind experiments, in slot 0 beside the Compose lanes
+mkdir -p "$OUT_DIR"
+
+# prepare_slot <n>: a slot's copy of the harness's mutable files, sharing the built war and plugins (symbolic links)
+prepare_slot() {
+  local d="$VALIDATION_DIR/.et1-slots/$1" x
+  rm -rf "$d"; mkdir -p "$d/repo"
+  cp -R "$VALIDATION_DIR/.et1/seed" "$d/seed"
+  for x in war plugins plugins-s3 k8s-plugins BUILD; do
+    [[ -e "$VALIDATION_DIR/.et1/$x" ]] && ln -s "$VALIDATION_DIR/.et1/$x" "$d/$x"
+  done
+  return 0
+}
 # API token provisioned on every controller by jenkins/init.groovy.d/cnj-admin-token.groovy:
 # token auth needs no crumbs or session cookies, so calls are stateless and safe to run concurrently.
 CNJ_ADMIN_TOKEN=${CNJ_ADMIN_TOKEN:-1100000000000000000000000000c0ffee}
@@ -42,7 +71,7 @@ wait_up() {
 
 # wait_postgres [container]: until the harness's Postgres accepts connections (a fresh volume initialises, then restarts)
 wait_postgres() {
-  local c=${1:-et1-postgres-1} start=$SECONDS
+  local c=${1:-${P}postgres-1} start=$SECONDS
   until docker exec "$c" pg_isready -U jenkins >/dev/null 2>&1; do
     (( SECONDS - start > 120 )) && { log "Postgres in $c not ready after 120s"; return 1; }
     sleep 1
@@ -64,7 +93,8 @@ boot_diagnostics() {
   [[ -n "$c" ]] || return 0
   out="$RAW_DIR/boot-timeout-$port-$(date +%H%M%S).txt"
   mkdir -p "$RAW_DIR"
-  { echo "== docker logs $c"; docker logs "$c" 2>&1 | tail -300
+  docker logs "$c" > "${out%.txt}.log" 2>&1 # the whole log: its first error is often far from the end
+  { echo "== docker logs $c (the last 300 lines; all of it in ${out%.txt}.log)"; docker logs "$c" 2>&1 | tail -300
     echo "== thread dump of $c"; thread_dump "$c"
     for other in $(docker ps --format '{{.Names}}' | grep -E 'jenkins-[a-z]-1$' | grep -v "^$c$"); do
       echo "== thread dump of $other"; thread_dump "$other"

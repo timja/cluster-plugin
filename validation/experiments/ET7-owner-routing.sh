@@ -9,7 +9,7 @@ source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 # notifyCommit without a token, as a webhook relay would call it
 export CNJ_JAVA_OPTS="-Dhudson.plugins.git.GitStatus.NOTIFY_COMMIT_ACCESS_CONTROL=disabled"
-A=8081 B=8082 RR=8090 OUT="$RAW_DIR/ET7" ET1="$VALIDATION_DIR/.et1" JOBS="$VALIDATION_DIR/scenarios/jobs"
+A=$PORT_A B=$PORT_B RR=$PORT_RR OUT="$RAW_DIR/ET7" ET1="$ET1_DIR" JOBS="$VALIDATION_DIR/scenarios/jobs"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" --profile agents "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -50,15 +50,15 @@ start_on_a() { post $A "/job/$1/build?delay=0sec" >/dev/null; eventually 30 owne
 # ------------------------------------------------------------------ setup (as ET4, plus rr and a git repo)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-agent_secret 8089 agent1 > "$ET1/agent1.secret"
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 for repo in poll mb; do
   ( mkdir -p "$ET1/repo/$repo" && cd "$ET1/repo/$repo" && git init -q -b main && git config user.email et7@example.com && git config user.name et7
     echo 'echo "branch ${env.BRANCH_NAME}"' > Jenkinsfile && git add Jenkinsfile && git commit -qm init )
@@ -168,7 +168,7 @@ start_on_a late
 check "8 late is waiting for input" eventually 30 console_has $B /job/late/1 'late?'
 sleep 3 # the save point
 killed_at=$SECONDS
-docker kill -s KILL et1-jenkins-a-1 >/dev/null
+docker kill -s KILL ${P}jenkins-a-1 >/dev/null
 check "8 B adopted the build" eventually 120 bash -c "cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" http://localhost:$B/job/late/1/api/json?tree=building | grep -q '\"building\":true' && [[ \$(curl -gs -o /dev/null -D - -u \"\$AUTH\" http://localhost:$B/job/late/1/api/json | grep -ci x-cnj-forwarded-from) == 0 ]]"
 post $B "/job/late/1/input/Late/proceedEmpty" >/dev/null
 check "8 approved on B after adoption, the build completes" eventually 60 result_is $B /job/late/1 SUCCESS

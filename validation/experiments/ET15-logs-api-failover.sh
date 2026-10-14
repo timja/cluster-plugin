@@ -8,7 +8,7 @@
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.azure.AzureBlobStore.maxSegmentBlocks=20 -Dio.jenkins.plugins.cluster.BlobLogStorage.coalesceMillis=500"
-A=8081 B=8082 OUT="$RAW_DIR/ET15" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET15" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -51,7 +51,7 @@ assert order == sorted(order), "out of order"
 PY
 }
 console_whole_on() { json "$1" "$2/consoleText" > "$OUT/console-$3.txt" 2>/dev/null && lines_in_order "$OUT/console-$3.txt" "$4" && grep -q '^done' "$OUT/console-$3.txt"; }
-kill_a() { docker kill -s KILL et1-jenkins-a-1 >/dev/null; }
+kill_a() { docker kill -s KILL ${P}jenkins-a-1 >/dev/null; }
 restart_a() { et1 rm -sf jenkins-a >/dev/null 2>&1; et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; }
 # controller logs are kept however the script ends (an early exit kept nothing to diagnose)
 trap 'et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1' EXIT
@@ -62,14 +62,14 @@ CHATTY='for (int i = 1; i <= COUNT; i++) { echo "line ${i}"; sleep time: 200, un
 # ------------------------------------------------------------------ setup (as ET6)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
@@ -109,7 +109,7 @@ post $A "/job/adopted/build?delay=0sec" >/dev/null
 eventually 90 console_has $A /job/adopted/1 "line 150"
 sleep 3 # a save point
 kill_a; killed=$SECONDS
-check "2 B adopts within 30 s" eventually 30 bash -c "[[ \$(docker logs et1-jenkins-b-1 2>&1 | grep -c 'Adopting adopted #1') -gt 0 ]]"
+check "2 B adopts within 30 s" eventually 30 bash -c "[[ \$(docker logs ${P}jenkins-b-1 2>&1 | grep -c 'Adopting adopted #1') -gt 0 ]]"
 info "2 adopted $((SECONDS - killed)) s after the kill"
 check "2 completes on B" eventually 240 is_result $B /job/adopted/1 SUCCESS
 check "2 the whole log, in order, across the segments of both owners" eventually 60 console_whole_on $B /job/adopted/1 adopted-b 400
@@ -143,7 +143,7 @@ check "3 ... in order" eventually 60 console_whole_on $B /job/before/job/inner/1
 log "scenario 4: failover time (SIGKILL three times, a clean stop, and a pause shorter than the timeout)"
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 adopted_ms() { # job: when B logged adopting it, by its log's clock (the host's), or empty
-  local l; l=$(docker logs et1-jenkins-b-1 2>&1) # whole, first: an early grep exit fails docker logs, and pipefail with it
+  local l; l=$(docker logs ${P}jenkins-b-1 2>&1) # whole, first: an early grep exit fails docker logs, and pipefail with it
   grep -m1 "Adopting $1 #1" <<<"$l" | grep -o '20[0-9-]* [0-9:.]*+0000' | head -1 \
     | python3 -c "import datetime,sys; l=sys.stdin.read().strip(); print(int(datetime.datetime.strptime(l, '%Y-%m-%d %H:%M:%S.%f%z').timestamp()*1000) if l else '')"
 }
@@ -169,7 +169,7 @@ check "4 every adoption after a SIGKILL within 12 s (the session lock is freed w
 check "4 every adopted build completed" bash -c "for i in 1 2 3; do [[ \$(curl -gsf -u '$AUTH' http://localhost:$B/job/fo\$i/1/api/json?tree=result) == *SUCCESS* ]] || exit 1; done"
 # a clean stop (SIGTERM, as a pod deletion): the controller leaves and says so
 run_on_a fs
-stopped=$(now_ms); docker stop -t 30 et1-jenkins-a-1 >/dev/null
+stopped=$(now_ms); docker stop -t 30 ${P}jenkins-a-1 >/dev/null
 eventually 60 adopted fs || true
 t=$(adopted_ms fs); ms=$(( ${t:-$((stopped + 99000))} - stopped ))
 echo "stop $ms" >> "$OUT/failover-seconds.txt"
@@ -179,9 +179,9 @@ check "4 ... and completed" eventually 120 is_result $B /job/fs/1 SUCCESS
 restart_a
 # a pause shorter than the timeout (GC, a slow disk): the session lives on, nobody takes over
 run_on_a fp
-docker pause et1-jenkins-a-1 >/dev/null; sleep 12; docker unpause et1-jenkins-a-1 >/dev/null
+docker pause ${P}jenkins-a-1 >/dev/null; sleep 12; docker unpause ${P}jenkins-a-1 >/dev/null
 sleep 10
-check "4 a 12 s pause is not taken for a death (no adoption)" bash -c "! docker logs et1-jenkins-b-1 2>&1 | grep -q 'Adopting fp #1'"
+check "4 a 12 s pause is not taken for a death (no adoption)" bash -c "! docker logs ${P}jenkins-b-1 2>&1 | grep -q 'Adopting fp #1'"
 check "4 ... and the build completes on A" eventually 120 is_result $A /job/fp/1 SUCCESS
 
 # Target 15: a freestyle build's log is shipped while it runs, so closing it as aborted after its controller died

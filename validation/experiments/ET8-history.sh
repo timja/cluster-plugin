@@ -6,7 +6,7 @@
 # Prerequisite: CORE_REF=cnj/t6-m6-stateless-sessions experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 OUT="$RAW_DIR/ET8" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET8" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" --profile agents "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -46,15 +46,15 @@ usages() { json "$1" "/fingerprint/$2/api/json?tree=usage[name,ranges[ranges[sta
 # ------------------------------------------------------------------ setup (as ET7)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-agent_secret 8089 agent1 > "$ET1/agent1.secret"
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
@@ -77,7 +77,7 @@ md5=$(printf 'shared-content\n' | md5 -q 2>/dev/null || printf 'shared-content\n
 info "1 fingerprint $md5: A sees [$(usages $A $md5)], B sees [$(usages $B $md5)]"
 check "1 A lists both usages" eventually 10 usages_are $A $md5 'fpa:1-1 fpb:1-1'
 check "1 B lists both usages" eventually 10 usages_are $B $md5 'fpa:1-1 fpb:1-1'
-check "1 nothing under fingerprints/ in either home" bash -c "for c in et1-jenkins-a-1 et1-jenkins-b-1; do [[ -z \$(docker exec \$c sh -c 'ls -A /var/jenkins_home/fingerprints 2>/dev/null') ]] || exit 1; done"
+check "1 nothing under fingerprints/ in either home" bash -c "for c in ${P}jenkins-a-1 ${P}jenkins-b-1; do [[ -z \$(docker exec \$c sh -c 'ls -A /var/jenkins_home/fingerprints 2>/dev/null') ]] || exit 1; done"
 
 # ------------------------------------------------------------------ 2. concurrent updates of one fingerprint
 log "scenario 2: 5 rounds of a build on A and a build on B recording the same file at once"
@@ -200,7 +200,7 @@ check "4b dk #1, running on A while B discarded, completed on A: its record publ
 check "4b then, the oldest of three, it was discarded: both keep [2 3]" eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$A/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' && \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' ]]"
 sleep 5; info "4b dk builds after: A [$(builds_of $A dk)] B [$(builds_of $B dk)]"
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1  # before they are replaced
-docker kill -s KILL et1-jenkins-a-1 >/dev/null
+docker kill -s KILL ${P}jenkins-a-1 >/dev/null
 alive_only_b() { [[ "$(json $B /manage/cluster/api/json?depth=1 | jq_ '",".join(sorted(m["name"] for m in d["members"] if m["alive"]))')" == jenkins-b ]]; }
 check "5 after A dies, B's view shows only B alive (within the membership timeout)" eventually 40 alive_only_b
 

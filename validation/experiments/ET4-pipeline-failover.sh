@@ -6,7 +6,7 @@
 # Prerequisite: CORE_REF=cnj/t4-m2-build-leases experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 OUT="$RAW_DIR/ET4" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET4" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" --profile agents "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -35,8 +35,8 @@ same_text() { cmp -s <(text "$1" "$3") <(text "$2" "$3"); }
 in_log() { et1 logs "$1" 2>&1 | grep -q -- "$2"; }
 not_in_log() { ! in_log "$@"; }
 record_writers() { psql_q "select count(distinct origin) from jenkins_store_events where key = 'jobs/$1/builds/$2/build.xml' and kind = 'WRITTEN'"; }
-kill_a() { docker kill -s KILL et1-jenkins-a-1 >/dev/null; }
-kill_b() { docker kill -s KILL et1-jenkins-b-1 >/dev/null; }
+kill_a() { docker kill -s KILL ${P}jenkins-a-1 >/dev/null; }
+kill_b() { docker kill -s KILL ${P}jenkins-b-1 >/dev/null; }
 restart() { et1 up -d "$1" >/dev/null 2>&1; }
 pipeline_job() { # name script [durability]
   python3 - "$OUT_DIR/$1.xml" "$2" "${3:-}" <<'PY'
@@ -56,16 +56,16 @@ PY
 # ------------------------------------------------------------------ setup (as ET3, plus agent1)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 # the agent's secret is an HMAC whose key is part of the seed, so it is valid on every controller
-agent_secret 8089 agent1 > "$ET1/agent1.secret"
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 [[ -s "$ET1/agent1.secret" ]] || { echo "no agent secret" >&2; exit 2; }
 
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
@@ -103,7 +103,7 @@ log "scenario 1: sh on agent1, SIGKILL A at about tick 20"
 eventually 120 agent_online_on $A || eventually 60 agent_online_on $B
 info "1 agent1 connected to: $(agent_online_on $A && echo A || echo B)"
 if ! agent_online_on $A; then # the agent stayed on B after scenario 3: move it back to the primary
-  docker restart et1-agent1-1 >/dev/null; eventually 90 agent_online_on $A
+  docker restart ${P}agent1-1 >/dev/null; eventually 90 agent_online_on $A
 fi
 pipeline_job ag 'stage("a") { echo "stage a" }
 node("agent1") { sh "for i in \$(seq 1 60); do echo tick \$i; sleep 1; done" }
@@ -170,10 +170,10 @@ pipeline_job pt 'echo "start"; for (int i = 1; i <= 40; i++) { echo "beat ${i}";
 create_job $A pt "$OUT_DIR/pt.xml"; eventually 15 exists $B /job/pt
 post $A "/job/pt/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/pt/1 "beat 5"
-docker pause et1-jenkins-a-1 >/dev/null; paused=$SECONDS
+docker pause ${P}jenkins-a-1 >/dev/null; paused=$SECONDS
 check "4 B adopts while A is paused" eventually 120 building_on $B /job/pt/1
 info "4 adopted $((SECONDS - paused)) s after the pause"
-docker unpause et1-jenkins-a-1 >/dev/null
+docker unpause ${P}jenkins-a-1 >/dev/null
 check "4 A notices it lost the build" eventually 90 in_log jenkins-a "Ownership of pt #1 was lost"
 check "4 the build completes on B with SUCCESS" eventually 180 result_is $B /job/pt/1 SUCCESS
 check "4 only B published the record" test "$(record_writers pt 1)" = 1

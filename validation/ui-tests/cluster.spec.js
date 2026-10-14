@@ -18,7 +18,7 @@ test('a job configured in the browser is saved for every controller', async ({ p
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page).toHaveURL(/\/job\/ui-config\/$/);
   // the controller that did not serve the save has the change once it has applied it (milliseconds to a second or two)
-  for (const port of [8081, 8082]) {
+  for (const port of [process.env.PORT_A || 8081, process.env.PORT_B || 8082]) {
     await expect.poll(async () => {
       const r = await request.get(`http://localhost:${port}/job/ui-config/api/json?tree=description`);
       return (await r.json()).description;

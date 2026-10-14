@@ -9,7 +9,7 @@
 #
 # Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
-A=8081 B=8082 OUT="$RAW_DIR/ET18" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET18" ET1="$ET1_DIR"
 FILES=(-f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et18.yaml")
 et1() { docker compose --project-directory "$VALIDATION_DIR" "${FILES[@]}" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
@@ -48,16 +48,16 @@ fresh_controllers() {
 
 # ------------------------------------------------------------------ setup (as ET6, plus rr)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
-docker volume rm -f et1_et18-archive et1_et18-pgdata et1_et18-blobs et1_et18-pgrestore >/dev/null 2>&1 || true
+docker volume rm -f ${PROJ}_et18-archive ${PROJ}_et18-pgdata ${PROJ}_et18-blobs ${PROJ}_et18-pgrestore >/dev/null 2>&1 || true
 rm -rf "$ET1/seed"; mkdir -p "$ET1/seed"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
@@ -84,7 +84,7 @@ eventually 60 console_has $A /job/longp/1 "before T"
 sleep 5 # its save point is shipped
 log "restore point T"
 psql_q "select pg_create_restore_point('T')" >/dev/null
-docker exec et1-azurite-1 tar -C /data -cf - . > "$OUT_DIR/blobs-at-T.tar"
+docker exec ${P}azurite-1 tar -C /data -cf - . > "$OUT_DIR/blobs-at-T.tar"
 psql_q "select pg_switch_wal()" >/dev/null
 info "1 at T: $(psql_q "select count(*) from jenkins_store") keys; blobs $(du -h "$OUT_DIR/blobs-at-T.tar" | cut -f1)"
 log "after T: doomed deleted, edited changed, created made"
@@ -100,7 +100,7 @@ check "1 after T: doomed is gone, created exists" bash -c "! curl -gsf -u '$AUTH
 # ------------------------------------------------------------------ 2. Postgres restored to T, blob storage as it is now
 log "scenario 2: restore Postgres to T into a fresh data directory"
 et1 stop jenkins-a jenkins-b postgres >/dev/null 2>&1
-docker run --rm -v et1_et18-archive:/archive -v et1_et18-pgrestore:/r postgres:16 bash -c '
+docker run --rm -v ${PROJ}_et18-archive:/archive -v ${PROJ}_et18-pgrestore:/r postgres:16 bash -c '
   set -e; rm -rf /r/*; tar -xzf /archive/base/base.tar.gz -C /r; mkdir -p /r/pg_wal; tar -xzf /archive/base/pg_wal.tar.gz -C /r/pg_wal
   echo "restore_command = '"'"'cp /archive/%f %p'"'"'" >> /r/postgresql.auto.conf
   echo "recovery_target_name = '"'"'T'"'"'" >> /r/postgresql.auto.conf
@@ -109,8 +109,8 @@ docker run --rm -v et1_et18-archive:/archive -v et1_et18-pgrestore:/r postgres:1
 FILES=(-f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et18.yaml" -f "$VALIDATION_DIR/compose.et18-restore.yaml")
 et1 up -d --no-deps postgres >/dev/null 2>&1
 eventually 120 bash -c "cd $VALIDATION_DIR && docker compose ${FILES[*]} exec -T postgres psql -U jenkins -At -c 'select not pg_is_in_recovery()' 2>/dev/null | grep -q t"
-check "2 Postgres recovered to T and was promoted" bash -c "docker logs et1-postgres-1 2>&1 | grep -q 'recovery stopping at restore point \"T\"'"
-pglog=$(docker logs et1-postgres-1 2>&1) # whole, first (pipefail with an early grep exit)
+check "2 Postgres recovered to T and was promoted" bash -c "docker logs ${P}postgres-1 2>&1 | grep -q 'recovery stopping at restore point \"T\"'"
+pglog=$(docker logs ${P}postgres-1 2>&1) # whole, first (pipefail with an early grep exit)
 if ! grep -q 'recovery stopping at restore point "T"' <<<"$pglog"; then
   et1 logs postgres > "$OUT/postgres.log" 2>&1; r ""; r "Failures: $FAILED (stopped: no recovery to T)"; exit 1
 fi
@@ -129,7 +129,7 @@ info "2 longp #1 (running at T): $lp"
 # ------------------------------------------------------------------ 3. blob storage restored to T as well
 log "scenario 3: blob storage restored to T as well"
 et1 stop jenkins-a jenkins-b azurite >/dev/null 2>&1
-docker run --rm -i -v et1_et18-blobs:/data postgres:16-alpine sh -c 'rm -rf /data/* /data/.[!.]* 2>/dev/null; tar -C /data -xf -' < "$OUT_DIR/blobs-at-T.tar"
+docker run --rm -i -v ${PROJ}_et18-blobs:/data postgres:16-alpine sh -c 'rm -rf /data/* /data/.[!.]* 2>/dev/null; tar -C /data -xf -' < "$OUT_DIR/blobs-at-T.tar"
 et1 up -d --no-deps azurite >/dev/null 2>&1; sleep 3
 fresh_controllers
 check "3 doomed #1's console is back" eventually 60 console_has $B /job/doomed/1 doomed-build-ran

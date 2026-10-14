@@ -7,7 +7,7 @@
 source "$(dirname "$0")/../lib.sh"
 # the scratch repos are throwaway; never start fsmonitor daemons for them (they can hang in the background)
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 JOBS="$VALIDATION_DIR/scenarios/jobs" OUT="$RAW_DIR/ET2" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B JOBS="$VALIDATION_DIR/scenarios/jobs" OUT="$RAW_DIR/ET2" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"; : > "$OUT/builds.jsonl"
@@ -74,14 +74,14 @@ now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 # ------------------------------------------------------------------ setup (as ET1)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 for repo in mb poll; do
   ( mkdir -p "$ET1/repo/$repo" && cd "$ET1/repo/$repo" && git init -q -b main && git config user.email et2@example.com && git config user.name et2
     echo 'echo "branch ${env.BRANCH_NAME}"' > Jenkinsfile && git add Jenkinsfile && git commit -qm init )
@@ -197,7 +197,7 @@ owner_name=$(container_of "$owner_port")
 log "scenario 5: SIGKILL the cron owner ($owner_name)"
 snap /job/cron1 $A $B
 kill_ms=$(now_ms)
-docker kill -s KILL "et1-$owner_name-1" >/dev/null
+docker kill -s KILL "${P}$owner_name-1" >/dev/null
 sleep 150
 snap /job/cron1 $survivor
 check "5 survivor took over cron within 2.5 min ($(count /job/cron1 "$kill_ms") builds after the kill)" test "$(count /job/cron1 "$kill_ms")" -ge 1

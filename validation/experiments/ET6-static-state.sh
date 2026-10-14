@@ -6,7 +6,7 @@
 # Prerequisite: CORE_REF=cnj/t6-m6-stateless-sessions experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 RR=8090 OUT="$RAW_DIR/ET6" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B RR=$PORT_RR OUT="$RAW_DIR/ET6" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -32,14 +32,14 @@ rm -rf "$ET1/seed" "$ET1/repo" "$ET1/casc-et6"; mkdir -p "$ET1/seed" "$ET1/repo"
 # the controllers' JCasC declares no nodes (its `jenkins.nodes` list is replace-all): base.yaml only
 cp "$VALIDATION_DIR/jenkins/casc-et1/base.yaml" "$ET1/casc-et6/"
 export CNJ_CASC_DIR="$ET1/casc-et6"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 info "seeded keys: $(ls "$ET1/seed/secrets" | tr '\n' ' ')"
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
@@ -109,13 +109,13 @@ g $A 'Jenkins.get().addNode(new hudson.slaves.DumbSlave("n6", "/tmp/n6", new hud
 check "5 the node appears on B" eventually 10 g_is $B 'println Jenkins.get().getNode("n6") != null && Jenkins.get().getComputer("n6") != null' true
 secret_a=$(agent_secret $A n6); secret_b=$(agent_secret $B n6)
 check "5 its agent secret is the same on A and B" test -n "$secret_a" -a "$secret_a" = "$secret_b"
-docker rm -fv et6-n6 >/dev/null 2>&1 || true
-docker run -d --name et6-n6 --network et1_default jenkins/inbound-agent:latest-jdk21 -url http://jenkins-b:8080/ -secret "$secret_b" -name n6 -webSocket -workDir /home/jenkins/agent >/dev/null
+docker rm -fv ${P}et6-n6 >/dev/null 2>&1 || true
+docker run -d --name ${P}et6-n6 --network ${PROJ}_default jenkins/inbound-agent:latest-jdk21 -url http://jenkins-b:8080/ -secret "$secret_b" -name n6 -webSocket -workDir /home/jenkins/agent >/dev/null
 check "5 the agent connects through B" eventually 60 g_is $B 'println Jenkins.get().getComputer("n6")?.isOnline()' true
 g $A 'Jenkins.get().removeNode(Jenkins.get().getNode("n6"))' >/dev/null
 check "5 deleted on A, it is gone on B" eventually 10 g_is $B 'println Jenkins.get().getNode("n6") == null' true
-check "5 and B dropped its connection" eventually 30 bash -c "docker logs et6-n6 2>&1 | grep -qiE 'terminated|closed|disconnected|reconnect'"
-docker rm -fv et6-n6 >/dev/null 2>&1 || true
+check "5 and B dropped its connection" eventually 30 bash -c "docker logs ${P}et6-n6 2>&1 | grep -qiE 'terminated|closed|disconnected|reconnect'"
+docker rm -fv ${P}et6-n6 >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------ 6. keys created at runtime
 log "scenario 6: a confidential key first used at runtime"
@@ -175,7 +175,7 @@ done < <(grep -E '^(RESULT|INFO) ' "$OUT/journey.txt")
 info "8 bound-object requests forwarded between controllers: $fwd"
 check "8 some bound-object requests were forwarded" test "$fwd" -gt 0
 # the same journey's browser, after A dies (fresh password change: back to the first one)
-(cd "$VALIDATION_DIR/journey" && mvn -B -ntp -q exec:java -Dexec.args="http://localhost:$RR/ u3 u3-password-2 u3-password-1 fs6 'docker kill -s KILL et1-jenkins-a-1'") > "$OUT/journey-failover.txt" 2>&1 || true
+(cd "$VALIDATION_DIR/journey" && mvn -B -ntp -q exec:java -Dexec.args="http://localhost:$RR/ u3 u3-password-2 u3-password-1 fs6 'docker kill -s KILL ${P}jenkins-a-1'") > "$OUT/journey-failover.txt" 2>&1 || true
 check "8 after losing A the browser is still signed in" grep -q '^RESULT ok still signed in after losing a controller' "$OUT/journey-failover.txt"
 et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
 

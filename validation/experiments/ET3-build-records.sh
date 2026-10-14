@@ -6,7 +6,7 @@
 # Prerequisite: CORE_REF=cnj/t3-m4-explicit-numbering experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-A=8081 B=8082 OUT="$RAW_DIR/ET3" ET1="$VALIDATION_DIR/.et1"
+A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET3" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
@@ -75,14 +75,14 @@ no_local_dir() { ! docker exec "$1" test -d "/var/jenkins_home/$2"; }
 # ------------------------------------------------------------------ setup (as ET1/ET2)
 et1 down -v --remove-orphans >/dev/null 2>&1 || true
 rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
-docker rm -fv et1-seed >/dev/null 2>&1 || true
-docker run -d --name et1-seed -p 8089:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
+docker rm -fv ${P}seed >/dev/null 2>&1 || true
+docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
   -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
-wait_up 8089
-groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
-docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
-docker rm -fv et1-seed >/dev/null
+wait_up $PORT_SEED
+groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
+docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
+docker rm -fv ${P}seed >/dev/null
 
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
@@ -164,17 +164,17 @@ eventually 30 exists $B /job/ed/2
 post $B "/job/ed/1/submitDescription?description=set-on-B" >/dev/null
 check "4 a description set on B for a build that ran on A is visible on A" eventually 30 desc_is $A /job/ed/1 set-on-B
 json $B /job/ed/2/api/json >/dev/null # B materializes #2
-check "4 B materialized #2 locally before the delete" docker exec et1-jenkins-b-1 test -f /var/jenkins_home/jobs/ed/builds/2/build.xml
+check "4 B materialized #2 locally before the delete" docker exec ${P}jenkins-b-1 test -f /var/jenkins_home/jobs/ed/builds/2/build.xml
 post $A "/job/ed/2/doDelete" >/dev/null
 check "4 a build deleted on A is gone on B" eventually 30 gone $B /job/ed/2
-check "4 and its local directory on B is deleted" eventually 30 no_local_dir et1-jenkins-b-1 jobs/ed/builds/2
+check "4 and its local directory on B is deleted" eventually 30 no_local_dir ${P}jenkins-b-1 jobs/ed/builds/2
 check "4 B's history is [1]" numbers_are $B /job/ed "1"
 
 # ------------------------------------------------------------------ 5. disposable controller
 log "scenario 5: destroy A and start a fresh A"
 et1 rm -sf jenkins-a >/dev/null 2>&1
 et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
-check "5 fresh A has no local build directories to start with" no_local_dir et1-jenkins-a-1 jobs/il/builds/1
+check "5 fresh A has no local build directories to start with" no_local_dir ${P}jenkins-a-1 jobs/il/builds/1
 check "5 fresh A lists all builds of il" eventually 30 numbers_are $A /job/il "$expected"
 check "5 B still lists all builds of il" numbers_are $B /job/il "$expected"
 check "5 fresh A opens the console of a build A ran before" console_has $A /job/pl/1/consoleText "first stage says hi"
@@ -200,7 +200,7 @@ check "6 completed console identical on B" same_text $A $B /job/long/1/consoleTe
 log "scenario 6b: SIGKILL A during a running build"
 post $A "/job/long/buildWithParameters?ID=2&delay=0sec" >/dev/null
 eventually 30 has_placeholder $B /job/long 2@jenkins-a
-docker kill -s KILL et1-jenkins-a-1 >/dev/null
+docker kill -s KILL ${P}jenkins-a-1 >/dev/null
 killed=$SECONDS
 check "6 B removes the stale placeholder within 90 s" eventually 90 no_placeholders $B /job/long
 info "6 stale placeholder removed $((SECONDS - killed)) s after the kill"
