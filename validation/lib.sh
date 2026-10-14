@@ -8,6 +8,8 @@ ROOT_DIR="$(dirname "$VALIDATION_DIR")"
 # validation/out (not kept); point FINDINGS_DIR at a findings directory (e.g. the cloud-native-jenkins repository's) to
 # keep it
 FINDINGS_DIR=${FINDINGS_DIR:-$VALIDATION_DIR/out/findings}
+FINDINGS_DIR="$(mkdir -p "$FINDINGS_DIR" && cd "$FINDINGS_DIR" && pwd)" # absolute: experiments change directory
+export FINDINGS_DIR
 RAW_DIR="$FINDINGS_DIR/raw"
 # the S3 variant (experiments/with-s3.sh) keeps its evidence apart from the default stack's
 [[ -n "${CLUSTER_S3_BUCKET:-}" ]] && RAW_DIR="$FINDINGS_DIR/raw-s3"
