@@ -13,6 +13,7 @@
 #
 #   experiments/sweep.sh
 #   SWEEP_LANES=2 SKIP_KIND=1 SKIP_S3=1 experiments/sweep.sh
+#   SWEEP_ONLY="ET6-static-state s3-ET3-build-records" experiments/sweep.sh   # only these Compose experiments
 #
 # The kind experiments use the namespace "cnj" of the kind cluster "cnj": a release there is deleted first.
 cd "$(dirname "$0")/.." || exit 2
@@ -47,6 +48,9 @@ jobs=(
 if [[ -z "${SKIP_S3:-}" ]]; then
   jobs+=("15 s3-ET15-logs-api-failover" "12 s3-ET4-pipeline-failover" "6 s3-ET3-build-records" "6 s3-ET8-history"
     "6 s3-ET19-plugin-manager")
+fi
+if [[ -n "${SWEEP_ONLY:-}" ]]; then
+  only=(); for j in "${jobs[@]}"; do [[ " $SWEEP_ONLY " == *" ${j#* } "* ]] && only+=("$j"); done; jobs=("${only[@]}")
 fi
 i=0
 for j in $(printf '%s\n' "${jobs[@]}" | sort -rn | awk '{print $2}'); do
