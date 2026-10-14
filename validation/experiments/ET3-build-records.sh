@@ -195,7 +195,11 @@ info "6 placeholder visible on B after $((SECONDS - started)) s"
 check "6 A shows no placeholder for its own build" no_placeholders $A /job/long
 check "6 B's read-only console shows the output so far" eventually 30 console_has $B /job/long/running-console/1 "tick 2"
 check "6 placeholder replaced by the full build on B when it completes" eventually 120 result_is $B /job/long/1 SUCCESS
-check "6 no placeholder left on B" no_placeholders $B /job/long
+# until B applies the completed record, it forwards /job/long/1 to A (the placeholder names A): the check above can pass
+# through A just before B drops the placeholder
+done_at=$SECONDS
+check "6 no placeholder left on B (within 15 s)" eventually 15 no_placeholders $B /job/long
+info "6 placeholder gone from B $((SECONDS - done_at)) s after the build showed as completed"
 check "6 completed console identical on B" same_text $A $B /job/long/1/consoleText
 log "scenario 6b: SIGKILL A during a running build"
 post $A "/job/long/buildWithParameters?ID=2&delay=0sec" >/dev/null
