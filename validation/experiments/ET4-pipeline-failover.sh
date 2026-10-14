@@ -176,7 +176,9 @@ info "4 adopted $((SECONDS - paused)) s after the pause"
 docker unpause ${P}jenkins-a-1 >/dev/null
 check "4 A notices it lost the build" eventually 90 in_log jenkins-a "Ownership of pt #1 was lost"
 check "4 the build completes on B with SUCCESS" eventually 180 result_is $B /job/pt/1 SUCCESS
-check "4 only B published the record" test "$(record_writers pt 1)" = 1
+# published as the build is finalized, a moment after its result shows; a second writer (A) would keep it at 2
+one_writer() { [[ "$(record_writers pt 1)" == 1 ]]; }
+check "4 only B published the record" eventually 30 one_writer
 check "4 A lists B's build (its own copy discarded)" eventually 60 result_is $A /job/pt/1 SUCCESS
 check "4 A's console is B's (no appends from A after the fence)" eventually 30 same_text $A $B /job/pt/1/consoleText
 check "4 every beat is in the log" all_lines $B /job/pt/1 beat 40
