@@ -65,8 +65,17 @@ at_most_one_per_minute() { [[ -z "$(builds "$@" | awk '{print $3}' | sort | uniq
 # exactly once per cron tick: every build of the job corresponds to one claimed tick, and vice versa.
 # (Trigger.Cron catches up a late minute, so two ticks can legitimately fire within one wall-clock minute.)
 claims_of() { psql_q "select count(*) from jenkins_trigger_claims where item='$1'"; }
-one_build_per_tick() { snap "/job/$1" "${@:2}"; [[ "$(count "/job/$1")" == "$(claims_of "$1")" ]]; }
+# minutes (UTC, epoch minutes) in which a tick of the job was claimed; ticks claimed together (cron catching up a missed
+# minute) give one build: the second request folds into the queued item of the first, as in any Jenkins queue
+claimed_minutes() { psql_q "select distinct (extract(epoch from claimed_at)::bigint / 60) from jenkins_trigger_claims where item='$1' order by 1" | tr '\n' ' '; }
+one_build_per_tick() { snap "/job/$1" "${@:2}"; [[ "$(builds "/job/$1" | awk '{print $3}' | tr '\n' ' ')" == "$(claimed_minutes "$1")" ]]; }
 tick_info() { r "| ℹ️ | $1: $(count /job/cron1) builds, $(claims_of cron1) claimed ticks; wall-clock minutes with 2 builds (cron catch-up): $(builds /job/cron1 | awk '{print $3}' | sort | uniq -d | wc -l | tr -d ' ') |"; }
+# when builds and claims differ: each claimed tick (UTC, with who claimed it and when) beside the builds' minutes
+tick_detail() {
+  r "| ℹ️ | $1: claimed ticks (claimant@claimed_at UTC): $(psql_q "select string_agg(coalesce(m.name, c.origin) || '@' || to_char(c.claimed_at at time zone 'UTC', 'HH24:MI:SS'), ', ' order by c.tick) from jenkins_trigger_claims c left join jenkins_members m on m.origin = c.origin where c.item = 'cron1'") |"
+  r "| ℹ️ | $1: builds (number@minute UTC): $(builds /job/cron1 | python3 -c 'import sys,time
+print(", ".join(l.split()[0] + "@" + time.strftime("%H:%M", time.gmtime(int(l.split()[2]) * 60)) for l in sys.stdin))') |"
+}
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
 [[ -f "$ET1/war/jenkins.war" && -n "$(ls "$ET1"/plugins/*.hpi 2>/dev/null)" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
@@ -131,7 +140,8 @@ sleep 270
 snap /job/cron1 $A $B
 r "| ℹ️ | 1 cron1 builds: $(builds /job/cron1 | awk '{print "#"$1"@"($2=="'$A'"?"A":"B")}' | tr '\n' ' ') |"
 check "1 cron fired (≥3 builds in ~4.5 min: $(count /job/cron1))" test "$(count /job/cron1)" -ge 3
-check "1 exactly one cron build per claimed tick across controllers" eventually 30 one_build_per_tick cron1 $A $B
+check "1 exactly one cron build per minute with a claimed tick, across controllers" eventually 30 one_build_per_tick cron1 $A $B
+one_build_per_tick cron1 $A $B || tick_detail 1
 tick_info "1"
 check "1 cron build numbers are unique across controllers" numbers_unique /job/cron1
 owner_port=$(builds /job/cron1 | awk '{print $2}' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
@@ -201,7 +211,8 @@ docker kill -s KILL "${P}$owner_name-1" >/dev/null
 sleep 150
 snap /job/cron1 $survivor
 check "5 survivor took over cron within 2.5 min ($(count /job/cron1 "$kill_ms") builds after the kill)" test "$(count /job/cron1 "$kill_ms")" -ge 1
-check "5 still exactly one cron build per claimed tick" eventually 30 one_build_per_tick cron1 $survivor
+check "5 still exactly one cron build per minute with a claimed tick" eventually 30 one_build_per_tick cron1 $survivor
+one_build_per_tick cron1 $survivor || tick_detail 5
 tick_info "5"
 check "5 cron build numbers still unique" numbers_unique /job/cron1
 
@@ -213,7 +224,8 @@ et1 up -d "$owner_name" >/dev/null 2>&1; wait_up "$owner_port"
 sleep 180
 snap /job/cron1 $A $B
 check "6 cron kept firing across the rejoin ($(count /job/cron1 "$rejoin_ms") builds in 3 min)" test "$(count /job/cron1 "$rejoin_ms")" -ge 2
-check "6 exactly one cron build per claimed tick across failover and rejoin" eventually 30 one_build_per_tick cron1 $A $B
+check "6 exactly one cron build per minute with a claimed tick, across failover and rejoin" eventually 30 one_build_per_tick cron1 $A $B
+one_build_per_tick cron1 $A $B || tick_detail 6
 tick_info "6"
 check "6 cron build numbers unique across all incarnations" numbers_unique /job/cron1
 

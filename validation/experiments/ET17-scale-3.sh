@@ -114,6 +114,8 @@ start=$SECONDS
 curl -gsf -u "$AUTH" -X POST "http://localhost:$A/job/h$HJOBS/doDelete" -o /dev/null
 info "2 deleting a job with $PER builds took $((SECONDS - start)) s"
 check "2 ... and the others drop it within 60 s" eventually 60 bash -c "! curl -gsf -u '$AUTH' http://localhost:$B/job/h$HJOBS/api/json -o /dev/null && ! curl -gsf -u '$AUTH' http://localhost:$C/job/h$HJOBS/api/json -o /dev/null"
+left=$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c "select key from jenkins_store where key like 'jobs/h$HJOBS/%' and key <> 'jobs/h$HJOBS/nextBuildNumber' order by key limit 10")
+[[ -n "$left" ]] && info "2 stored under the deleted job: $(echo $left)"
 check "2 ... with its records (its build numbers are kept, so a recreated job never reuses one)" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like 'jobs/h$HJOBS/%' and key <> 'jobs/h$HJOBS/nextBuildNumber'\") == 0 ]]"
 
 # ------------------------------------------------------------------ 3. a branch-indexing storm
