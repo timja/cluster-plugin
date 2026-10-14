@@ -17,6 +17,7 @@
 # The kind experiments use the namespace "cnj" of the kind cluster "cnj": a release there is deleted first.
 cd "$(dirname "$0")/.." || exit 2
 source ./lib.sh
+set +euo pipefail # lib.sh is strict for experiments; the sweep carries on past failures
 SWEEP_OUT=${SWEEP_OUT:-$PWD/out/sweep}
 rm -rf "$SWEEP_OUT"; mkdir -p "$SWEEP_OUT"
 # temporary files under the repository: Docker Desktop (e.g. on Linux) shares only some host paths, not /tmp, with
@@ -72,6 +73,7 @@ down_slot() {
 lane() {
   export SLOT=$1
   source ./lib.sh
+  set +euo pipefail
   prepare_slot "$SLOT"
   local f
   while true; do
@@ -85,6 +87,7 @@ lane() {
 kind_lane() {
   export SLOT=0 SCRATCH=kind
   source ./lib.sh
+  set +euo pipefail
   run_job ET9-build-image
   kubectl --context kind-cnj delete ns cnj --wait=true >/dev/null 2>&1
   for e in ET9-kubernetes ET10-operations ET13-cluster-plugins; do run_job "$e"; done
