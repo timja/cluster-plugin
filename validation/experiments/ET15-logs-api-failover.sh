@@ -90,9 +90,11 @@ check "1 completes" eventually 180 is_result $A /job/chatty/1 SUCCESS
 if [[ $BLOB_CLASS == S3BlobStore ]]; then
   # S3 cannot append: the log was shipped as chunks (log.d/<offset>.<length>), put together into one object once the
   # build completed
-  chunks=$(groovy $A "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/chatty/builds/1/log.d').size()" | tr -d '\r\n ')
-  info "1 log chunks left after completion: $chunks"
-  check "1 the log was compacted into one object once complete" bash -c "[[ '$(segments_of chatty 1)' == 1 && '$chunks' == 0 ]]"
+  # compacted when the build is finalized, a moment after its result shows
+  chunks_of() { groovy $A "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/chatty/builds/1/log.d').size()" | tr -d '\r\n '; }
+  compacted() { [[ "$(segments_of chatty 1)" == 1 && "$(chunks_of)" == 0 ]]; }
+  check "1 the log was compacted into one object once complete" eventually 60 compacted
+  info "1 log chunks left after completion: $(chunks_of)"
 else
   n=$(segments_of chatty 1)
   info "1 log segments: $n"

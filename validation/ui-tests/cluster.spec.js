@@ -35,6 +35,6 @@ test('the cluster page shows both controllers with their executors', async ({ pa
 
 test('the plugin manager says changes apply to every controller, and shows their status', async ({ page }) => {
   await page.goto(`/manage/pluginManager/`);
-  await expect(page.locator('.cnj-cluster-plugins')).toContainText('apply to all of them');
-  await expect(page.locator('.cnj-cluster-plugins__status')).toContainText('jenkins-b');
+  await expect(page.locator('.jenkins-cluster-plugins')).toContainText('apply to all of them');
+  await expect(page.locator('.jenkins-cluster-plugins__status')).toContainText('jenkins-b');
 });
