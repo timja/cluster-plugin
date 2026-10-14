@@ -2,7 +2,7 @@
 # Builds what ET1 runs, from local branches (nothing is fetched or pushed), into validation/.et1/:
 #   war/jenkins.war                    core at $CORE_REF            (default: cnj/t1-integration, else top of the core stack)
 #   plugins/cloudbees-folder.hpi       folder plugin at $FOLDER_REF (default: cnj/t1-m2-folder-children)
-#   plugins/cluster*.hpi               the Cluster plugins, from plugins/ in this checkout (Postgres + Azure Blob Storage)
+#   plugins/cluster*.hpi               the Cluster plugins, from this checkout (Postgres + Azure Blob Storage)
 #   plugins-s3/                        the same plugin set with cluster-s3 instead of cluster-azure-blob (compose.s3.yaml)
 # Core is built in a separate worktree so the main checkout can keep working.
 set -euo pipefail
@@ -111,11 +111,11 @@ if [[ -d "$CASC" ]]; then
 fi
 
 echo "cluster plugins"
-(cd "$HERE/../plugins" && $MVN install)
+(cd "$HERE/.." && $MVN install)
 rm -f "$ET1"/plugins/persistence-store-postgresql.hpi "$ET1"/plugins/cluster*.hpi
-for p in cluster cluster-postgresql cluster-azure-blob; do cp "$HERE/../plugins/$p/target/$p.hpi" "$ET1/plugins/"; done
+for p in cluster cluster-postgresql cluster-azure-blob; do cp "$HERE/../$p/target/$p.hpi" "$ET1/plugins/"; done
 rm -rf "$ET1/plugins-s3"; cp -R "$ET1/plugins" "$ET1/plugins-s3"; rm "$ET1/plugins-s3/cluster-azure-blob.hpi"
-cp "$HERE/../plugins/cluster-s3/target/cluster-s3.hpi" "$ET1/plugins-s3/"
+cp "$HERE/../cluster-s3/target/cluster-s3.hpi" "$ET1/plugins-s3/"
 
 { echo "core $CORE_REF $(git -C "$CORE" rev-parse "$CORE_REF")"
   echo "cloudbees-folder $FOLDER_REF $(git -C "$FOLDER" rev-parse "$FOLDER_REF")"

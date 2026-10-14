@@ -4,9 +4,13 @@ set -euo pipefail
 
 VALIDATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$VALIDATION_DIR")"
-RAW_DIR="$ROOT_DIR/findings/raw"
+# Evidence (results and logs of each experiment) goes to $FINDINGS_DIR/raw/<experiment>: by default under
+# validation/out (not kept); point FINDINGS_DIR at a findings directory (e.g. the cloud-native-jenkins repository's) to
+# keep it
+FINDINGS_DIR=${FINDINGS_DIR:-$VALIDATION_DIR/out/findings}
+RAW_DIR="$FINDINGS_DIR/raw"
 # the S3 variant (experiments/with-s3.sh) keeps its evidence apart from the default stack's
-[[ -n "${CLUSTER_S3_BUCKET:-}" ]] && RAW_DIR="$ROOT_DIR/findings/raw-s3"
+[[ -n "${CLUSTER_S3_BUCKET:-}" ]] && RAW_DIR="$FINDINGS_DIR/raw-s3"
 OUT_DIR="$VALIDATION_DIR/out"
 
 # Slots (experiments/sweep.sh runs experiments side by side): each experiment runs in a slot of its own, with its own

@@ -1,0 +1,8 @@
+target/
+*.war
+validation/out/
+validation/out-*.log
+validation/.et1/
+validation/.et1-slots/
+validation/ui-tests/node_modules/
+validation/ui-tests/test-results/
