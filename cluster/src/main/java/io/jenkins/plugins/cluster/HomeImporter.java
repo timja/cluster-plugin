@@ -110,7 +110,15 @@ public final class HomeImporter {
             if (!BuildRecords.isShared(job)) {
                 continue;
             }
-            Set<Integer> stored = BuildRecords.storedNumbers(job);
+            Set<Integer> stored;
+            try {
+                stored = BuildRecords.listStoredNumbers(job);
+            } catch (IOException | java.io.UncheckedIOException e) {
+                // not known what is stored: publishing would overwrite what is (an empty listing would mean all of it)
+                LOGGER.log(Level.WARNING, "Could not list the stored builds of " + job.getFullName() + "; not importing its builds", e);
+                report.add("FAILED " + job.getFullName() + ": its stored builds could not be listed: " + e);
+                continue;
+            }
             for (Run<?, ?> run : job.getBuilds()) {
                 if (run.isBuilding() || stored.contains(run.getNumber())) {
                     skipped++;
