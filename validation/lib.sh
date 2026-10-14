@@ -132,3 +132,7 @@ claim_ns() {
   fi
   kubectl --context "$ctx" create namespace "$ns" >/dev/null && kubectl --context "$ctx" label namespace "$ns" cnj-validation=experiment >/dev/null
 }
+
+# The blob store of the run: Azurite (cluster-azure-blob) by default, Garage (cluster-s3) in the S3 variant
+# (experiments/with-s3.sh sets CLUSTER_S3_BUCKET)
+if [[ -n "${CLUSTER_S3_BUCKET:-}" ]]; then BLOB_SERVICE=garage BLOB_CLASS=S3BlobStore; else BLOB_SERVICE=azurite BLOB_CLASS=AzureBlobStore; fi

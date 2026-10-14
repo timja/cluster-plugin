@@ -64,7 +64,7 @@ for repo in poll mb; do
     echo 'echo "branch ${env.BRANCH_NAME}"' > Jenkinsfile && git add Jenkinsfile && git commit -qm init )
 done
 commit() { (cd "$ET1/repo/$1" && date +%s%N > stamp && git add stamp && git commit -qm "change $(date +%s%N)"); }
-et1 up -d postgres azurite >/dev/null 2>&1; wait_postgres
+et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
 et1 up -d lb agent1 rr >/dev/null 2>&1

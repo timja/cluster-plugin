@@ -63,7 +63,7 @@ numbers_are() { [[ "$(numbers "$1" "$2")" == "$3" ]]; }
 permalinks_agree() { local a; a="$(permalinks "$A" "$1")"; [[ -n "$a" && "$a" == "$(permalinks "$B" "$1")" ]]; }
 blob_names() { groovy "$1" "println jenkins.persistence.PersistenceStores.getBlobStore().list(\"$2\").sort().join(' ')"; }
 blob_store_class() { groovy "$1" 'println jenkins.persistence.PersistenceStores.getBlobStore()?.getClass()?.simpleName'; }
-both_use_blobs() { [[ "$(blob_store_class $A)" == *AzureBlobStore* && "$(blob_store_class $B)" == *AzureBlobStore* ]]; }
+both_use_blobs() { [[ "$(blob_store_class $A)" == *$BLOB_CLASS* && "$(blob_store_class $B)" == *$BLOB_CLASS* ]]; }
 console_has() { text "$1" "$2" 2>/dev/null | grep -q -- "$3"; }
 some_console_has() { local n; for n in $(seq "$3" "$4"); do console_has "$1" "$2/$n/consoleText" "$5" && return 0; done; return 1; }
 result_is() { [[ "$(result_of "$1" "$2" 2>/dev/null)" == "$3" ]]; }
@@ -84,7 +84,7 @@ groovy 8089 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkins
 docker exec et1-seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv et1-seed >/dev/null
 
-et1 up -d postgres azurite >/dev/null 2>&1; wait_postgres
+et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 wait_up $A; wait_up $B
 r "## ET3 results ($(date -u +%Y-%m-%dT%H:%MZ))"
