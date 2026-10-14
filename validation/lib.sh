@@ -5,6 +5,8 @@ set -euo pipefail
 VALIDATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$VALIDATION_DIR")"
 RAW_DIR="$ROOT_DIR/findings/raw"
+# the S3 variant (experiments/with-s3.sh) keeps its evidence apart from the default stack's
+[[ -n "${CLUSTER_S3_BUCKET:-}" ]] && RAW_DIR="$ROOT_DIR/findings/raw-s3"
 OUT_DIR="$VALIDATION_DIR/out"
 # API token provisioned on every controller by jenkins/init.groovy.d/cnj-admin-token.groovy:
 # token auth needs no crumbs or session cookies, so calls are stateless and safe to run concurrently.

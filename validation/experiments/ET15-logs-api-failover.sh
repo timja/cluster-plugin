@@ -87,9 +87,17 @@ check "1 while it runs, B's API shows it as the last build, building" bash -c "[
 check "1 ... and first in builds[]" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=builds[number,building]') == *'\"builds\":[{'*'\"building\":true,\"number\":1}'* ]]"
 check "1 ... and B's /lastBuild/api/json is the running build (redirected and forwarded to A)" bash -c "[[ \$(curl -gsfL -u '$AUTH' 'http://localhost:$B/job/chatty/lastBuild/api/json?tree=number,building') == *'\"building\":true'*'\"number\":1'* ]]"
 check "1 completes" eventually 180 is_result $A /job/chatty/1 SUCCESS
-n=$(segments_of chatty 1)
-info "1 log segments: $n"
-check "1 the log was rolled over into several segments" bash -c "[[ '$n' -gt 2 ]]"
+if [[ $BLOB_CLASS == S3BlobStore ]]; then
+  # S3 cannot append: the log was shipped as chunks (log.d/<offset>.<length>), put together into one object once the
+  # build completed
+  chunks=$(groovy $A "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/chatty/builds/1/log.d').size()" | tr -d '\r\n ')
+  info "1 log chunks left after completion: $chunks"
+  check "1 the log was compacted into one object once complete" bash -c "[[ '$(segments_of chatty 1)' == 1 && '$chunks' == 0 ]]"
+else
+  n=$(segments_of chatty 1)
+  info "1 log segments: $n"
+  check "1 the log was rolled over into several segments" bash -c "[[ '$n' -gt 2 ]]"
+fi
 check "1 B shows the whole log, in order" eventually 60 console_whole_on $B /job/chatty/1 chatty-b 300
 completed_on_b() { json $B '/job/chatty/api/json?tree=lastBuild[number,building,result]' | tee "$OUT/chatty-last-on-b.json" | grep -q '"building":false,"number":1,"result":"SUCCESS"'; }
 check "1 after completion, B's API shows the completed build" eventually 30 completed_on_b
