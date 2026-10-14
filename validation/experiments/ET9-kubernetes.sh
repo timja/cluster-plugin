@@ -93,6 +93,8 @@ for i in $(seq 1 10); do
   [[ "$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -X POST "http://localhost:$SVC/job/ryw$i/build?delay=0sec")" == 201 ]] && ryw_ok=$((ryw_ok+1))
 done
 check "2 a job made through the Service can be built through it at once ($ryw_ok/10)" test "$ryw_ok" = 10
+r9() { [[ -z "$(curl -gs -u "$AUTH" "http://localhost:$SVC/job/ryw$1/lastBuild/api/json?tree=building" | grep -o '"building":true')" ]]; }
+for i in $(seq 1 10); do eventually 60 r9 "$i"; svc_post "/job/ryw$i/doDelete" >/dev/null || true; done # later scenarios count the jobs
 g_on "$REL-0" 'Jenkins.get().securityRealm.createAccount("u9", "u9-password-1")' >/dev/null
 # the journey's job: freestyle (HtmlUnit cannot submit a Pipeline's configure form), built once, on a Kubernetes agent
 cat > "$OUT_DIR/fs9.xml" <<'XML'
