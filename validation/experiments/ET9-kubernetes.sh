@@ -82,6 +82,17 @@ for i in $(seq 1 10); do eventually 60 result_is flyweight "$i" SUCCESS; done
 spread=$(for i in $(seq 1 10); do ran_on flyweight "$i"; done | sort | uniq -c | awk '{print $2 "=" $1}' | tr '\n' ' ')
 info "2 10 builds through the Service ran on: $spread"
 check "2 builds through the Service ran on both controllers" test "$(wc -w <<<"$spread" | tr -d ' ')" = 2
+# read-your-writes through the Service: a job made through it, built through it at once (another controller may answer)
+cat > "$OUT_DIR/ryw.xml" <<'XML'
+<?xml version='1.1' encoding='UTF-8'?>
+<project><builders/></project>
+XML
+ryw_ok=0
+for i in $(seq 1 10); do
+  svc_post "/createItem?name=ryw$i" -H 'Content-Type: application/xml' --data-binary "@$OUT_DIR/ryw.xml" >/dev/null
+  [[ "$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -X POST "http://localhost:$SVC/job/ryw$i/build?delay=0sec")" == 201 ]] && ryw_ok=$((ryw_ok+1))
+done
+check "2 a job made through the Service can be built through it at once ($ryw_ok/10)" test "$ryw_ok" = 10
 g_on "$REL-0" 'Jenkins.get().securityRealm.createAccount("u9", "u9-password-1")' >/dev/null
 # the journey's job: freestyle (HtmlUnit cannot submit a Pipeline's configure form), built once, on a Kubernetes agent
 cat > "$OUT_DIR/fs9.xml" <<'XML'
