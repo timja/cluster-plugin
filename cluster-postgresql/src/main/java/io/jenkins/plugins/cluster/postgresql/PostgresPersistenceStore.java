@@ -1,9 +1,9 @@
 package io.jenkins.plugins.cluster.postgresql;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -14,11 +14,12 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Properties;
 import java.util.Map;
-import java.util.TreeMap;
+import java.util.Properties;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -30,6 +31,7 @@ import java.util.logging.Logger;
 import jenkins.persistence.BuildLeases;
 import jenkins.persistence.ClusterQueue;
 import jenkins.persistence.ConflictException;
+import jenkins.persistence.LeaseLostException;
 import jenkins.persistence.PersistenceStore;
 import org.postgresql.PGConnection;
 
@@ -168,57 +170,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     public long write(@NonNull String key, @NonNull byte[] content, long expectedVersion) throws IOException {
         byte[] sha = sha256(content);
         try {
-            return withTransaction(c -> {
-                long actual = ABSENT;
-                byte[] actualSha = null;
-                try (PreparedStatement ps =
-                        c.prepareStatement("select version, sha256 from jenkins_store where key = ? for update")) {
-                    ps.setString(1, key);
-                    try (ResultSet rs = ps.executeQuery()) {
-                        if (rs.next()) {
-                            actual = rs.getLong(1);
-                            actualSha = rs.getBytes(2);
-                        }
-                    }
-                }
-                if (expectedVersion != ANY && expectedVersion != actual) {
-                    throw new Conflict(new ConflictException(key, expectedVersion, actual));
-                }
-                if (actualSha != null && Arrays.equals(actualSha, sha)) {
-                    return actual; // identical content: no new version, no event
-                }
-                long version = nextVersion(c);
-                if (actual == ABSENT) {
-                    try (PreparedStatement ps =
-                            c.prepareStatement("insert into jenkins_store (key, content, sha256, version, updated_by, size)"
-                                    + " values (?, ?, ?, ?, ?, ?) on conflict (key) do nothing")) {
-                        ps.setString(1, key);
-                        ps.setBytes(2, content);
-                        ps.setBytes(3, sha);
-                        ps.setLong(4, version);
-                        ps.setString(5, origin);
-                        ps.setInt(6, content.length);
-                        if (ps.executeUpdate() == 0) {
-                            // created concurrently by someone else since our select
-                            throw new Conflict(new ConflictException(key, expectedVersion, -1));
-                        }
-                    }
-                } else {
-                    try (PreparedStatement ps =
-                            c.prepareStatement("update jenkins_store set content = ?, sha256 = ?, version = ?,"
-                                    + " updated_at = now(), updated_by = ?, size = ? where key = ?")) {
-                        ps.setBytes(1, content);
-                        ps.setBytes(2, sha);
-                        ps.setLong(3, version);
-                        ps.setString(4, origin);
-                        ps.setInt(5, content.length);
-                        ps.setString(6, key);
-                        ps.executeUpdate();
-                    }
-                }
-                event(c, ChangeEvent.Kind.WRITTEN, key, null, version);
-                return version;
-            });
+            return withTransaction(c -> writeIn(c, key, content, sha, expectedVersion));
         } catch (Conflict e) {
             if (expectedVersion == ANY) {
                 return write(key, content, ANY); // lost a creation race; overwrite as requested
@@ -227,6 +179,98 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         } catch (SQLException e) {
             throw new IOException("Failed to write " + key, e);
         }
+    }
+
+    /**
+     * Writes only while this controller holds the lease with this epoch, in the same transaction: the lease row is
+     * locked first, so a takeover (which updates it) waits until this write is committed, or finds it rolled back.
+     */
+    @Override
+    public long writeIfHeld(@NonNull String leaseKey, long epoch, @NonNull String key, @NonNull byte[] content, long expectedVersion)
+            throws IOException {
+        byte[] sha = sha256(content);
+        try {
+            return withTransaction(c -> {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "select 1 from jenkins_build_leases where key = ? and owner = ? and epoch = ? for update")) {
+                    ps.setString(1, leaseKey);
+                    ps.setString(2, origin);
+                    ps.setLong(3, epoch);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (!rs.next()) {
+                            throw new LeaseLost();
+                        }
+                    }
+                }
+                return writeIn(c, key, content, sha, expectedVersion);
+            });
+        } catch (LeaseLost e) {
+            throw new LeaseLostException(leaseKey, epoch);
+        } catch (Conflict e) {
+            if (expectedVersion == ANY) {
+                return writeIfHeld(leaseKey, epoch, key, content, ANY); // lost a creation race; overwrite as requested
+            }
+            throw e.conflict;
+        } catch (SQLException e) {
+            throw new IOException("Failed to write " + key, e);
+        }
+    }
+
+    /** The lease of a {@link #writeIfHeld} is not held (any more). */
+    private static final class LeaseLost extends SQLException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    private long writeIn(Connection c, String key, byte[] content, byte[] sha, long expectedVersion) throws SQLException {
+        long actual = ABSENT;
+        byte[] actualSha = null;
+        try (PreparedStatement ps =
+                c.prepareStatement("select version, sha256 from jenkins_store where key = ? for update")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    actual = rs.getLong(1);
+                    actualSha = rs.getBytes(2);
+                }
+            }
+        }
+        if (expectedVersion != ANY && expectedVersion != actual) {
+            throw new Conflict(new ConflictException(key, expectedVersion, actual));
+        }
+        if (actualSha != null && Arrays.equals(actualSha, sha)) {
+            return actual; // identical content: no new version, no event
+        }
+        long version = nextVersion(c);
+        if (actual == ABSENT) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("insert into jenkins_store (key, content, sha256, version, updated_by, size)"
+                            + " values (?, ?, ?, ?, ?, ?) on conflict (key) do nothing")) {
+                ps.setString(1, key);
+                ps.setBytes(2, content);
+                ps.setBytes(3, sha);
+                ps.setLong(4, version);
+                ps.setString(5, origin);
+                ps.setInt(6, content.length);
+                if (ps.executeUpdate() == 0) {
+                    // created concurrently by someone else since our select
+                    throw new Conflict(new ConflictException(key, expectedVersion, -1));
+                }
+            }
+        } else {
+            try (PreparedStatement ps =
+                    c.prepareStatement("update jenkins_store set content = ?, sha256 = ?, version = ?,"
+                            + " updated_at = now(), updated_by = ?, size = ? where key = ?")) {
+                ps.setBytes(1, content);
+                ps.setBytes(2, sha);
+                ps.setLong(3, version);
+                ps.setString(4, origin);
+                ps.setInt(5, content.length);
+                ps.setString(6, key);
+                ps.executeUpdate();
+            }
+        }
+        event(c, ChangeEvent.Kind.WRITTEN, key, null, version);
+        return version;
     }
 
     @Override
@@ -319,9 +363,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     @Override
-    public void move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
+    public List<Moved> move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
         try {
-            withTransaction(c -> {
+            return withTransaction(c -> {
                 try (PreparedStatement ps = c.prepareStatement(
                         "select 1 from jenkins_store where key = ? or key like ? escape '\\' limit 1")) {
                     ps.setString(1, toPrefix);
@@ -332,18 +376,20 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                         }
                     }
                 }
-                List<String> keys = new ArrayList<>();
+                Map<String, Long> keys = new LinkedHashMap<>();
                 try (PreparedStatement ps = c.prepareStatement(
-                        "select key from jenkins_store where key = ? or key like ? escape '\\' order by length(key), key for update")) {
+                        "select key, version from jenkins_store where key = ? or key like ? escape '\\' order by length(key), key for update")) {
                     ps.setString(1, fromPrefix);
                     ps.setString(2, likePrefix(fromPrefix + "/"));
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
-                            keys.add(rs.getString(1));
+                            keys.put(rs.getString(1), rs.getLong(2));
                         }
                     }
                 }
-                for (String oldKey : keys) {
+                List<Moved> moved = new ArrayList<>();
+                for (Map.Entry<String, Long> entry : keys.entrySet()) {
+                    String oldKey = entry.getKey();
                     String newKey = toPrefix + oldKey.substring(fromPrefix.length());
                     long version = nextVersion(c);
                     try (PreparedStatement ps = c.prepareStatement(
@@ -355,8 +401,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                         ps.executeUpdate();
                     }
                     event(c, ChangeEvent.Kind.MOVED, newKey, oldKey, version);
+                    moved.add(new Moved(oldKey, entry.getValue(), newKey, version));
                 }
-                return null;
+                return moved;
             });
         } catch (Conflict e) {
             throw e.conflict;
@@ -743,6 +790,21 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                             id,
                             actions,
                             dueAt));
+        }
+
+        @Override
+        public boolean update(long id, @NonNull String expectedActions, @NonNull String actions, long dueAt) throws IOException {
+            return run(
+                    "update queue item " + id,
+                    c -> change(
+                            c,
+                            id,
+                            "update jenkins_queue set actions = ?, due_at = least(due_at, ?), updated_at = now() where id = ? and state = 'WAITING'"
+                                    + " and actions = ?",
+                            actions,
+                            dueAt,
+                            id,
+                            expectedActions) > 0);
         }
 
         @Override

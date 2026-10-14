@@ -16,7 +16,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import jenkins.persistence.ClusterQueue;
 import jenkins.persistence.ConflictException;
+import jenkins.persistence.LeaseLostException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStore.ChangeEvent;
 import org.junit.jupiter.api.AfterEach;
@@ -220,11 +222,37 @@ class PostgresPersistenceStoreTest {
         a.write("jobs/f/config.xml", bytes("f"), PersistenceStore.ANY);
         a.write("jobs/f/jobs/x/config.xml", bytes("x"), PersistenceStore.ANY);
         a.write("jobs/fx/config.xml", bytes("not part of f"), PersistenceStore.ANY);
-        a.move("jobs/f", "jobs/g");
+        long fVersion = a.read("jobs/f/config.xml").version();
+        List<PersistenceStore.Moved> moved = a.move("jobs/f", "jobs/g");
+        assertEquals(List.of("jobs/f/config.xml", "jobs/f/jobs/x/config.xml"), moved.stream().map(PersistenceStore.Moved::from).toList());
+        assertEquals(fVersion, moved.get(0).fromVersion());
+        assertEquals(b.read("jobs/g/config.xml").version(), moved.get(0).version(), "the version it has now");
         assertNull(b.read("jobs/f/config.xml"));
         assertArrayEquals(bytes("x"), b.read("jobs/g/jobs/x/config.xml").content());
         assertArrayEquals(bytes("not part of f"), b.read("jobs/fx/config.xml").content());
         assertThrows(ConflictException.class, () -> a.move("jobs/g", "jobs/fx"));
+    }
+
+    @Test
+    void writesFencedByALease() throws Exception {
+        String lease = "jobs/p/running/1.xml";
+        long epoch = a.leases().acquire(lease);
+        assertTrue(a.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("mine"), PersistenceStore.ANY) > 0);
+        assertThrows(LeaseLostException.class, () -> b.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("not b's"), PersistenceStore.ANY));
+        a.leases().release(lease, epoch);
+        assertThrows(LeaseLostException.class, () -> a.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("lost"), PersistenceStore.ANY));
+        assertArrayEquals(bytes("mine"), b.read("jobs/p/builds/1/build.xml").content());
+    }
+
+    @Test
+    void foldsCompareAndSet() throws Exception {
+        ClusterQueue q = a.queue();
+        long id = q.nextId();
+        q.publish(new ClusterQueue.Record(id, "p", "p", "<actions/>", System.currentTimeMillis() + 60_000, ClusterQueue.State.WAITING,
+                a.getOrigin(), null, null, 0));
+        assertTrue(q.update(id, "<actions/>", "<actions><first/></actions>", System.currentTimeMillis()));
+        assertFalse(b.queue().update(id, "<actions/>", "<actions><second/></actions>", System.currentTimeMillis()), "read before the first: merge again");
+        assertEquals("<actions><first/></actions>", q.get(id).actions());
     }
 
     @Test
