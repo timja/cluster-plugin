@@ -26,7 +26,8 @@ if (!existing.isEmpty()) {
 // additions are kept): only the one that claims making it does; the others get it when they apply that change
 def cluster = null
 try {
-    cluster = Jenkins.get().pluginManager.uberClassLoader.loadClass('io.jenkins.plugins.cluster.spi.ClusterStore').get()
+    // reflection: Groovy's call site for a static interface method fails verification (VerifyError)
+    cluster = Jenkins.get().pluginManager.uberClassLoader.loadClass('io.jenkins.plugins.cluster.spi.ClusterStore').getMethod('get').invoke(null)
 } catch (ClassNotFoundException ignored) {
     // not a cluster: make it here
 }
