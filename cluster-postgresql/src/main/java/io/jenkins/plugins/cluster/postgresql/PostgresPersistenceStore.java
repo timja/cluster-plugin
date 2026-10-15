@@ -747,6 +747,28 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
         @NonNull
         @Override
+        public long[] nextIds(int n) throws IOException {
+            try {
+                return withTransaction(c -> {
+                    long[] ids = new long[n];
+                    try (PreparedStatement ps =
+                            c.prepareStatement("select nextval('jenkins_queue_ids') from generate_series(1, ?)")) {
+                        ps.setInt(1, n);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            for (int i = 0; i < n && rs.next(); i++) {
+                                ids[i] = rs.getLong(1);
+                            }
+                        }
+                    }
+                    return ids;
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to allocate queue ids", e);
+            }
+        }
+
+        @NonNull
+        @Override
         public Record publish(@NonNull Record item) throws IOException {
             try {
                 return withTransaction(c -> {
@@ -777,32 +799,19 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
 
         @Override
-        public void update(long id, @NonNull String actions, long dueAt) throws IOException {
-            run(
-                    "update queue item " + id,
-                    c -> change(
-                            c,
-                            id,
-                            "update jenkins_queue set actions = ?, due_at = least(due_at, ?), updated_at = now() where id = ? and state = 'WAITING'"
-                                    + " and (actions <> ? or due_at > ?)",
-                            actions,
-                            dueAt,
-                            id,
-                            actions,
-                            dueAt));
-        }
-
-        @Override
-        public boolean update(long id, @NonNull String expectedActions, @NonNull String actions, long dueAt) throws IOException {
+        public boolean update(
+                long id, @NonNull String expectedActions, @NonNull String actions, long dueAt, @CheckForNull String pinTo)
+                throws IOException {
             return run(
                     "update queue item " + id,
                     c -> change(
                             c,
                             id,
-                            "update jenkins_queue set actions = ?, due_at = least(due_at, ?), updated_at = now() where id = ? and state = 'WAITING'"
-                                    + " and actions = ?",
+                            "update jenkins_queue set actions = ?, due_at = least(due_at, ?), pinned_to = coalesce(pinned_to, ?),"
+                                    + " updated_at = now() where id = ? and state = 'WAITING' and actions = ?",
                             actions,
                             dueAt,
+                            pinTo,
                             id,
                             expectedActions) > 0);
         }
@@ -844,8 +853,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     c -> change(
                                     c,
                                     id,
-                                    "update jenkins_queue set state = 'CANCELLED', updated_at = now() where id = ? and state = 'WAITING'",
-                                    id)
+                                    "update jenkins_queue set state = 'CANCELLED', updated_at = now() where id = ?"
+                                            + " and (state = 'WAITING' or state = 'CLAIMED' and claimed_by = ?)",
+                                    id,
+                                    origin)
                             == 1);
         }
 
@@ -916,17 +927,39 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     public int reclaimAndPrune() throws IOException {
         boolean judge = canJudgeLiveness();
         return run("reclaim queue items", c -> {
-            List<Long> ids = new ArrayList<>();
+            List<Long> claimed = new ArrayList<>();
             if (judge) try (PreparedStatement ps = c.prepareStatement(
-                    "update jenkins_queue set state = 'WAITING', claimed_by = null, updated_at = now()"
-                            + " where state = 'CLAIMED' and claimed_by not in (select origin from jenkins_members"
-                            + " where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ") returning id")) {
+                    "select id from jenkins_queue where state = 'CLAIMED' and claimed_by not in (select origin from jenkins_members"
+                            + " where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ") for update")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        ids.add(rs.getLong(1));
+                        claimed.add(rs.getLong(1));
                     }
                 }
+            }
+            List<Long> ids = new ArrayList<>();
+            int putBack = 0;
+            for (long id : claimed) {
+                // one at a time: an equal item may be waiting already (scheduled since), which then stands for this one
+                java.sql.Savepoint sp = c.setSavepoint();
+                try (PreparedStatement ps = c.prepareStatement(
+                        "update jenkins_queue set state = 'WAITING', claimed_by = null, updated_at = now() where id = ? and state = 'CLAIMED'")) {
+                    ps.setLong(1, id);
+                    putBack += ps.executeUpdate();
+                } catch (SQLException e) {
+                    if (!"23505".equals(e.getSQLState())) {
+                        throw e;
+                    }
+                    c.rollback(sp);
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "update jenkins_queue set state = 'CANCELLED', updated_at = now() where id = ? and state = 'CLAIMED'")) {
+                        ps.setLong(1, id);
+                        ps.executeUpdate();
+                    }
+                }
+                c.releaseSavepoint(sp);
+                ids.add(id);
             }
             for (long id : ids) {
                 event(c, ChangeEvent.Kind.WRITTEN, QUEUE_PREFIX + id, null, nextVersion(c));
@@ -935,7 +968,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 s.execute(
                         "delete from jenkins_queue where state in ('STARTED', 'CANCELLED') and updated_at < now() - interval '1 day'");
             }
-            return ids.size();
+            return putBack;
         });
     }
 

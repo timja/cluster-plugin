@@ -253,6 +253,22 @@ class PostgresPersistenceStoreTest {
         assertTrue(q.update(id, "<actions/>", "<actions><first/></actions>", System.currentTimeMillis()));
         assertFalse(b.queue().update(id, "<actions/>", "<actions><second/></actions>", System.currentTimeMillis()), "read before the first: merge again");
         assertEquals("<actions><first/></actions>", q.get(id).actions());
+        // a request which must run on b pins the item, unless it is pinned already
+        assertTrue(b.queue().update(id, "<actions><first/></actions>", "<actions><second/></actions>", System.currentTimeMillis(), b.getOrigin()));
+        assertEquals(b.getOrigin(), q.get(id).pinnedTo());
+        assertTrue(q.update(id, "<actions><second/></actions>", "<actions><third/></actions>", System.currentTimeMillis(), a.getOrigin()));
+        assertEquals(b.getOrigin(), q.get(id).pinnedTo());
+        assertEquals("<actions><third/></actions>", q.get(id).actions());
+    }
+
+    @Test
+    void idsTakenAhead() throws Exception {
+        long before = a.queue().nextId();
+        long[] ids = a.queue().nextIds(64);
+        assertEquals(64, ids.length);
+        assertEquals(64, java.util.Arrays.stream(ids).distinct().count());
+        assertTrue(java.util.Arrays.stream(ids).allMatch(id -> id > before));
+        assertTrue(b.queue().nextId() > java.util.Arrays.stream(ids).max().getAsLong(), "not handed out again");
     }
 
     @Test
@@ -473,7 +489,7 @@ class PostgresPersistenceStoreTest {
             assertTrue(qb.claim(id1));
             assertFalse(qa.claim(id1), "claimed once");
             assertTrue(qb.claim(id1), "claiming again is harmless for the claimer");
-            assertFalse(qa.cancel(id1), "no longer waiting");
+            assertFalse(qa.cancel(id1), "no longer waiting, and claimed by another");
             qb.started(id1, 7);
             assertEquals(
                     jenkins.persistence.ClusterQueue.State.STARTED, qa.get(id1).state());
@@ -481,7 +497,9 @@ class PostgresPersistenceStoreTest {
 
             long id3 = qa.nextId();
             qa.publish(waiting(id3, "p", a.getOrigin())); // a new item once the previous one left the waiting state
-            assertTrue(qa.cancel(id3));
+            assertTrue(qa.claim(id3));
+            assertFalse(qb.cancel(id3), "claimed by another");
+            assertTrue(qa.cancel(id3), "claimed here but not started: its copy here was cancelled");
             assertTrue(qa.pending().isEmpty());
 
             // an item claimed by a controller which is gone is put back
@@ -516,6 +534,17 @@ class PostgresPersistenceStoreTest {
                     seenByB.stream()
                             .anyMatch(r -> r.id() == id4 && b.getOrigin().equals(r.claimedBy())),
                     "changes reach the other controller");
+
+            // an item claimed by the gone controller while an equal one waits: that one stands for it
+            long id8 = qa.nextId();
+            qa.publish(waiting(id8, "s", a.getOrigin()));
+            assertTrue(qa.claim(id8));
+            long id9 = qb.nextId();
+            assertEquals(id9, qb.publish(waiting(id9, "s", b.getOrigin())).id());
+            assertEquals(0, b.reclaimAndPrune(), "none put back");
+            assertEquals(jenkins.persistence.ClusterQueue.State.CANCELLED, qb.get(id8).state());
+            assertEquals(jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id9).state());
+            assertTrue(qb.cancel(id9));
 
             // an item a gone controller recorded as started, with a number but nothing else (it died before the
             // build's placeholder): listed, and queued again
