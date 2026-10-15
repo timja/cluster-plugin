@@ -136,6 +136,22 @@ final class SchemaMigrations {
         s.execute("create table if not exists jenkins_schema_migrations (id text primary key, state text not null default 'pending',"
                 + " owner text, cursor text, rows_done bigint not null default 0, started_at timestamptz, finished_at timestamptz)");
         s.execute("alter table jenkins_store add column if not exists size int"); // nullable: instant
+        // the protocol a contracted migration needed: the cluster's floor (protocolFloor)
+        s.execute("alter table jenkins_schema_migrations add column if not exists contract_protocol int");
+    }
+
+    /**
+     * The oldest protocol a controller may speak to join: the highest that a contracted migration needed. Recorded with the
+     * contraction, so a controller of an older protocol, which would still write the old form, refuses to start afterwards.
+     */
+    int protocolFloor() throws SQLException {
+        return store.migrationTransaction(c -> {
+            try (Statement s = c.createStatement();
+                    ResultSet rs = s.executeQuery("select coalesce(max(contract_protocol), 0) from jenkins_schema_migrations")) {
+                rs.next();
+                return rs.getInt(1);
+            }
+        });
     }
 
     /** Runs what is left of every migration this controller can run now; called periodically. */
@@ -201,6 +217,11 @@ final class SchemaMigrations {
         }
         store.migrationTransaction(c -> {
             m.contract(c);
+            try (PreparedStatement ps = c.prepareStatement("update jenkins_schema_migrations set contract_protocol = ? where id = ?")) {
+                ps.setInt(1, m.contractProtocol());
+                ps.setString(2, m.id());
+                ps.executeUpdate();
+            }
             return null;
         });
         store.migrationTransaction(c -> {

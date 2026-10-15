@@ -29,6 +29,14 @@ public interface Membership {
     @NonNull
     List<String> peersBelow(int minimum) throws IOException;
 
+    /**
+     * The oldest cluster protocol a controller may speak to join (raised by schema changes that older controllers cannot
+     * live with); 0 for none.
+     */
+    default int protocolFloor() throws IOException {
+        return 0;
+    }
+
     /** Whether this controller's membership may have lapsed (heartbeats missing for longer than the member timeout). */
     boolean mayHaveLapsed();
 

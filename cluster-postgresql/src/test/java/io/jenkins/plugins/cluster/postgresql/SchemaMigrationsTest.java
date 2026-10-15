@@ -59,6 +59,11 @@ class SchemaMigrationsTest {
     }
 
     @Test
+    void noProtocolFloorUntilAMigrationIsContracted() throws Exception {
+        assertEquals(0, a.protocolFloor());
+    }
+
+    @Test
     void backfilledWhileWritesGoOnAndResumedByAnotherController() throws Exception {
         for (int i = 0; i < 2000; i++) {
             a.write("jobs/j" + i + "/config.xml", ("<project>" + i + "</project>").getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
@@ -89,6 +94,7 @@ class SchemaMigrationsTest {
         assertEquals(2, query("select count(*) from jenkins_schema_migrations where state = 'done'"));
         assertEquals(0, query("select count(*) from information_schema.columns where table_name = 'jenkins_store'"
                 + " and column_name = 'size' and is_nullable = 'YES'"), "contracted: no older controller is alive");
+        assertEquals(2, b.protocolFloor(), "controllers older than the contracted migration's protocol may no longer join");
         a = store(); // for tearDown
     }
 }

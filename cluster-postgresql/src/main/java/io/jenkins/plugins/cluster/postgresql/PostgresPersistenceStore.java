@@ -1230,6 +1230,15 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
+    @Override
+    public int protocolFloor() throws IOException {
+        try {
+            return migrations.protocolFloor();
+        } catch (SQLException e) {
+            throw new IOException("Failed to read the cluster's protocol floor", e);
+        }
+    }
+
     @NonNull
     @Override
     public List<String> peersBelow(int minimum) throws IOException {
