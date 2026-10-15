@@ -1237,6 +1237,12 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         return BUILD_RECORDS;
     }
 
+    /** Confidential keys made at runtime are shared, so that every controller signs and encrypts with the same ones. */
+    @Override
+    public boolean storesConfidentialKeys() {
+        return true;
+    }
+
     @Override
     public Set<String> liveOrigins() throws IOException {
         synchronized (this) {
