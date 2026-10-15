@@ -180,9 +180,24 @@ if [[ -n "${CLUSTER_S3_BUCKET:-}" ]]; then BLOB_SERVICE=garage BLOB_CLASS=S3Blob
 # then it is loaded from an archive of this machine's platform only.
 kind_load() {
   local cluster=$1 image=$2 tar rc
-  kind load docker-image --name "$cluster" "$image" >/dev/null 2>&1 && return 0
-  tar=$(mktemp "${TMPDIR:-/tmp}/kind-load.XXXXXX") || return 1
-  docker save --platform "linux/$(docker version -f '{{.Server.Arch}}')" -o "$tar" "$image" \
-    && kind load image-archive --name "$cluster" "$tar" >/dev/null
-  rc=$?; rm -f "$tar"; return $rc
+  if ! kind load docker-image --name "$cluster" "$image" >/dev/null 2>&1; then
+    tar=$(mktemp "${TMPDIR:-/tmp}/kind-load.XXXXXX") || return 1
+    docker save --platform "linux/$(docker version -f '{{.Server.Arch}}')" -o "$tar" "$image" \
+      && kind load image-archive --name "$cluster" "$tar" >/dev/null
+    rc=$?; rm -f "$tar"; (( rc == 0 )) || return $rc
+  fi
+  kind_prune "$cluster"
+}
+
+# kind_prune <cluster>: drops the import-<date> references each load leaves in the nodes, and with them the images a
+# reload replaced (about 1 GB per load of cnj/jenkins:k8s); a node's disk is Docker's, and a full one takes the
+# controllers' agents offline (disk space monitor). Images in use keep their own tags.
+kind_prune() {
+  local node refs
+  for node in $(kind get nodes --name "$1" 2>/dev/null); do
+    refs=$(docker exec "$node" ctr -n k8s.io images ls -q 2>/dev/null | grep '^import-')
+    [[ -n "$refs" ]] && docker exec "$node" ctr -n k8s.io images rm $refs >/dev/null 2>&1
+    docker exec "$node" crictl rmi --prune >/dev/null 2>&1 || true
+  done
+  return 0
 }
