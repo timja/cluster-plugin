@@ -193,11 +193,22 @@ kind_load() {
 # reload replaced (about 1 GB per load of cnj/jenkins:k8s); a node's disk is Docker's, and a full one takes the
 # controllers' agents offline (disk space monitor). Images in use keep their own tags.
 kind_prune() {
-  local node refs
+  local node refs id
   for node in $(kind get nodes --name "$1" 2>/dev/null); do
     refs=$(docker exec "$node" ctr -n k8s.io images ls -q 2>/dev/null | grep '^import-')
     [[ -n "$refs" ]] && docker exec "$node" ctr -n k8s.io images rm $refs >/dev/null 2>&1
-    docker exec "$node" crictl rmi --prune >/dev/null 2>&1 || true
+    # untagged images no container uses: an image just loaded is tagged but not yet in use, so `crictl rmi --prune`
+    # would drop it
+    for id in $( { docker exec "$node" crictl ps -a -o json; echo; docker exec "$node" crictl images -o json; } 2>/dev/null \
+        | python3 -c '
+import json, sys
+d, s = json.JSONDecoder(), sys.stdin.read()
+c, n = d.raw_decode(s)
+i, _ = d.raw_decode(s[n:].lstrip())
+used = {x["imageRef"] for x in c["containers"]}
+print(" ".join(m["id"] for m in i["images"] if not m.get("repoTags") and m["id"] not in used))'); do
+      docker exec "$node" crictl rmi "$id" >/dev/null 2>&1 || true
+    done
   done
   return 0
 }
