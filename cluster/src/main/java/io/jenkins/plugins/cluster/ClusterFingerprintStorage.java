@@ -198,8 +198,48 @@ public final class ClusterFingerprintStorage extends FingerprintStorage {
         }
     }
 
+    /** Set while {@link Cleanup} runs: core's own cleanup, on every controller, leaves the shared store to it. */
+    private static final ThreadLocal<Boolean> CLEANING = new ThreadLocal<>();
+
+    /**
+     * Cleans the fingerprints in the store once per cluster, as core's daily cleanup would on one controller: core's
+     * runs on every controller, and asks this storage too, which only does it from here.
+     */
+    @jenkins.util.ClusterSingleton
+    @Extension
+    public static final class Cleanup extends hudson.model.AsyncPeriodicWork {
+        public Cleanup() {
+            super("Shared fingerprint cleanup");
+        }
+
+        @Override
+        public long getRecurrencePeriod() {
+            return DAY;
+        }
+
+        @Override
+        protected void execute(TaskListener listener) {
+            if (jenkins.fingerprints.GlobalFingerprintConfiguration.get().isFingerprintCleanupDisabled()
+                    || !(jenkins.fingerprints.FingerprintStorage.get() instanceof ClusterFingerprintStorage storage)) {
+                return;
+            }
+            CLEANING.set(Boolean.TRUE);
+            try {
+                storage.iterateAndCleanupFingerprints(listener);
+            } finally {
+                CLEANING.remove();
+            }
+        }
+    }
+
     @Override
     public void iterateAndCleanupFingerprints(TaskListener listener) {
+        if (CLEANING.get() == null) {
+            listener.getLogger()
+                    .println("Fingerprints in the cluster's store are cleaned once per cluster, by "
+                            + Cleanup.class.getName());
+            return;
+        }
         Set<String> names;
         try {
             names = store().children(PREFIX);
