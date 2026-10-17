@@ -45,6 +45,35 @@ public final class BuildElsewhere implements ExternalBuild, Queue.Executable {
         this.placeholder = placeholder;
     }
 
+    /**
+     * A view of a build of a job started on another controller: as its placeholder says, else (not written yet, or not
+     * read yet) as started by that controller, now. May ask the store.
+     *
+     * @param origin the {@link jenkins.persistence.PersistenceStore#getOrigin origin} of the controller running it
+     */
+    @NonNull
+    public static BuildElsewhere view(@NonNull Job<?, ?> job, int number, @CheckForNull String origin) {
+        for (RunningBuilds.Placeholder p : RunningBuilds.elsewhere(job)) {
+            if (p.getNumber() == number) {
+                return new BuildElsewhere(job, p);
+            }
+        }
+        String prefix = BuildRecords.prefix(job);
+        String where = origin == null ? "another controller" : origin;
+        return new BuildElsewhere(
+                job,
+                new RunningBuilds.Placeholder(
+                        prefix == null ? "" : prefix,
+                        number,
+                        where,
+                        where,
+                        "#" + number,
+                        System.currentTimeMillis(),
+                        0,
+                        java.util.Map.of(),
+                        jenkins.persistence.PersistenceStore.ANY));
+    }
+
     public Job<?, ?> getJob() {
         return job;
     }
