@@ -2,13 +2,16 @@ package io.jenkins.plugins.cluster;
 
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.EarlyStoreReader;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
+import hudson.ExtensionList;
 import hudson.PluginManager;
 import hudson.PluginWrapper;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
+import hudson.lifecycle.Lifecycle;
 import hudson.lifecycle.RestartNotSupportedException;
 import hudson.model.AdministrativeMonitor;
 import hudson.util.VersionNumber;
@@ -31,6 +34,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.model.Jenkins;
 import jenkins.persistence.BlobStore;
+import jenkins.persistence.BlobStoreProvider;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
@@ -67,10 +71,17 @@ public final class ClusterPlugins {
     static boolean isProtected(String name) {
         return name != null && PROTECTED.contains(name);
     }
+    /** Whether a name from the overlay can be a plugin's short name, and so a file name in {@code plugins/} (no path). */
+    static boolean isPluginName(String name) {
+        return name != null && name.matches("[A-Za-z0-9_][A-Za-z0-9_.-]*");
+    }
+
     /** Files in {@code plugins/} written by the cluster: the image entrypoint leaves those alone. */
     static final String MARKER = ".cluster";
     /** In {@code plugins/}: the generation this home last restarted for, so that a restart is never repeated in a loop. */
     static final String RESTARTED_FOR = ".cluster-restarted-for";
+    /** In {@code plugins/}: the generation a fresh home fetched plugins for at boot, so that the boot restart is never repeated. */
+    static final String BOOT_FETCHED_FOR = ".cluster-boot-fetched-for";
     static final long LOCK_TIMEOUT_MILLIS = Long.getLong(ClusterPlugins.class.getName() + ".lockTimeoutMinutes", 10) * 60_000;
     static final long PERIOD_SECONDS = Long.getLong(ClusterPlugins.class.getName() + ".periodSeconds", 60);
 
@@ -283,6 +294,115 @@ public final class ClusterPlugins {
         Timer.get().scheduleWithFixedDelay(ClusterPlugins::reconcile, 10, PERIOD_SECONDS, TimeUnit.SECONDS);
     }
 
+    // ------------------------------------------------------------------ at boot, on a fresh home
+
+    /**
+     * On a fresh home, fetches the cluster's runtime-installed plugins (and upgrades of image plugins) before anything
+     * is loaded, and restarts once, so that global configuration, JCasC and jobs load with them, like the image's
+     * plugins. Loading them once up ({@link #reconcile}) is too late for those: jobs of their types do not load, and
+     * parts from them are dropped and, once saved, removed for every controller. Only a fresh home: restarting before
+     * anything is loaded loses nothing there (no items, no saved queue). The store is set up only from
+     * EXTENSIONS_AUGMENTED, so the store plugin reads the overlay without joining ({@link EarlyStoreReader}).
+     */
+    @Initializer(after = InitMilestone.PLUGINS_STARTED, before = InitMilestone.EXTENSIONS_AUGMENTED)
+    public static void bootstrap() {
+        Jenkins j = Jenkins.get();
+        if (ClusterPluginSet.MODE != ClusterPluginSet.Mode.cluster || !isFreshHome(j.getRootDir()) || !Lifecycle.get().canRestart()) {
+            return; // applied once up, loading new plugins live
+        }
+        try {
+            byte[] content = null;
+            for (EarlyStoreReader reader : ExtensionList.lookup(EarlyStoreReader.class)) {
+                content = reader.readEarly(KEY);
+                if (content != null) {
+                    break;
+                }
+            }
+            Overlay overlay = Overlay.parse(content);
+            File rootDir = j.getPluginManager().rootDir;
+            Map<String, Entry> missing = missingAtBoot(overlay, rootDir);
+            File guard = new File(rootDir, BOOT_FETCHED_FOR);
+            if (missing.isEmpty()
+                    || guard.isFile() && Files.readString(guard.toPath()).trim().equals(String.valueOf(overlay.generation()))) {
+                return;
+            }
+            BlobStore blobs = null;
+            for (BlobStoreProvider provider : ExtensionList.lookup(BlobStoreProvider.class)) {
+                blobs = provider.create();
+                if (blobs != null) {
+                    break;
+                }
+            }
+            if (blobs == null) {
+                return;
+            }
+            java.util.List<String> fetched = fetchAtBoot(missing, blobs, rootDir);
+            if (fetched.isEmpty()) {
+                return;
+            }
+            Files.writeString(guard.toPath(), String.valueOf(overlay.generation()));
+            LOGGER.info(() -> "Fetched the cluster's plugins " + fetched + " for this fresh home; restarting once, before anything is loaded");
+            j.restart();
+        } catch (RestartNotSupportedException e) {
+            LOGGER.log(Level.WARNING, "Could not restart for the cluster's plugins; they are applied once up", e);
+            return;
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Could not fetch the cluster's plugins at boot; they are applied once up", e);
+            return;
+        }
+        // nothing may load meanwhile: hold the start here until the restart replaces this process
+        long until = System.nanoTime() + TimeUnit.MINUTES.toNanos(2);
+        boolean interrupted = false;
+        while (System.nanoTime() < until) {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        LOGGER.warning("Still not restarted for the cluster's plugins; starting without them loaded (they are applied once up)");
+    }
+
+    /** Whether this home has never loaded anything: no items and no saved queue. */
+    static boolean isFreshHome(File home) {
+        String[] jobs = new File(home, "jobs").list();
+        return (jobs == null || jobs.length == 0) && !new File(home, "queue.xml").exists();
+    }
+
+    /** The plugins whose archive the overlay has and {@code plugins/} lacks or has older, in the overlay's order. */
+    static Map<String, Entry> missingAtBoot(Overlay overlay, File rootDir) {
+        Map<String, Entry> missing = new LinkedHashMap<>();
+        overlay.plugins().forEach((name, desired) -> {
+            File archive = archive(rootDir, name);
+            String localVersion = archive == null ? null : versionOf(archive);
+            boolean localEnabled = archive != null && !new File(archive.getPath() + ".disabled").exists();
+            Action action = decide(desired, localVersion, localEnabled);
+            if (isPluginName(name) && !isProtected(name) && (action == Action.LOAD || action == Action.REPLACE)) {
+                missing.put(name, desired);
+            }
+        });
+        return missing;
+    }
+
+    /** Fetches and verifies each archive into {@code plugins/}; one that cannot be fetched is left to {@link #reconcile}. */
+    static java.util.List<String> fetchAtBoot(Map<String, Entry> missing, BlobStore blobs, File rootDir) {
+        java.util.List<String> fetched = new java.util.ArrayList<>();
+        missing.forEach((name, desired) -> {
+            try {
+                fetch(blobs, desired, new File(rootDir, name + ".jpi"));
+                Files.deleteIfExists(new File(rootDir, name + ".hpi").toPath());
+                marker(rootDir, name, true);
+                fetched.add(name);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not fetch the cluster's " + name + " at boot", e);
+            }
+        });
+        return fetched;
+    }
+
     // ------------------------------------------------------------------ capture (where the admin acts)
 
     /** Records a plugin archive just installed here by the update center (or an upload), as the cluster's version of it. */
@@ -320,17 +440,27 @@ public final class ClusterPlugins {
             return;
         }
         try {
-            Entry previous = read().plugins().get(name);
-            long now = System.currentTimeMillis();
-            Entry entry = state == State.installed && previous != null && previous.blob() != null
-                    // enabling a plugin the cluster installed: keep its archive
-                    ? new Entry(State.installed, previous.version(), previous.sha256(), previous.blob(), ClusterMember.NAME, now)
-                    : new Entry(state, null, null, null, ClusterMember.NAME, now);
+            Entry entry = next(read().plugins().get(name), state, ClusterMember.NAME, System.currentTimeMillis());
             staged.put(name, state.name());
             record(name, entry);
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.WARNING, "Could not share the change of " + name + " with the cluster", e);
         }
+    }
+
+    /**
+     * The entry for an uninstall, disable or enable. Disabling and enabling a plugin the cluster installed keep its
+     * archive, so that enabling it again restores it on a controller that never had it (e.g. a fresh home).
+     */
+    static Entry next(@CheckForNull Entry previous, @NonNull State state, String by, long now) {
+        return state != State.uninstalled && previous != null && previous.blob() != null
+                ? new Entry(state, previous.version(), previous.sha256(), previous.blob(), by, now)
+                : new Entry(state, null, null, null, by, now);
+    }
+
+    /** What {@link #staged} holds once a plugin's files are as the entry wants them: the version installed, else the state. */
+    private static String stagedAs(Entry desired) {
+        return desired.state() == State.installed && desired.version() != null ? desired.version() : desired.state().name();
     }
 
     private static void record(String name, Entry entry) throws IOException {
@@ -379,6 +509,10 @@ public final class ClusterPlugins {
                 if (isProtected(name)) {
                     continue;
                 }
+                if (!isPluginName(name)) {
+                    failed.add(name);
+                    continue;
+                }
                 if (installing(name)) {
                     restart |= restartPending; // decided once the update center is done with it
                     continue;
@@ -424,13 +558,13 @@ public final class ClusterPlugins {
         boolean localEnabled = archive != null && !new File(archive.getPath() + ".disabled").exists();
         Action action = decide(desired, localVersion, localEnabled);
         String stagedAs = staged.get(name);
-        if (action != Action.NONE && !(stagedAs != null && stagedAs.equals(desired.version() != null ? desired.version() : desired.state().name()))) {
+        if (action != Action.NONE && !(stagedAs != null && stagedAs.equals(stagedAs(desired)))) {
             LOGGER.info(() -> "Applying the cluster's plugin set: " + name + " " + action + (desired.version() == null ? "" : " " + desired.version()));
             ClusterMember.pluginsStatus = status(appliedGeneration, restartPending, restartRefused, name, java.util.List.of());
             switch (action) {
                 case LOAD, REPLACE -> {
                     File target = new File(pm.rootDir, name + ".jpi");
-                    fetch(desired, target);
+                    fetch(PersistenceStores.getBlobStore(), desired, target);
                     Files.deleteIfExists(new File(pm.rootDir, name + ".hpi").toPath());
                     marker(name, true);
                     staged.put(name, desired.version());
@@ -459,7 +593,7 @@ public final class ClusterPlugins {
                 }
                 case ENABLE -> {
                     Files.deleteIfExists(new File(archive.getPath() + ".disabled").toPath());
-                    staged.put(name, desired.version() != null ? desired.version() : desired.state().name());
+                    staged.put(name, stagedAs(desired));
                 }
                 default -> {}
             }
@@ -474,8 +608,13 @@ public final class ClusterPlugins {
 
     @CheckForNull
     private static File archive(PluginManager pm, String name) {
+        return archive(pm.rootDir, name);
+    }
+
+    @CheckForNull
+    private static File archive(File rootDir, String name) {
         for (String ext : new String[] {".jpi", ".hpi"}) {
-            File f = new File(pm.rootDir, name + ext);
+            File f = new File(rootDir, name + ext);
             if (f.isFile()) {
                 return f;
             }
@@ -493,9 +632,9 @@ public final class ClusterPlugins {
         }
     }
 
-    private static void fetch(Entry desired, File target) throws IOException {
+    private static void fetch(BlobStore blobs, Entry desired, File target) throws IOException {
         File tmp = new File(target.getPath() + ".cluster-tmp");
-        try (InputStream in = PersistenceStores.getBlobStore().get(desired.blob())) {
+        try (InputStream in = blobs.get(desired.blob())) {
             if (in == null) {
                 throw new IOException("The cluster's archive " + desired.blob() + " is missing");
             }
@@ -510,7 +649,10 @@ public final class ClusterPlugins {
     }
 
     private static void marker(String name, boolean present) throws IOException {
-        File rootDir = Jenkins.get().getPluginManager().rootDir;
+        marker(Jenkins.get().getPluginManager().rootDir, name, present);
+    }
+
+    private static void marker(File rootDir, String name, boolean present) throws IOException {
         File marker = new File(rootDir, name + ".jpi" + MARKER);
         if (present) {
             Files.writeString(marker.toPath(), "written by the cluster's plugin set; the image entrypoint leaves this plugin alone\n");

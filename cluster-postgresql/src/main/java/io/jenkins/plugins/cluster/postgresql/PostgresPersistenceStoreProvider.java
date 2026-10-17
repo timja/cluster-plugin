@@ -99,7 +99,7 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
     }
 
     @CheckForNull
-    private static String setting(String property, String env) {
+    static String setting(String property, String env) {
         String v = System.getProperty(PostgresPersistenceStoreProvider.class.getPackageName() + "." + property);
         return v != null ? v : System.getenv(env);
     }

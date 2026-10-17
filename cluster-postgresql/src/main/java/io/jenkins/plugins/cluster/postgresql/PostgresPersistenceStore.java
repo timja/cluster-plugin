@@ -1944,6 +1944,32 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     private org.postgresql.ds.PGSimpleDataSource dataSource() {
+        return dataSource(url, user, password);
+    }
+
+    /**
+     * Reads one entry on a connection of its own, without a store (no pools, no schema creation, no membership): for
+     * what is needed before Jenkins sets the store up ({@link PostgresEarlyStoreReader}).
+     *
+     * @return the content, or null if the entry, or the table, does not exist yet
+     */
+    @CheckForNull
+    static byte[] readEarly(String url, String user, String password, String key) throws SQLException {
+        try (Connection c = dataSource(url, user, password).getConnection();
+                PreparedStatement ps = c.prepareStatement("select content from jenkins_store where key = ?")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getBytes(1) : null;
+            }
+        } catch (SQLException e) {
+            if ("42P01".equals(e.getSQLState())) {
+                return null; // undefined table: no controller has started yet
+            }
+            throw e;
+        }
+    }
+
+    private static org.postgresql.ds.PGSimpleDataSource dataSource(String url, String user, String password) {
         org.postgresql.ds.PGSimpleDataSource ds = new DirectDataSource();
         ds.setUrl(url);
         ds.setUser(user);

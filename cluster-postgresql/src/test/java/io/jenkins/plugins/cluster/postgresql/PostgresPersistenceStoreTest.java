@@ -121,6 +121,20 @@ class PostgresPersistenceStoreTest {
     }
 
     @Test
+    void readsBeforeTheStoreIsSetUp() throws Exception {
+        a.write("cluster/plugins.json", bytes("{}"), PersistenceStore.ABSENT);
+        assertArrayEquals(bytes("{}"), PostgresPersistenceStore.readEarly(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
+                POSTGRES.getPassword(), "cluster/plugins.json"));
+        assertNull(PostgresPersistenceStore.readEarly(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(), "cluster/none"));
+        try (var c = POSTGRES.createConnection("");
+                var s = c.createStatement()) {
+            s.execute("drop table jenkins_store");
+        }
+        assertNull(PostgresPersistenceStore.readEarly(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(),
+                "cluster/plugins.json"), "no controller has started yet");
+    }
+
+    @Test
     void controllersStartingAtOnceCreateTheSchemaOnce() throws Exception {
         a.close();
         b.close();
