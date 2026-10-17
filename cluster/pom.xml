@@ -36,7 +36,14 @@
   </dependencyManagement>
   <dependencies>
     <dependency>
-      <!-- Target 9: cluster-wide cloud agent caps (kubernetes-plugin cnj/t9-m2-cluster-cap, installed locally) -->
+      <!-- LockCoordinator (lockable-resources cnj2/lock-coordinator, installed locally) -->
+      <groupId>org.6wind.jenkins</groupId>
+      <artifactId>lockable-resources</artifactId>
+      <version>-cnj2-i-SNAPSHOT</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <!-- cluster-wide cloud agent caps: needs the kubernetes plugin with ClusterProvisioningLimits, installed locally -->
       <groupId>org.csanchez.jenkins.plugins</groupId>
       <artifactId>kubernetes</artifactId>
       <version>999999-SNAPSHOT</version>
@@ -66,6 +73,17 @@
       <version>999999-cnj2-h-SNAPSHOT</version>
     </dependency>
     <dependency>
+      <groupId>org.awaitility</groupId>
+      <artifactId>awaitility</artifactId>
+      <version>4.3.0</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jenkins-ci.plugins.workflow</groupId>
+      <artifactId>workflow-basic-steps</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.jenkins-ci.plugins.workflow</groupId>
       <artifactId>workflow-durable-task-step</artifactId>
       <scope>test</scope>
@@ -73,6 +91,12 @@
     <dependency>
       <groupId>org.jenkins-ci.plugins.workflow</groupId>
       <artifactId>workflow-job</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jenkins-ci.plugins.workflow</groupId>
+      <artifactId>workflow-support</artifactId>
+      <classifier>tests</classifier>
       <scope>test</scope>
     </dependency>
     <dependency>
