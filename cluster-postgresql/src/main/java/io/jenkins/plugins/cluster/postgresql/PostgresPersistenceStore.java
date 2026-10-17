@@ -817,14 +817,17 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
 
         @Override
-        public boolean claim(long id) throws IOException {
+        public boolean claim(long id, @CheckForNull String expectedPin) throws IOException {
             return run("claim queue item " + id, c -> {
+                // only as pinned when the claimer read it: a request folded in since may have pinned it elsewhere
                 if (change(
                                 c,
                                 id,
-                                "update jenkins_queue set state = 'CLAIMED', claimed_by = ?, updated_at = now() where id = ? and state = 'WAITING'",
+                                "update jenkins_queue set state = 'CLAIMED', claimed_by = ?, updated_at = now()"
+                                        + " where id = ? and state = 'WAITING' and pinned_to is not distinct from ?",
                                 origin,
-                                id)
+                                id,
+                                expectedPin)
                         == 1) {
                     return true;
                 }

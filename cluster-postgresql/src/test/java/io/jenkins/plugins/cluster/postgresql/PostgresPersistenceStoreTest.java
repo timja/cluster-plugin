@@ -276,6 +276,20 @@ class PostgresPersistenceStoreTest {
     }
 
     @Test
+    void claimsOnlyAsPinnedWhenRead() throws Exception {
+        ClusterQueue q = a.queue();
+        long id = q.nextId();
+        q.publish(new ClusterQueue.Record(id, "pins", "pins", "<actions/>", System.currentTimeMillis() + 60_000, ClusterQueue.State.WAITING,
+                a.getOrigin(), null, null, 0));
+        // a request which must run on b was folded in after a read the item unpinned
+        assertTrue(b.queue().update(id, "<actions/>", "<actions><b/></actions>", System.currentTimeMillis(), b.getOrigin()));
+        assertFalse(q.claim(id, null));
+        assertEquals(ClusterQueue.State.WAITING, q.get(id).state());
+        assertTrue(b.queue().claim(id, b.getOrigin()));
+        assertEquals(b.getOrigin(), q.get(id).claimedBy());
+    }
+
+    @Test
     void idsTakenAhead() throws Exception {
         long before = a.queue().nextId();
         long[] ids = a.queue().nextIds(64);
