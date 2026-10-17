@@ -6,19 +6,18 @@ import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import jenkins.persistence.PersistenceStores;
 
 /**
- * Tells administrators when a controller overwrote a change made elsewhere (Target 15): two controllers saved the same
- * setting at once, and the lenient policy kept the later save. Counts are per controller since it started, from the
- * members' reports. With {@code -Djenkins.persistence.PersistenceStores.conflicts=strict-ui}, such saves from the UI are
- * refused instead (the user reloads); background saves still merge.
+ * Tells administrators when saves on one controller were refused because the same setting was changed on another at
+ * the same moment: such a save is never written over the other change; the stored version stands and the object is
+ * reloaded from it, so the refused change is lost and must be made again. Changes to different settings are merged.
+ * Counts are per controller since it started, from the members' reports.
  */
 @Extension
 public final class ConflictMonitor extends AdministrativeMonitor {
 
     /** A controller's counts, for the monitor's message. */
-    public record Counts(String controller, long merged, long overwritten, long refused) {}
+    public record Counts(String controller, long merged, long refused) {}
 
     @Override
     public String getDisplayName() {
@@ -27,17 +26,18 @@ public final class ConflictMonitor extends AdministrativeMonitor {
 
     @Override
     public boolean isActivated() {
-        return getCounts().stream().anyMatch(c -> c.overwritten() > 0);
+        return getCounts().stream().anyMatch(c -> c.refused() > 0);
     }
 
     public List<Counts> getCounts() {
         List<Counts> result = new ArrayList<>();
-        if (PersistenceStores.get() instanceof ClusterStore store) {
+        ClusterStore store = ClusterStore.get();
+        if (store != null) {
             try {
                 for (ClusterStore.Member m : store.members()) {
                     if (m.alive()) {
                         MemberStatus.Info i = MemberStatus.Info.parse(m.info());
-                        result.add(new Counts(m.name(), i.merged(), i.overwritten(), i.refused()));
+                        result.add(new Counts(m.name(), i.merged(), i.refused()));
                     }
                 }
             } catch (IOException | RuntimeException e) {
@@ -45,9 +45,5 @@ public final class ConflictMonitor extends AdministrativeMonitor {
             }
         }
         return result;
-    }
-
-    public String getPolicy() {
-        return System.getProperty(PersistenceStores.class.getName() + ".conflicts", "warn");
     }
 }

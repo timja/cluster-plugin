@@ -1,15 +1,14 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core">
   <div class="jenkins-alert jenkins-alert-warning">
-    <p>Controllers of this cluster saved the same setting at the same moment, and the later save overwrote the other
-      (conflict policy <code>${it.policy}</code>). Changes to different settings were merged.
-      To refuse such saves made in the UI instead (the user then reloads and saves again), start the controllers with
-      <code>-Djenkins.persistence.PersistenceStores.conflicts=strict-ui</code>.</p>
+    <p>Controllers of this cluster saved the same setting at the same moment. The later save was refused, not written
+      over the other: the stored version stands, and the refused change has to be made again. Changes to different
+      settings were merged.</p>
     <table class="jenkins-table jenkins-table--small">
-      <thead><tr><th>Controller</th><th>Merged</th><th>Overwritten</th><th>Refused</th></tr></thead>
+      <thead><tr><th>Controller</th><th>Merged</th><th>Refused</th></tr></thead>
       <tbody>
         <j:forEach var="c" items="${it.counts}">
-          <tr><td>${c.controller()}</td><td>${c.merged()}</td><td>${c.overwritten()}</td><td>${c.refused()}</td></tr>
+          <tr><td>${c.controller()}</td><td>${c.merged()}</td><td>${c.refused()}</td></tr>
         </j:forEach>
       </tbody>
     </table>
