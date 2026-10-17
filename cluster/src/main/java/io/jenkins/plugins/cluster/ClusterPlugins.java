@@ -12,6 +12,8 @@ import hudson.lifecycle.Lifecycle;
 import hudson.lifecycle.RestartNotSupportedException;
 import hudson.model.AdministrativeMonitor;
 import hudson.util.VersionNumber;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStoreProvider;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.EarlyStoreReader;
@@ -33,8 +35,6 @@ import java.util.jar.Manifest;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.model.Jenkins;
-import jenkins.persistence.BlobStore;
-import jenkins.persistence.BlobStoreProvider;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
@@ -311,7 +311,7 @@ public final class ClusterPlugins {
     static boolean active() {
         return ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster
                 && store() != null
-                && PersistenceStores.getBlobStore() != null;
+                && ClusterBlobStore.get() != null;
     }
 
     @Initializer(after = InitMilestone.JOB_LOADED)
@@ -368,8 +368,8 @@ public final class ClusterPlugins {
                             && Files.readString(guard.toPath()).trim().equals(String.valueOf(overlay.generation()))) {
                 return;
             }
-            BlobStore blobs = null;
-            for (BlobStoreProvider provider : ExtensionList.lookup(BlobStoreProvider.class)) {
+            ClusterBlobStore blobs = null;
+            for (ClusterBlobStoreProvider provider : ExtensionList.lookup(ClusterBlobStoreProvider.class)) {
                 blobs = provider.create();
                 if (blobs != null) {
                     break;
@@ -432,7 +432,7 @@ public final class ClusterPlugins {
     }
 
     /** Fetches and verifies each archive into {@code plugins/}; one that cannot be fetched is left to {@link #reconcile}. */
-    static java.util.List<String> fetchAtBoot(Map<String, Entry> missing, BlobStore blobs, File rootDir) {
+    static java.util.List<String> fetchAtBoot(Map<String, Entry> missing, ClusterBlobStore blobs, File rootDir) {
         java.util.List<String> fetched = new java.util.ArrayList<>();
         missing.forEach((name, desired) -> {
             try {
@@ -466,7 +466,10 @@ public final class ClusterPlugins {
             }
             String sha256 = sha256(archive);
             String blob = BLOBS + name + "/" + sha256 + ".jpi";
-            BlobStore blobs = PersistenceStores.getBlobStore();
+            ClusterBlobStore blobs = ClusterBlobStore.get();
+            if (blobs == null) {
+                return; // no cluster blob store (any more): not shared
+            }
             try (InputStream in = Files.newInputStream(archive.toPath())) {
                 blobs.put(blob, in, Files.size(archive.toPath()));
             }
@@ -658,7 +661,11 @@ public final class ClusterPlugins {
             switch (action) {
                 case LOAD, REPLACE -> {
                     File target = new File(pm.rootDir, name + ".jpi");
-                    fetch(PersistenceStores.getBlobStore(), desired, target);
+                    ClusterBlobStore blobs = ClusterBlobStore.get();
+                    if (blobs == null) {
+                        throw new IOException("No cluster blob store to fetch " + desired.blob() + " from");
+                    }
+                    fetch(blobs, desired, target);
                     Files.deleteIfExists(new File(pm.rootDir, name + ".hpi").toPath());
                     marker(name, true);
                     staged.put(name, desired.version());
@@ -728,7 +735,7 @@ public final class ClusterPlugins {
         }
     }
 
-    private static void fetch(BlobStore blobs, Entry desired, File target) throws IOException {
+    private static void fetch(ClusterBlobStore blobs, Entry desired, File target) throws IOException {
         File tmp = new File(target.getPath() + ".cluster-tmp");
         try (InputStream in = blobs.get(desired.blob())) {
             if (in == null) {

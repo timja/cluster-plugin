@@ -10,14 +10,14 @@ import hudson.model.Queue;
 import hudson.model.queue.CauseOfBlockage;
 import hudson.model.queue.QueueListener;
 import hudson.model.queue.QueueTaskDispatcher;
+import io.jenkins.plugins.cluster.spi.BuildLeases;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.persistence.BuildLeases;
-import jenkins.persistence.PersistenceStore;
-import jenkins.persistence.PersistenceStores;
 
 /**
  * Folder computations (a multibranch project's branch indexing, an organization folder's scan) run on one controller at
@@ -26,14 +26,14 @@ import jenkins.persistence.PersistenceStores;
  * <p>A computation is not a job, so it does not go through the shared queue: every controller asked to scan a project
  * scans it. Scans running at once on several controllers each saw a new branch before any had recorded its revision,
  * and each scheduled its first build: the branch built twice. On one controller, scans of a project never overlap. Here
- * a lease per folder ({@code computations/<folder key>}) lets one controller compute it; the others wait their turn
+ * a lease per folder ({@link Keys#computation}, by the folder's identity) lets one controller compute it; the others wait their turn
  * (and then find nothing new), and the lease lapses with its holder if that controller dies.
  */
 public final class ClusterComputations {
 
     private static final Logger LOGGER = Logger.getLogger(ClusterComputations.class.getName());
 
-    /** Folder key → the epoch of the lease held here. */
+    /** Lease key → the epoch of the lease held here. */
     private static final Map<String, Long> held = new ConcurrentHashMap<>();
 
     private ClusterComputations() {}
@@ -44,13 +44,12 @@ public final class ClusterComputations {
         if (!(task instanceof ItemGroup<?> && task instanceof Item item)) {
             return null;
         }
-        String key = PersistenceStores.keyFor(item.getRootDir());
-        return key == null ? null : "computations/" + key;
+        return ClusterStore.get() == null || item.getItemUuid() == null ? null : Keys.computation(Keys.item(item));
     }
 
     @CheckForNull
     private static BuildLeases leases() {
-        PersistenceStore store = PersistenceStores.get();
+        ClusterStore store = ClusterStore.get();
         return store == null ? null : store.leases();
     }
 

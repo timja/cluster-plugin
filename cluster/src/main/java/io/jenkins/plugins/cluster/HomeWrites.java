@@ -48,6 +48,7 @@ public final class HomeWrites {
             "users/[^/]+/apiTokenStats\\.xml", // each controller's own usage statistics of API tokens
             "userContent/readme\\.txt", // written by core at every boot
             "(jobs/[^/]+/)*jobs/[^/]+/(builds|workspace[^/]*|running)(/.*)?",
+            "(jobs/[^/]+/)*jobs/[^/]+/nextBuildNumber", // kept here too; the shared counter is in the store
             ".*\\.(tmp|log|lock)"));
 
     private static final Pattern NUMBER = Pattern.compile("[0-9]+");
@@ -129,10 +130,24 @@ public final class HomeWrites {
     }
 
     static boolean reportable(String key, @CheckForNull PersistenceStore store) {
-        // declared per controller by the code writing it (Target 15: @PerController, LocalFiles): not a finding
+        // declared per controller by the code writing it (LocalFiles): not a finding, nor what the store holds
         return !ALLOWED.matcher(key).matches()
-                && (store == null || !store.owns(key))
-                && !PersistenceStores.declaredLocal(key);
+                && (store == null || !ClusterRouting.isShared(key))
+                && !declaredLocal(key);
+    }
+
+    private static boolean declaredLocal(String key) {
+        java.nio.file.Path path = java.nio.file.Path.of(key);
+        for (jenkins.persistence.LocalFiles local : hudson.ExtensionList.lookup(jenkins.persistence.LocalFiles.class)) {
+            for (String p : local.patterns()) {
+                if (java.nio.file.FileSystems.getDefault()
+                        .getPathMatcher("glob:" + p)
+                        .matches(path)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     static List<Finding> scan() throws IOException {

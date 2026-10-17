@@ -7,6 +7,7 @@ import hudson.model.UpdateSite;
 import hudson.security.ACL;
 import hudson.security.ACLContext;
 import hudson.util.PluginServletFilter;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jakarta.servlet.Filter;
@@ -29,7 +30,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import jenkins.model.Jenkins;
-import jenkins.persistence.BlobStore;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
@@ -146,7 +146,7 @@ public final class ClusterUpdateSites implements Filter {
     }
 
     static boolean active() {
-        return store() != null && PersistenceStores.getBlobStore() != null;
+        return store() != null && ClusterBlobStore.get() != null;
     }
 
     @Initializer(after = InitMilestone.PLUGINS_STARTED)
@@ -254,7 +254,14 @@ public final class ClusterUpdateSites implements Filter {
         Files.createDirectories(local.getParentFile().toPath());
         if (!local.exists() || !shared.sha256().equals(ClusterPlugins.sha256(local))) {
             File tmp = new File(local.getParentFile(), "." + name + ".cluster.tmp");
-            try (InputStream in = PersistenceStores.getBlobStore().get(shared.blob())) {
+            ClusterBlobStore blobs = ClusterBlobStore.get();
+            if (blobs == null) {
+                throw new IOException("No cluster blob store to take the cluster's " + name + " from");
+            }
+            try (InputStream in = blobs.get(shared.blob())) {
+                if (in == null) {
+                    throw new IOException("The cluster's " + name + " (" + shared.blob() + ") is missing");
+                }
                 Files.copy(in, tmp.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
             if (!shared.sha256().equals(ClusterPlugins.sha256(tmp))) {
@@ -286,7 +293,7 @@ public final class ClusterUpdateSites implements Filter {
         String name = local.getName();
         long timestamp = local.lastModified();
         String sha256 = ClusterPlugins.sha256(local);
-        BlobStore blobs = PersistenceStores.getBlobStore();
+        ClusterBlobStore blobs = ClusterBlobStore.get();
         String blob = BLOBS + name + "/" + sha256;
         boolean uploaded = false;
         for (int attempt = 0; ; attempt++) {
