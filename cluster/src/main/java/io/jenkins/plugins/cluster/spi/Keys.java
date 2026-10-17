@@ -216,4 +216,29 @@ public final class Keys {
 
     /** A key below an item prefix: the item's identity and the rest of the key. */
     public record ItemKey(@NonNull String uuid, @NonNull String rest) {}
+
+    /**
+     * Whether one segment of a key can name a file in the directory of the key's parent. Keys come from other
+     * controllers, or from anything else writing to the store: a segment such as {@code ..} must never become a path.
+     */
+    public static boolean isSafeName(@CheckForNull String name) {
+        return name != null
+                && !name.isEmpty()
+                && !name.equals(".")
+                && !name.equals("..")
+                && name.indexOf('/') < 0
+                && name.indexOf('\\') < 0
+                && name.indexOf('\0') < 0
+                && name.indexOf(':') < 0;
+    }
+
+    /** Whether every segment of a key {@linkplain #isSafeName can name a file}. */
+    public static boolean isSafeKey(@NonNull String key) {
+        for (String segment : key.split("/", -1)) {
+            if (!isSafeName(segment)) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

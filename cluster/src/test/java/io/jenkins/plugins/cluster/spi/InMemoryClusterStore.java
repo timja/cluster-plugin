@@ -49,6 +49,9 @@ public class InMemoryClusterStore implements ClusterStore {
         Thread drainingQueue;
         final Set<String> origins = new TreeSet<>();
         final Set<String> gone = new TreeSet<>();
+        /** How many times each origin was taken for gone. */
+        final Map<String, Long> lapses = new HashMap<>();
+
         final Map<String, String> claims = new HashMap<>();
         final Map<String, String> channels = new TreeMap<>();
         final Map<String, Map<String, Integer>> counters = new TreeMap<>();
@@ -112,7 +115,9 @@ public class InMemoryClusterStore implements ClusterStore {
     public void gone(@NonNull String origin, boolean gone) {
         synchronized (shared) {
             if (gone) {
-                shared.gone.add(origin);
+                if (shared.gone.add(origin)) {
+                    shared.lapses.merge(origin, 1L, Long::sum);
+                }
             } else {
                 shared.gone.remove(origin);
             }
@@ -776,7 +781,9 @@ public class InMemoryClusterStore implements ClusterStore {
 
     @Override
     public long lapseCount() {
-        return 0;
+        synchronized (shared) {
+            return shared.lapses.getOrDefault(origin, 0L);
+        }
     }
 
     @Override

@@ -6,21 +6,24 @@ import hudson.Extension;
 import hudson.Util;
 import hudson.model.Job;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.builds.BuildAdopter;
+import io.jenkins.plugins.cluster.builds.BuildRecords;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.model.Jenkins;
+import java.util.stream.Stream;
 import jenkins.model.lazy.LazyBuildMixIn;
-import jenkins.persistence.BuildAdopter;
-import jenkins.persistence.PersistenceStores;
-import jenkins.persistence.RunningBuilds;
 import org.jenkinsci.plugins.workflow.flow.FlowExecutionList;
 import org.jenkinsci.plugins.workflow.flow.FlowExecutionOwner;
 
@@ -43,18 +46,20 @@ public class PipelineAdopter implements BuildAdopter {
     public Adoption prepare(@NonNull Job<?, ?> job, @NonNull RunningBuilds.Placeholder placeholder) throws IOException {
         String savePoint = placeholder.getProperties().get(SavePoints.SAVE_POINT);
         ClusterBlobStore blobs = BlobLogStorage.blobs();
-        String jobKey = PersistenceStores.keyFor(job.getRootDir());
+        int number = placeholder.getNumber();
+        String build = BuildRecords.buildBlobs(job, number);
         if (savePoint == null
                 || blobs == null
-                || jobKey == null
+                || build == null
                 || !(job instanceof LazyBuildMixIn.LazyLoadingJob<?, ?> lazy)) {
             return null; // e.g. not a Pipeline, or never saved (PERFORMANCE_OPTIMIZED)
         }
-        int number = placeholder.getNumber();
-        String build = jobKey + "/builds/" + number;
         String base = build + "/" + SavePoints.DIR;
-        // staged inside JENKINS_HOME, so it can be moved into place
-        Path staging = new File(Jenkins.get().getRootDir(), "cluster-adoption/" + UUID.randomUUID()).toPath();
+        // staged next to the build directory, so that it is moved into place by a rename (the builds directory may be
+        // on another file system than JENKINS_HOME); a name no build has, so nothing loads it
+        Path builds = job.getBuildDir().toPath();
+        Files.createDirectories(builds);
+        Path staging = builds.resolve("." + number + "-adoption-" + UUID.randomUUID());
         Files.createDirectories(staging.resolve(SavePoints.NODES));
         try {
             if (!download(blobs, base + "/" + SavePoints.RECORD + "." + savePoint, staging.resolve(SavePoints.RECORD))
@@ -90,15 +95,14 @@ public class PipelineAdopter implements BuildAdopter {
                     }
                 }
             }
+            // flow nodes are files of one directory: a key names one by its last segment, and nothing else (keys are
+            // whatever was written to the blob store, and must never become a path outside the staging directory)
             for (String key : unversioned) {
-                download(blobs, key, staging.resolve(SavePoints.NODES).resolve(key.substring(nodes.length() + 1)));
+                downloadNode(blobs, key, staging);
             }
             for (java.util.List<String> keys : bySavePoint.values()) {
                 for (String key : keys) {
-                    download(
-                            blobs,
-                            key,
-                            staging.resolve(SavePoints.NODES).resolve(key.substring(key.lastIndexOf('/') + 1)));
+                    downloadNode(blobs, key, staging);
                 }
             }
             BlobLogStorage.fetch(blobs, build, staging.toFile());
@@ -111,11 +115,13 @@ public class PipelineAdopter implements BuildAdopter {
             @Override
             public void resume(long epoch) throws IOException {
                 File dir = new File(job.getBuildDir(), Integer.toString(number));
-                if (dir.exists()) {
-                    Util.deleteRecursive(dir); // e.g. an empty directory from an earlier attempt
+                if (Files.isDirectory(dir.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                    // e.g. an empty directory from an earlier attempt, or one with artifacts this controller archived
+                    // before the build moved away: what the save point has replaces what is there, the rest is kept
+                    moveInto(staging, dir.toPath());
+                } else {
+                    Files.move(staging, dir.toPath()); // a rename: staged next to it
                 }
-                Files.createDirectories(dir.getParentFile().toPath());
-                Files.move(staging, dir.toPath(), StandardCopyOption.ATOMIC_MOVE);
                 lazy.getLazyBuildMixIn()._getRuns().recognizeNumber(number);
                 // loading a running Pipeline build resumes it, as after a restart
                 Run<?, ?> run = job.getBuildByNumber(number);
@@ -140,10 +146,49 @@ public class PipelineAdopter implements BuildAdopter {
         };
     }
 
+    /** Downloads a flow node into the staging directory, by the last segment of its key, if that names a file. */
+    private static void downloadNode(ClusterBlobStore blobs, String key, Path staging) throws IOException {
+        String name = key.substring(key.lastIndexOf('/') + 1);
+        Path nodes = staging.resolve(SavePoints.NODES);
+        Path target = nodes.resolve(name).normalize();
+        if (!Keys.isSafeName(name) || !nodes.equals(target.getParent())) {
+            LOGGER.warning(() -> "Ignoring " + key + " in the blob store: not the name of a flow node");
+            return;
+        }
+        download(blobs, key, target);
+    }
+
+    /**
+     * Moves what is staged into an existing build directory: each entry of the staging directory replaces the one of
+     * the same name there (so no flow node of an older copy is left beside the save point's), the others are kept.
+     */
+    private static void moveInto(Path staging, Path dir) throws IOException {
+        List<Path> entries;
+        try (Stream<Path> list = Files.list(staging)) {
+            entries = list.toList();
+        }
+        for (Path from : entries) {
+            Path to = dir.resolve(from.getFileName().toString());
+            if (Files.isDirectory(to, LinkOption.NOFOLLOW_LINKS)) {
+                Util.deleteRecursive(to.toFile());
+            } else {
+                Files.deleteIfExists(to); // a link itself, never what it points to
+            }
+            Files.move(from, to);
+        }
+        Files.delete(staging);
+    }
+
     private static boolean download(ClusterBlobStore blobs, String key, Path target) throws IOException {
         Files.createDirectories(target.getParent());
         boolean found;
-        try (OutputStream out = Files.newOutputStream(target)) {
+        // never through a link (the staging directory is new, so there should be none)
+        try (OutputStream out = Files.newOutputStream(
+                target,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS)) {
             found = blobs.download(key, out);
         }
         if (!found) {

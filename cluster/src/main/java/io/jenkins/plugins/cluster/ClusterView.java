@@ -33,7 +33,7 @@ import org.kohsuke.stapler.export.ExportedBean;
 @ExportedBean
 public final class ClusterView extends ManagementLink {
 
-    private static final Pattern RUNNING = Pattern.compile("jobs/(.+)/running/([0-9]+)\\.xml");
+    private static final Pattern RUNNING = Pattern.compile("_items/([^/]+)/running/([0-9]+)\\.xml");
 
     @Override
     public String getIconFileName() {
@@ -208,8 +208,12 @@ public final class ClusterView extends ManagementLink {
                 }
                 Properties p = new Properties();
                 p.load(new StringReader(new String(e.getValue(), StandardCharsets.UTF_8)));
+                hudson.model.Item item = jenkins.model.ItemUuids.get(m.group(1)); // as this user may see it
+                if (item == null) {
+                    continue;
+                }
                 result.add(new RunningBuild(
-                        m.group(1).replace("/jobs/", "/"),
+                        item.getFullName(),
                         Integer.parseInt(m.group(2)),
                         p.getProperty("controller", "?"),
                         Long.parseLong(p.getProperty("startTime", "0"))));

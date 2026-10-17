@@ -7,6 +7,7 @@ import hudson.init.Initializer;
 import hudson.model.Computer;
 import hudson.model.Job;
 import hudson.util.PluginServletFilter;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jakarta.servlet.Filter;
@@ -26,7 +27,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStores;
-import jenkins.persistence.RunningBuilds;
 
 /**
  * Forwards requests for things another controller holds to that controller (Target 7):

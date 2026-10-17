@@ -162,11 +162,10 @@ public final class MemberStatus {
                 agents.put(c.getName().isEmpty() ? "(built-in)" : c.getName(), new int[] {b, t});
             }
         }
-        // concurrent edits since this controller started (Target 15): merged, overwritten (lenient), refused
-        // (strict-ui)
-        long merged = jenkins.persistence.PersistenceStores.getMergeCount();
-        long refused = jenkins.persistence.PersistenceStores.getRefusedCount();
-        long overwritten = Math.max(0, jenkins.persistence.PersistenceStores.getConflictCount() - merged - refused);
+        // concurrent edits since this controller started: merged, or refused (and reloaded)
+        long merged = io.jenkins.plugins.cluster.config.ConflictCounts.merged();
+        long refused = io.jenkins.plugins.cluster.config.ConflictCounts.refused();
+        long overwritten = 0; // never: a conflicting save is merged or refused
         return new Info(
                 busy,
                 total,

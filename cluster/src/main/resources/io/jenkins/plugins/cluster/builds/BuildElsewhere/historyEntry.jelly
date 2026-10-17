@@ -1,0 +1,58 @@
+<?jelly escape-by-default='true'?>
+<!-- a build running on another controller, in the build history widget (included by core, with "it" this build).
+     Its links name a build this controller does not have: a cluster routes them to the controller running it, else this
+     controller shows the build as running there. -->
+<j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout" xmlns:i="jelly:fmt">
+  <j:set var="link" value="${rootURL}/${it.url}" />
+  <j:choose>
+    <j:when test="${newJobPage}">
+      <div class="app-temporary-list__item">
+        <div class="app-build-item">
+          <a href="${link}console" class="app-build-item__icon" tooltip="${%runningOn(it.location)}">
+            <l:icon src="symbol-status-nobuilt-anime" />
+          </a>
+          <div class="app-temporary-list__item__details" href="${link}">
+            <div class="app-temporary-list__item__details__text">
+              <a class="app-temporary-list__item__label" href="${link}">${it.placeholder.displayName}</a>
+              <div class="app-temporary-list__item__description">
+                <div class="jenkins-details">
+                  <div class="jenkins-details__item">
+                    <div class="jenkins-details__item__icon"><l:icon src="symbol-information-circle" /></div>
+                    <span>${%runningOn(it.location)}, <i:formatDate value="${it.placeholder.startDate}" type="time" timeStyle="short" /></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="app-temporary-list__item__actions">
+            <j:if test="${it.stoppable}">
+              <l:stopButton href="${link}stop" alt="${%Cancel}" />
+            </j:if>
+          </div>
+        </div>
+      </div>
+    </j:when>
+    <j:otherwise>
+      <div class="app-builds-container__item">
+        <a class="app-builds-container__item__icon" href="${link}console"
+           tooltip="${%runningOn(it.location)}" data-tooltip-append-to-parent="true">
+          <l:icon src="symbol-status-nobuilt-anime" />
+        </a>
+        <div class="app-builds-container__item__inner">
+          <a href="${link}" class="app-builds-container__item__inner__link">
+            ${it.placeholder.displayName}
+            <span class="app-builds-container__item__time">
+              <i:formatDate value="${it.placeholder.startDate}" type="time" timeStyle="short" />
+            </span>
+          </a>
+          <div class="app-builds-container__item__inner__controls">
+            <j:if test="${it.stoppable}">
+              <l:stopButton href="${link}stop" alt="${%Cancel}" />
+            </j:if>
+          </div>
+        </div>
+        <div class="app-builds-container__item__description">${%runningOn(it.location)}</div>
+      </div>
+    </j:otherwise>
+  </j:choose>
+</j:jelly>

@@ -806,7 +806,7 @@ public final class ClusterPlugins {
                     return; // already restarting
                 }
             } else {
-                Set<String> live = store.liveOrigins();
+                Set<String> live = io.jenkins.plugins.cluster.builds.RunningBuilds.liveOrigins();
                 boolean holderAlive =
                         live == null || live.contains(holder.optString("origin")); // cannot tell: assume alive
                 if (lockExpired(holder.optLong("since"), System.currentTimeMillis(), holderAlive)) {

@@ -9,16 +9,18 @@ import hudson.model.Label;
 import hudson.model.Node;
 import hudson.model.Queue;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.builds.BuildRecords;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.model.ItemUuids;
 import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStore;
-import jenkins.persistence.PersistenceStores;
-import jenkins.persistence.RunningBuilds;
 import jenkins.util.Timer;
 
 /**
@@ -41,7 +43,8 @@ public final class Handover {
 
     @Initializer(after = InitMilestone.JOB_LOADED)
     public static void start() {
-        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
+        ClusterStore store = ClusterStore.get();
+        if (store == null) {
             return;
         }
         store.subscribe(e -> {
@@ -56,7 +59,8 @@ public final class Handover {
 
     /** Hands over builds waiting for a label only another controller has. */
     static void offer() {
-        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
+        ClusterStore store = ClusterStore.get();
+        if (store == null) {
             return;
         }
         long now = System.currentTimeMillis();
@@ -79,7 +83,7 @@ public final class Handover {
                     LOGGER.fine(() -> "Not handing " + run + " over for '" + label + "': " + reason);
                     continue;
                 }
-                String base = PersistenceStores.keyFor(run.getParent().getRootDir()) + "/running/" + run.getNumber();
+                String base = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber();
                 if (!countHop(store, base + HOPS)) {
                     LOGGER.warning(() -> run + " waits for '" + label
                             + "', which only another controller has, but it was handed over " + MAX_HOPS
@@ -156,12 +160,13 @@ public final class Handover {
     public static final class Done extends hudson.model.listeners.RunListener<Run<?, ?>> {
         @Override
         public void onFinalized(Run<?, ?> run) {
-            if (PersistenceStores.get() instanceof ClusterStore store) {
-                String job = PersistenceStores.keyFor(run.getParent().getRootDir());
-                if (job != null) {
+            ClusterStore store = ClusterStore.get();
+            if (store != null && BuildRecords.isShared(run.getParent())) {
+                String hops = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber() + HOPS;
+                {
                     try {
-                        if (store.read(job + "/running/" + run.getNumber() + HOPS) != null) {
-                            store.delete(job + "/running/" + run.getNumber() + HOPS, PersistenceStore.ANY);
+                        if (store.read(hops) != null) {
+                            store.delete(hops, PersistenceStore.ANY);
                         }
                     } catch (IOException | RuntimeException e) {
                         LOGGER.log(Level.FINE, "Could not forget the handovers of " + run, e);
@@ -207,12 +212,15 @@ public final class Handover {
             String path = key.substring(0, key.length() - SUFFIX.length());
             int slash = path.lastIndexOf('/');
             int number = Integer.parseInt(path.substring(slash + 1));
-            String jobKey = path.substring(0, path.lastIndexOf("/running/"));
-            String fullName = jobKey.replaceFirst("^jobs/", "").replace("/jobs/", "/");
-            Job<?, ?> job = Jenkins.get().getItemByFullName(fullName, Job.class);
+            Keys.ItemKey item = Keys.parse(path);
+            Job<?, ?> job;
+            try (hudson.security.ACLContext ignored = hudson.security.ACL.as2(hudson.security.ACL.SYSTEM2)) {
+                job = item == null ? null : ItemUuids.get(item.uuid()) instanceof Job<?, ?> j ? j : null;
+            }
             if (job == null) {
                 return;
             }
+            String fullName = job.getFullName();
             for (int attempt = 0; attempt < 30; attempt++) {
                 if (RunningBuilds.takeOver(job, number)) {
                     LOGGER.info(() -> "Took over " + fullName + " #" + number);

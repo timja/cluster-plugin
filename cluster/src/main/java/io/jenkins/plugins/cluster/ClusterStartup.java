@@ -1,13 +1,13 @@
 package io.jenkins.plugins.cluster;
 
 import edu.umd.cs.findbugs.annotations.NonNull;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.QueueMaintenance;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.persistence.PersistenceStore;
-import jenkins.persistence.RunningBuilds;
 
 /**
  * What a store provider calls as its {@link ClusterStore} joins the cluster, so that every backend starts a controller

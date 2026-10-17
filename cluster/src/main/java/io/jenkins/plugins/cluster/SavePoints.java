@@ -6,6 +6,7 @@ import hudson.Extension;
 import hudson.model.Queue;
 import hudson.model.Run;
 import hudson.model.listeners.RunListener;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.ByteArrayInputStream;
@@ -20,8 +21,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.persistence.ConflictException;
-import jenkins.persistence.PersistenceStores;
-import jenkins.persistence.RunningBuilds;
 import jenkins.util.Timer;
 import org.jenkinsci.plugins.workflow.cps.CpsFlowExecution;
 import org.jenkinsci.plugins.workflow.cps.ProgramSavedListener;
@@ -94,7 +93,7 @@ public final class SavePoints {
     /** Blob key prefix of a build's save points, or null if they are not replicated. */
     @CheckForNull
     static String base(@NonNull Run<?, ?> run) {
-        String key = BlobLogStorage.buildKey(run.getRootDir());
+        String key = BlobLogStorage.buildKey(run);
         return key == null ? null : key + "/" + DIR;
     }
 
@@ -219,7 +218,8 @@ public final class SavePoints {
         if (p == null || st.stopped || blobs == null) {
             return;
         }
-        if (jenkins.persistence.PersistenceStores.get() instanceof ClusterStore store && store.mayHaveLapsed()) {
+        ClusterStore cluster = ClusterStore.get();
+        if (cluster != null && cluster.mayHaveLapsed()) {
             // e.g. just woke from a pause: another controller may own the build by now; ship once the heartbeat is back
             synchronized (st) {
                 if (st.pending == null) {
@@ -240,7 +240,7 @@ public final class SavePoints {
             st.stopped = true;
             states.remove(st.base);
             deleteIfCompleted(blobs, st);
-            BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run.getRootDir()));
+            BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run));
             RunningBuilds.lost(st.run);
             return;
         }
@@ -262,7 +262,7 @@ public final class SavePoints {
         }
         // the log must hold every line the save point has consumed (e.g. a sh step's output up to its offset), or a
         // controller resuming from it would skip lines the owner read but had not shipped yet
-        BlobLogStorage.Shipper.shipNow(BlobLogStorage.buildKey(st.run.getRootDir()));
+        BlobLogStorage.Shipper.shipNow(BlobLogStorage.buildKey(st.run));
         try {
             RunningBuilds.update(st.run, Map.of(SAVE_POINT, savePoint));
         } catch (ConflictException e) {
@@ -273,7 +273,7 @@ public final class SavePoints {
             st.stopped = true;
             states.remove(st.base);
             deleteIfCompleted(blobs, st);
-            BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run.getRootDir()));
+            BlobLogStorage.Shipper.drop(BlobLogStorage.buildKey(st.run));
             RunningBuilds.lost(st.run);
             return;
         }
@@ -294,9 +294,14 @@ public final class SavePoints {
      */
     private static void deleteIfCompleted(ClusterBlobStore blobs, State st) {
         try {
-            String placeholder = PersistenceStores.keyFor(st.run.getParent().getRootDir()) + "/running/"
-                    + st.run.getNumber() + ".xml";
-            if (PersistenceStores.get().read(placeholder) == null) {
+            String prefix = io.jenkins.plugins.cluster.builds.BuildRecords.isShared(st.run.getParent())
+                    ? io.jenkins.plugins.cluster.spi.Keys.item(st.run.getParent())
+                    : null;
+            ClusterStore store = ClusterStore.get();
+            if (prefix != null
+                    && store != null
+                    && store.read(io.jenkins.plugins.cluster.spi.Keys.placeholder(prefix, st.run.getNumber()))
+                            == null) {
                 blobs.delete(st.base);
             }
         } catch (IOException | RuntimeException e) {
