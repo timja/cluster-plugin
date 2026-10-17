@@ -58,6 +58,35 @@ public class InMemoryClusterStore implements ClusterStore {
 
     private record Lease(String owner, long epoch) {}
 
+    /**
+     * For tests: told of some operations, and may fail them by throwing (an {@link IOException} too, as a store that
+     * cannot be reached would): {@code children} once the children are listed, {@code release} before a build lease is
+     * released.
+     */
+    public static volatile Hook hook;
+
+    /** See {@link #hook}. */
+    @FunctionalInterface
+    public interface Hook {
+        void on(@NonNull String operation, @NonNull String key) throws IOException;
+    }
+
+    private static void hook(String operation, String key) {
+        Hook h = hook;
+        if (h != null) {
+            try {
+                h.on(operation, key);
+            } catch (IOException e) {
+                throw InMemoryClusterStore.<RuntimeException>sneaky(e);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> T sneaky(Throwable t) throws T {
+        throw (T) t;
+    }
+
     private final Shared shared;
     private final String origin;
 
@@ -167,6 +196,7 @@ public class InMemoryClusterStore implements ClusterStore {
                 }
             }
         }
+        hook("children", parentKey);
         return names;
     }
 
@@ -306,6 +336,7 @@ public class InMemoryClusterStore implements ClusterStore {
 
         @Override
         public void release(@NonNull String leaseKey, long epoch) {
+            hook("release", leaseKey);
             synchronized (shared) {
                 Lease l = shared.leases.get(leaseKey);
                 if (l != null && l.owner().equals(origin) && l.epoch() == epoch) {

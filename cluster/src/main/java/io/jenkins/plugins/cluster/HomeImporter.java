@@ -4,6 +4,7 @@ import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.model.Job;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.builds.BuildRecords;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
@@ -23,7 +24,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import jenkins.model.Jenkins;
-import jenkins.persistence.BuildRecords;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
@@ -78,7 +78,7 @@ public final class HomeImporter {
                         + key.substring("fingerprints/xx/".length(), "fingerprints/xx/".length() + 2)
                         + fp.group(1);
                 put(store, ClusterFingerprintStorage.key(md5), f);
-            } else if (!SKIP.matcher(key).matches() && store.owns(key)) {
+            } else if (!SKIP.matcher(key).matches() && ClusterRouting.isShared(key)) {
                 put(store, key, f);
             }
         }
@@ -109,9 +109,25 @@ public final class HomeImporter {
         }
         int builds = 0;
         int skipped = 0;
+        // every item gets its identity saved with it, which its builds are kept by from now on
+        for (hudson.model.Item item : Jenkins.get().getAllItems()) {
+            try {
+                jenkins.model.ItemUuids.pin(item);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not record the identity of " + item.getFullName(), e);
+                report.add("FAILED " + item.getFullName() + ": its identity could not be recorded: " + e);
+            }
+        }
         for (Job<?, ?> job : Jenkins.get().getAllItems(Job.class)) {
             if (!BuildRecords.isShared(job)) {
                 continue;
+            }
+            try {
+                // the cluster's sequence goes on from this home's
+                io.jenkins.plugins.cluster.builds.StoredBuildNumberAssigner.raiseTo(job, job.getNextBuildNumber());
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not record the next build number of " + job.getFullName(), e);
+                report.add("FAILED " + job.getFullName() + ": its next build number could not be recorded: " + e);
             }
             Set<Integer> stored;
             try {
@@ -154,7 +170,7 @@ public final class HomeImporter {
     /** A Pipeline log kept in append blobs (T3): upload the old log and its index if the blobs are not there. */
     private static void importLog(Run<?, ?> run) throws IOException {
         ClusterBlobStore blobs = BlobLogStorage.blobs();
-        String key = BlobLogStorage.buildKey(run.getRootDir());
+        String key = BlobLogStorage.buildKey(run);
         if (blobs == null || key == null) {
             return;
         }
