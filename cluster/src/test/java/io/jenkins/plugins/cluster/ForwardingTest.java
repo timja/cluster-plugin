@@ -127,4 +127,65 @@ class ForwardingTest {
         assertFalse(Forwarding.forward(request("POST"), rsp, "cnj-1", "http://127.0.0.1:" + port, Duration.ofSeconds(5)));
         verify(rsp, never()).sendError(eq(HttpServletResponse.SC_GATEWAY_TIMEOUT), anyString());
     }
+
+    private static HttpServletRequest withForwarded(String... values) {
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(req.getHeaders(Forwarding.FORWARDED)).thenReturn(Collections.enumeration(List.of(values)));
+        when(req.getHeader(Forwarding.FORWARDED)).thenReturn(values.length == 0 ? null : values[0]);
+        return req;
+    }
+
+    @Test
+    void onlyAControllerCanSayARequestWasForwarded() {
+        assertTrue(Forwarding.wasForwarded(withForwarded(Forwarding.forwardedHeader())));
+        assertFalse(Forwarding.wasForwarded(withForwarded()), "not forwarded");
+        assertFalse(Forwarding.wasForwarded(withForwarded("cnj-1")), "a client's, to stop its request from reaching the owner");
+        assertTrue(Forwarding.wasForwarded(withForwarded("cnj-1", Forwarding.forwardedHeader())), "whatever else the client sent");
+        String real = Forwarding.forwardedHeader();
+        assertFalse(Forwarding.wasForwarded(withForwarded(real.substring(0, real.length() - 2) + "00")), "a forged MAC");
+        assertFalse(Forwarding.wasForwarded(withForwarded(real.replaceFirst("^[^;]*", "other"))), "another name with the MAC of this one");
+        java.util.function.UnaryOperator<String> mac = m -> Integer.toHexString(m.hashCode());
+        String old = Forwarding.forwardedHeader("cnj-2", 1_000, mac);
+        assertEquals("cnj-2;1000;" + Integer.toHexString("cnj-2;1000".hashCode()), old);
+        assertTrue(Forwarding.isAuthentic(old, 1_000 + Forwarding.MAX_AGE_MILLIS, (m, x) -> x.equals(mac.apply(m))));
+        assertFalse(Forwarding.isAuthentic(old, 1_001 + Forwarding.MAX_AGE_MILLIS, (m, x) -> x.equals(mac.apply(m))), "too old: a replay");
+        assertFalse(Forwarding.isAuthentic("a;b;c", 0, (m, x) -> true));
+        assertFalse(Forwarding.isAuthentic("abc", 0, (m, x) -> true));
+    }
+
+    @Test
+    void aClientsForwardedHeaderIsNotPassedOn() throws Exception {
+        List<String> received = new CopyOnWriteArrayList<>();
+        try (ServerSocket owner = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+            Thread t = new Thread(() -> {
+                try (Socket s = owner.accept()) {
+                    java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(s.getInputStream(), StandardCharsets.ISO_8859_1));
+                    String line;
+                    while ((line = in.readLine()) != null && !line.isEmpty()) {
+                        received.add(line);
+                    }
+                    s.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                } catch (java.io.IOException e) {
+                    // done
+                }
+            });
+            t.setDaemon(true);
+            t.start();
+            HttpServletRequest req = request("GET");
+            when(req.getHeaderNames()).thenReturn(Collections.enumeration(List.of("Accept", Forwarding.FORWARDED)));
+            when(req.getHeaders("Accept")).thenReturn(Collections.enumeration(List.of("text/html")));
+            when(req.getHeaders(Forwarding.FORWARDED)).thenReturn(Collections.enumeration(List.of("forged")));
+            HttpServletResponse rsp = mock(HttpServletResponse.class);
+            when(rsp.getOutputStream()).thenReturn(mock(jakarta.servlet.ServletOutputStream.class));
+            assertTrue(Forwarding.forward(req, rsp, "cnj-1", "http://127.0.0.1:" + owner.getLocalPort(), Duration.ofSeconds(10)));
+            t.join(10_000);
+        }
+        List<String> forwarded = received.stream()
+                .filter(h -> h.toLowerCase(java.util.Locale.ROOT).startsWith(Forwarding.FORWARDED.toLowerCase(java.util.Locale.ROOT) + ":"))
+                .map(h -> h.substring(h.indexOf(':') + 1).trim())
+                .toList();
+        assertEquals(1, forwarded.size(), received::toString);
+        assertTrue(Forwarding.wasForwarded(withForwarded(forwarded.get(0))), forwarded::toString);
+        assertTrue(received.contains("Accept: text/html") || received.contains("accept: text/html"), received::toString);
+    }
 }

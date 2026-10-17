@@ -1,6 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -61,7 +60,7 @@ final class WebSocketProxy {
         Front front = new Front();
         WebSocket.Builder b = HTTP.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10));
         for (String name : java.util.Collections.list(req.getHeaderNames())) {
-            if (!NOT_PASSED.contains(name.toLowerCase(Locale.ROOT))) {
+            if (!NOT_PASSED.contains(name.toLowerCase(Locale.ROOT)) && !name.equalsIgnoreCase(Forwarding.FORWARDED)) {
                 for (String value : java.util.Collections.list(req.getHeaders(name))) {
                     try {
                         b.header(name, value);
@@ -71,7 +70,7 @@ final class WebSocketProxy {
                 }
             }
         }
-        b.header(Forwarding.FORWARDED, ClusterMember.NAME);
+        b.header(Forwarding.FORWARDED, Forwarding.forwardedHeader());
         String protocols = req.getHeader("Sec-WebSocket-Protocol");
         if (protocols != null && !protocols.isBlank()) {
             String[] p = protocols.split("\\s*,\\s*");

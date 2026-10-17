@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.security.HMACConfidentialKey;
 
 /**
  * Relays a request to another controller's internal URL and its answer back, with the browser's cookies and credentials,
@@ -35,8 +36,19 @@ final class Forwarding {
 
     private static final Logger LOGGER = Logger.getLogger(Forwarding.class.getName());
 
-    /** Set on forwarded requests (to the forwarding controller's name), and on their answers (to the owner's). */
+    /**
+     * Set on forwarded requests, and on their answers (to the owner's name). On a request it is
+     * {@code <forwarding controller's name>;<time>;<MAC>}, authenticated with a key every controller of the cluster
+     * shares ({@link #KEY}): a client cannot set it, so it cannot stop its request from being forwarded to the owner.
+     * The client's own header of that name is never passed on.
+     */
     static final String FORWARDED = "X-Jenkins-Cluster-Forwarded-From";
+
+    /** Shared by the controllers: confidential keys are in the store ({@code storesConfidentialKeys}). */
+    private static final HMACConfidentialKey KEY = new HMACConfidentialKey(Forwarding.class, "forwardedFrom", 32);
+
+    /** How old a forwarded request's header may be (clocks differ a little; a hop takes milliseconds). */
+    static final long MAX_AGE_MILLIS = Long.getLong(Forwarding.class.getName() + ".maxAgeSeconds", 300) * 1000;
 
     private static final Set<String> HOP_BY_HOP = Set.of(
             "connection",
@@ -69,7 +81,46 @@ final class Forwarding {
 
     /** Whether this request was itself forwarded by another controller (never forward it again). */
     static boolean wasForwarded(@NonNull HttpServletRequest req) {
-        return req.getHeader(FORWARDED) != null;
+        java.util.Enumeration<String> values = req.getHeaders(FORWARDED);
+        if (values == null) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        for (String v : Collections.list(values)) {
+            if (isAuthentic(v, now, KEY::checkMac)) {
+                return true;
+            }
+            LOGGER.fine(() -> "Ignoring an unauthenticated " + FORWARDED + " header: " + v);
+        }
+        return false;
+    }
+
+    /** The header a controller sets on a request it forwards. */
+    @NonNull
+    static String forwardedHeader() {
+        return forwardedHeader(ClusterMember.NAME, System.currentTimeMillis(), KEY::mac);
+    }
+
+    @NonNull
+    static String forwardedHeader(@NonNull String name, long now, @NonNull java.util.function.UnaryOperator<String> mac) {
+        String signed = name.replace(";", "_") + ";" + now;
+        return signed + ";" + mac.apply(signed);
+    }
+
+    /** Whether a {@link #FORWARDED} header was set by a controller of this cluster, recently. */
+    static boolean isAuthentic(@NonNull String header, long now, @NonNull java.util.function.BiPredicate<String, String> checkMac) {
+        int last = header.lastIndexOf(';');
+        int first = header.indexOf(';');
+        if (first <= 0 || last <= first) {
+            return false;
+        }
+        long at;
+        try {
+            at = Long.parseLong(header.substring(first + 1, last));
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        return Math.abs(now - at) <= MAX_AGE_MILLIS && checkMac.test(header.substring(0, last), header.substring(last + 1));
     }
 
     /**
@@ -92,13 +143,13 @@ final class Forwarding {
                 + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(target)).timeout(timeout);
         for (String name : Collections.list(req.getHeaderNames())) {
-            if (!HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
+            if (!HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT)) && !name.equalsIgnoreCase(FORWARDED)) {
                 for (String value : Collections.list(req.getHeaders(name))) {
                     b.header(name, value);
                 }
             }
         }
-        b.header(FORWARDED, ClusterMember.NAME);
+        b.header(FORWARDED, forwardedHeader());
         byte[] body = body(req);
         b.method(req.getMethod(), body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
         HttpResponse<InputStream> r;
