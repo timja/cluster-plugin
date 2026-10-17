@@ -14,6 +14,7 @@ import jenkins.model.ExternalBuilds;
 import org.jenkins.plugins.lockableresources.LockCoordinator;
 import org.jenkins.plugins.lockableresources.LockableResource;
 import org.jenkins.plugins.lockableresources.LockableResourcesManager;
+import org.jenkinsci.plugins.workflow.support.steps.build.BuildTriggerRelay;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
@@ -51,5 +52,11 @@ class NoStoreTest {
         assertFalse(LockCoordinator.get().isHeldElsewhere(res));
         lrm.unreserve(List.of(res));
         assertFalse(res.isReserved());
+    }
+
+    @Test
+    void buildStepEventsAreNotRelayed(JenkinsRule r) throws Exception {
+        FreeStyleBuild b = r.buildAndAssertSuccess(r.createFreeStyleProject("p"));
+        assertNull(BuildTriggerRelay.get().returnAddress(b, "3"), "a build step's events stay on this controller");
     }
 }
