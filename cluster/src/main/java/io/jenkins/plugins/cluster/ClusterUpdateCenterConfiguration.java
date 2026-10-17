@@ -5,6 +5,7 @@ import hudson.init.Initializer;
 import hudson.model.UpdateCenter;
 import java.io.File;
 import java.io.IOException;
+import java.util.logging.Logger;
 import jenkins.model.Jenkins;
 
 /**
@@ -14,6 +15,8 @@ import jenkins.model.Jenkins;
  */
 public final class ClusterUpdateCenterConfiguration extends UpdateCenter.UpdateCenterConfiguration {
 
+    private static final Logger LOGGER = Logger.getLogger(ClusterUpdateCenterConfiguration.class.getName());
+
     @Initializer(after = InitMilestone.PLUGINS_STARTED)
     public static void register() {
         if (ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster) {
@@ -21,8 +24,28 @@ public final class ClusterUpdateCenterConfiguration extends UpdateCenter.UpdateC
         }
     }
 
+    /**
+     * Refuses a download the cluster cannot take (Target 15): a cluster plugin, which is part of the image (also as a
+     * dependency of another plugin, or an upload), or a downgrade of what the cluster has. The install job fails, saying why.
+     */
+    @Override
+    public void postValidate(UpdateCenter.DownloadJob job, File src) throws IOException {
+        super.postValidate(job, src);
+        if (job instanceof UpdateCenter.InstallationJob) {
+            String refusal = ClusterPlugins.archiveRefusal(src);
+            if (refusal != null) {
+                LOGGER.info(() -> "Refused the install of " + job.getName() + ": " + refusal);
+                throw new IOException(refusal);
+            }
+        }
+    }
+
     @Override
     public void install(UpdateCenter.DownloadJob job, File src, File dst) throws IOException {
+        if (job instanceof UpdateCenter.PluginDowngradeJob && ClusterPlugins.active()) {
+            // restores a backup only this controller has (the plugin manager's downgrade button)
+            throw new IOException(ClusterPluginSet.DOWNGRADE);
+        }
         super.install(job, src, dst);
         if (job instanceof UpdateCenter.InstallationJob) { // not core upgrades
             ClusterPlugins.installed(dst);

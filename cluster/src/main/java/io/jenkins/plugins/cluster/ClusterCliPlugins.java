@@ -5,6 +5,7 @@ import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.AbortException;
 import hudson.Extension;
 import java.io.File;
+import java.io.IOException;
 import java.util.logging.Logger;
 import jenkins.persistence.PersistenceStores;
 import jenkins.plugins.PluginArchiveListener;
@@ -12,7 +13,7 @@ import jenkins.plugins.PluginArchiveListener;
 /**
  * Plugins installed with the CLI's {@code install-plugin} from a file, URL or standard input (which bypasses the
  * update center) are treated as the plugin manager's installs are (Target 15): refused where those are
- * ({@code fixed} mode, the cluster plugins themselves), otherwise recorded in the cluster's plugin set, so that every
+ * ({@code fixed} mode, the cluster plugins themselves, downgrades), otherwise recorded in the cluster's plugin set, so that every
  * controller gets them.
  */
 @Extension
@@ -26,9 +27,17 @@ public final class ClusterCliPlugins implements PluginArchiveListener {
             return;
         }
         String refusal = ClusterPluginSet.refusal(ClusterPluginSet.MODE, new ClusterPluginSet.Change("install", shortName), ClusterPlugins.active());
+        if (refusal == null && ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster) {
+            try {
+                refusal = ClusterPlugins.archiveRefusal(archive); // a downgrade
+            } catch (IOException e) {
+                throw new AbortException("Cannot compare " + shortName + " with the cluster's plugin set, so not installing it: " + e);
+            }
+        }
         if (refusal != null) {
-            LOGGER.info(() -> "Refused install-plugin " + shortName + ": " + refusal);
-            throw new AbortException(refusal);
+            String why = refusal;
+            LOGGER.info(() -> "Refused install-plugin " + shortName + ": " + why);
+            throw new AbortException(why);
         }
     }
 

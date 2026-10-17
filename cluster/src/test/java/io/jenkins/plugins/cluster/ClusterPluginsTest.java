@@ -206,4 +206,31 @@ class ClusterPluginsTest {
         Files.writeString(home.resolve("queue.xml"), "<queue/>");
         assertFalse(ClusterPlugins.isFreshHome(home.toFile()), "a saved queue, which restarting before loading it would empty");
     }
+
+    private static void plugin(File file, String name, String version) throws Exception {
+        java.util.jar.Manifest m = new java.util.jar.Manifest();
+        m.getMainAttributes().put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
+        m.getMainAttributes().putValue("Short-Name", name);
+        m.getMainAttributes().putValue("Plugin-Version", version);
+        try (java.util.jar.JarOutputStream out = new java.util.jar.JarOutputStream(Files.newOutputStream(file.toPath()), m)) {
+            // a manifest is all it takes
+        }
+    }
+
+    @Test
+    void theNewestKnownVersionIsTheClustersOrTheOneHere(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        File plugins = dir.toFile();
+        assertNull(ClusterPlugins.newestKnown("git", null, plugins), "never installed");
+        plugin(new File(plugins, "git.jpi"), "git", "5.1");
+        assertEquals("5.1", ClusterPlugins.newestKnown("git", null, plugins), "the image's");
+        Entry newer = new Entry(State.installed, "5.3", "x", "b", "c1", 0);
+        assertEquals("5.3", ClusterPlugins.newestKnown("git", newer, plugins), "installed elsewhere, not here yet");
+        Entry older = new Entry(State.installed, "5.0", "x", "b", "c1", 0);
+        assertEquals("5.1", ClusterPlugins.newestKnown("git", older, plugins));
+        Entry uninstalled = new Entry(State.uninstalled, null, null, null, "c1", 0);
+        Files.delete(plugins.toPath().resolve("git.jpi"));
+        assertNull(ClusterPlugins.newestKnown("git", uninstalled, plugins), "uninstalled first: an older version may be installed");
+        plugin(new File(plugins, "legacy.hpi"), "legacy", "1.2");
+        assertEquals("1.2", ClusterPlugins.newestKnown("legacy", null, plugins));
+    }
 }

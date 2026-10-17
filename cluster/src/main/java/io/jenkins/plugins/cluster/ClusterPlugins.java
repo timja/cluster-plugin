@@ -434,6 +434,46 @@ public final class ClusterPlugins {
         }
     }
 
+    /**
+     * Why the cluster refuses to install a plugin archive ({@link ClusterPluginSet#archiveRefusal}), or null: read from
+     * its manifest, compared with the cluster's plugin set and {@code plugins/} here.
+     */
+    @CheckForNull
+    static String archiveRefusal(@NonNull File archive) throws IOException {
+        if (store() == null) {
+            return null; // not a cluster
+        }
+        Manifest m;
+        try (JarFile jar = new JarFile(archive)) {
+            m = jar.getManifest();
+        }
+        String name = m == null ? null : m.getMainAttributes().getValue("Short-Name");
+        if (name == null) {
+            return null; // not a plugin: the update center says so
+        }
+        String version = m.getMainAttributes().getValue("Plugin-Version");
+        return ClusterPluginSet.archiveRefusal(ClusterPluginSet.MODE, name, version, active() ? newestKnown(name) : null, active());
+    }
+
+    /** The newest version of a plugin in the cluster's plugin set (installed there) or in {@code plugins/} here, or null. */
+    @CheckForNull
+    static String newestKnown(@NonNull String name) throws IOException {
+        return newestKnown(name, read().plugins().get(name), Jenkins.get().getPluginManager().rootDir);
+    }
+
+    @CheckForNull
+    static String newestKnown(@NonNull String name, @CheckForNull Entry e, @NonNull File dir) {
+        String newest = e != null && e.state() != State.uninstalled ? e.version() : null;
+        for (String ext : new String[] {".jpi", ".hpi"}) {
+            File archive = new File(dir, name + ext);
+            String local = archive.isFile() ? versionOf(archive) : null;
+            if (local != null && (newest == null || new VersionNumber(newest).isOlderThan(new VersionNumber(local)))) {
+                newest = local;
+            }
+        }
+        return newest;
+    }
+
     /** Records an uninstall, disable or enable done here through the plugin manager. */
     static void changed(@NonNull String name, @NonNull State state) {
         if (!active() || isProtected(name)) {

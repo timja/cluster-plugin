@@ -2,9 +2,11 @@ package io.jenkins.plugins.cluster;
 
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
+import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.util.PluginServletFilter;
+import hudson.util.VersionNumber;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -49,7 +51,7 @@ public final class ClusterPluginSet implements Filter {
     static final String FIXED = "The plugin set of this Jenkins cluster is fixed: plugins are part of the controller"
             + " image, so that every controller runs the same ones. Add the plugin to the image and roll it out (helm upgrade) instead.";
     static final String DOWNGRADE = "Downgrades are not applied across a Jenkins cluster (they restore a backup only this"
-            + " controller has). Install the older version instead.";
+            + " controller has). Uninstall the plugin, then install the older version.";
     static final String CORE_UPGRADE = "Jenkins itself is part of the controller image: upgrade it by rolling out a new image (helm upgrade).";
     static final String RESTART = "This Jenkins cluster restarts its controllers for plugin changes by itself, one at a"
             + " time, once each has the change (see Manage Jenkins > Cluster). Restarting a single controller from here is not needed.";
@@ -112,6 +114,42 @@ public final class ClusterPluginSet implements Filter {
         return null;
     }
 
+    /**
+     * Why installing a plugin archive is refused in this mode, or null if it may go ahead: as {@link #refusal} for an
+     * install of that plugin, and a downgrade (a version older than the newest the cluster or this controller has) too,
+     * since it would replace a newer version in the cluster's plugin set, and fresh homes would get the older one.
+     *
+     * @param newest the newest version known of that plugin: in the cluster's plugin set, or in {@code plugins/} here
+     */
+    @CheckForNull
+    static String archiveRefusal(Mode mode, @NonNull String name, @CheckForNull String version, @CheckForNull String newest,
+            boolean clusterActive) {
+        String refusal = refusal(mode, new Change("install", name), clusterActive);
+        if (refusal != null || mode == Mode.local) {
+            return refusal;
+        }
+        if (version != null && newest != null && new VersionNumber(version).isOlderThan(new VersionNumber(newest))) {
+            return name + " " + version + " is older than " + newest + ", which this Jenkins cluster has. " + DOWNGRADE;
+        }
+        return null;
+    }
+
+    /** The protected plugins a plugin manager install form ({@code plugin.<name>.<site>} parameters) asks for. */
+    static java.util.List<String> protectedInForm(java.util.Collection<String> parameterNames) {
+        java.util.List<String> result = new java.util.ArrayList<>();
+        for (String p : parameterNames) {
+            if (p.startsWith("plugin.")) {
+                String rest = p.substring("plugin.".length());
+                int dot = rest.lastIndexOf('.');
+                String name = dot == -1 ? rest : rest.substring(0, dot);
+                if (ClusterPlugins.isProtected(name)) {
+                    result.add(name);
+                }
+            }
+        }
+        return result;
+    }
+
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
@@ -127,11 +165,19 @@ public final class ClusterPluginSet implements Filter {
             return;
         }
         String refusal = refusal(MODE, change, ClusterPlugins.active());
+        if (refusal == null && change.kind().equals("install") && req.getRequestURI().endsWith("/install")
+                && String.valueOf(req.getContentType()).startsWith("application/x-www-form-urlencoded")
+                && !protectedInForm(java.util.Collections.list(req.getParameterNames())).isEmpty()) {
+            // the plugin manager's form (others, uploads and dependencies are refused when downloaded, by
+            // ClusterUpdateCenterConfiguration#postValidate)
+            refusal = PROTECTED_CHANGE;
+        }
         if (refusal != null) {
-            LOGGER.info(() -> "Refused " + req.getRequestURI() + ": " + refusal);
+            String why = refusal;
+            LOGGER.info(() -> "Refused " + req.getRequestURI() + ": " + why);
             rsp.setStatus(HttpServletResponse.SC_CONFLICT);
             rsp.setContentType("text/plain;charset=UTF-8");
-            rsp.getOutputStream().write(refusal.getBytes(StandardCharsets.UTF_8));
+            rsp.getOutputStream().write(why.getBytes(StandardCharsets.UTF_8));
             return;
         }
         if (change.kind().equals("install") && MODE == Mode.cluster) {

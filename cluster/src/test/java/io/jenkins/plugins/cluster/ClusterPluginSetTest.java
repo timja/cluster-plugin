@@ -2,6 +2,7 @@ package io.jenkins.plugins.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -47,5 +48,29 @@ class ClusterPluginSetTest {
                 new ClusterPluginSet.Change("install", "cluster-postgresql"), true), "e.g. the CLI installing a backend");
         assertEquals(ClusterPluginSet.FIXED, ClusterPluginSet.refusal(ClusterPluginSet.Mode.fixed, install, true));
         assertNull(ClusterPluginSet.refusal(ClusterPluginSet.Mode.local, uninstall, true));
+    }
+
+    @Test
+    void archivesOfClusterPluginsAndDowngradesAreRefused() {
+        ClusterPluginSet.Mode cluster = ClusterPluginSet.Mode.cluster;
+        // the update center's install or upgrade, an upload, or a dependency of another plugin: the name is the archive's
+        assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.archiveRefusal(cluster, "cluster-postgresql", "2.0", "1.0", true));
+        assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.archiveRefusal(cluster, "cluster", "2.0", null, true));
+        assertNull(ClusterPluginSet.archiveRefusal(cluster, "git", "5.2", "5.1", true), "an upgrade");
+        assertNull(ClusterPluginSet.archiveRefusal(cluster, "git", "5.1", "5.1", true), "the same version again");
+        assertNull(ClusterPluginSet.archiveRefusal(cluster, "git", "5.1", null, true), "a new plugin");
+        String downgrade = ClusterPluginSet.archiveRefusal(cluster, "git", "5.0.1", "5.1", true);
+        assertTrue(downgrade.startsWith("git 5.0.1 is older than 5.1"), downgrade);
+        assertTrue(downgrade.endsWith(ClusterPluginSet.DOWNGRADE), downgrade);
+        assertEquals(ClusterPluginSet.FIXED, ClusterPluginSet.archiveRefusal(ClusterPluginSet.Mode.fixed, "git", "5.2", "5.1", true));
+        assertNull(ClusterPluginSet.archiveRefusal(ClusterPluginSet.Mode.local, "git", "5.0", "5.1", true), "local: as without a cluster");
+    }
+
+    @Test
+    void theInstallFormNamesItsPlugins() {
+        assertEquals(java.util.List.of("cluster-postgresql"), ClusterPluginSet.protectedInForm(
+                java.util.List.of("plugin.git.default", "plugin.cluster-postgresql.default", "dynamicLoad", "Jenkins-Crumb")));
+        assertTrue(ClusterPluginSet.protectedInForm(java.util.List.of("plugin.git.default", "plugin.cluster-s3-extra.default")).isEmpty());
+        assertEquals(java.util.List.of("cluster"), ClusterPluginSet.protectedInForm(java.util.List.of("plugin.cluster")));
     }
 }
