@@ -38,7 +38,7 @@ public final class ClusterMember {
     public static volatile String pluginsStatus;
 
     /** What else this controller reports to the cluster (JSON, {@link MemberStatus}), published with each heartbeat. */
-    public static volatile String memberInfo;
+    public static volatile String memberInfo = MemberStatus.STARTING;
 
     private static String env(String name, String fallback) {
         String v = System.getenv(name);

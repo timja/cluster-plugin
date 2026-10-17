@@ -38,12 +38,26 @@ public final class MemberStatus {
     /** When an install was last requested here (through the plugin manager), {@link System#currentTimeMillis}. */
     static volatile long lastInstallAt;
 
-    /** A member's report, as parsed back. */
-    record Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt, long merged, long overwritten, long refused) {
+    /**
+     * What a controller publishes before it has computed its first report: not ready. A member publishing nothing at
+     * all is older than readiness and counts as ready.
+     */
+    public static final String STARTING = "{\"ready\":false}";
+
+    /**
+     * A member's report, as parsed back. {@code ready}: done starting (Jenkins {@link InitMilestone#COMPLETED}, so its
+     * items are loaded), as {@link ClusterTriggerCoordinator} needs of an owner of triggers.
+     */
+    record Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt, long merged, long overwritten, long refused,
+            boolean ready) {
         static final Info NONE = new Info(0, 0, Map.of(), 0, 0, 0, 0, 0);
 
         Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt) {
             this(busy, total, agents, installing, installAt, 0, 0, 0);
+        }
+
+        Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt, long merged, long overwritten, long refused) {
+            this(busy, total, agents, installing, installAt, merged, overwritten, refused, true);
         }
 
         String toJson() {
@@ -58,6 +72,7 @@ public final class MemberStatus {
             o.put("merged", merged);
             o.put("overwritten", overwritten);
             o.put("refused", refused);
+            o.put("ready", ready);
             return o.toString();
         }
 
@@ -77,11 +92,17 @@ public final class MemberStatus {
                     }
                 }
                 return new Info(o.optInt("busy"), o.optInt("total"), Collections.unmodifiableMap(agents),
-                        o.optInt("installing"), o.optLong("installAt"), o.optLong("merged"), o.optLong("overwritten"), o.optLong("refused"));
+                        o.optInt("installing"), o.optLong("installAt"), o.optLong("merged"), o.optLong("overwritten"), o.optLong("refused"),
+                        o.optBoolean("ready", true));
             } catch (RuntimeException e) {
                 return NONE;
             }
         }
+    }
+
+    /** Whether a member's report says it is ready ({@link Info#ready}); a member reporting nothing is older, and taken as ready. */
+    public static boolean isReady(@CheckForNull String json) {
+        return Info.parse(json).ready();
     }
 
     @Initializer(after = InitMilestone.JOB_LOADED)
@@ -122,7 +143,8 @@ public final class MemberStatus {
         long merged = jenkins.persistence.PersistenceStores.getMergeCount();
         long refused = jenkins.persistence.PersistenceStores.getRefusedCount();
         long overwritten = Math.max(0, jenkins.persistence.PersistenceStores.getConflictCount() - merged - refused);
-        return new Info(busy, total, agents, activeInstalls(j.getUpdateCenter()), lastInstallAt, merged, overwritten, refused);
+        return new Info(busy, total, agents, activeInstalls(j.getUpdateCenter()), lastInstallAt, merged, overwritten, refused,
+                ClusterTriggerCoordinator.readyHere());
     }
 
     /** Update-center downloads not finished yet. */

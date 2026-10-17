@@ -33,6 +33,7 @@ public final class PeerVersionCheck {
             String message = "This controller speaks cluster protocol " + ClusterMember.PROTOCOL + ", but the cluster's schema needs "
                     + floor + " or later (a contracted migration); run a newer version";
             LOGGER.severe(message);
+            leave(store);
             throw new IllegalStateException(message);
         }
         int minimum = ClusterMember.MINIMUM_PEER_PROTOCOL;
@@ -44,8 +45,23 @@ public final class PeerVersionCheck {
             String message = "This controller needs every peer to speak cluster protocol " + minimum + " or later, but "
                     + String.join(", ", old) + " is alive; replace it first";
             LOGGER.severe(message);
+            leave(store);
             throw new IllegalStateException(message);
         }
         LOGGER.info(() -> "Every live peer speaks cluster protocol " + minimum + " or later");
+    }
+
+    /**
+     * Leaves the cluster before failing to start: a Jenkins that failed to start keeps running (its error page), and must
+     * not go on heartbeating as a member, holding a share of the triggers and counting as a peer below the protocol.
+     */
+    static void leave(Object store) {
+        if (store instanceof AutoCloseable c) {
+            try {
+                c.close();
+            } catch (Exception x) {
+                LOGGER.log(java.util.logging.Level.FINE, "Could not close the store", x);
+            }
+        }
     }
 }
