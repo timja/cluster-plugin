@@ -8,10 +8,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
+import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -50,10 +52,13 @@ final class Forwarding {
 
     /**
      * How long to wait for the owner's response headers (not its body: consoles stream). An owner that is paused or
-     * overloaded accepts the connection and never answers; after this the request is served locally, where the build
-     * is, by then, usually adopted.
+     * overloaded accepts the connection and never answers; after this a GET or HEAD is served locally, where the build
+     * is, by then, usually adopted. Any other request gets 504: the owner may have acted on it.
      */
     static final long TIMEOUT_SECONDS = Long.getLong(Forwarding.class.getName() + ".timeoutSeconds", 20);
+
+    /** Requests that may be served again locally when the owner's answer does not come: they change nothing. */
+    private static final Set<String> SAFE = Set.of("GET", "HEAD");
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
@@ -70,16 +75,22 @@ final class Forwarding {
     /**
      * Relays the request to {@code url} (the owner's internal root URL) and copies the answer.
      *
-     * @return false if the owner could not be reached and nothing was written, so the caller may serve it locally
+     * @return false if the owner could not be connected to (or, for a GET or HEAD, did not answer) and nothing was
+     *     written, so the caller may serve it locally
      */
     static boolean forward(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url)
             throws IOException {
+        return forward(req, rsp, owner, url, Duration.ofSeconds(TIMEOUT_SECONDS));
+    }
+
+    static boolean forward(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url,
+            @NonNull Duration timeout) throws IOException {
         String path = req.getRequestURI().substring(req.getContextPath().length());
         String target = url.replaceAll("/+$", "")
                 + req.getContextPath()
                 + path
                 + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(target)).timeout(Duration.ofSeconds(TIMEOUT_SECONDS));
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(target)).timeout(timeout);
         for (String name : Collections.list(req.getHeaderNames())) {
             if (!HOP_BY_HOP.contains(name.toLowerCase(Locale.ROOT))) {
                 for (String value : Collections.list(req.getHeaders(name))) {
@@ -97,8 +108,15 @@ final class Forwarding {
             Thread.currentThread().interrupt();
             throw new IOException(e);
         } catch (IOException e) {
-            LOGGER.log(Level.FINE, e, () -> "Could not reach " + owner + " for " + path);
-            return false;
+            if (e instanceof ConnectException || e instanceof HttpConnectTimeoutException || SAFE.contains(req.getMethod())) {
+                LOGGER.log(Level.FINE, e, () -> "Could not reach " + owner + " for " + path);
+                return false;
+            }
+            // sent, but no answer: the owner may have acted on it (a replay, an input), so running it here could do it twice
+            LOGGER.log(Level.WARNING, e, () -> "No answer from " + owner + " for " + req.getMethod() + " " + path);
+            rsp.sendError(HttpServletResponse.SC_GATEWAY_TIMEOUT, "The controller running this (" + owner
+                    + ") did not answer in time. It may have acted on the request: check before retrying.");
+            return true;
         }
         rsp.setStatus(r.statusCode());
         for (Map.Entry<String, List<String>> h : r.headers().map().entrySet()) {
