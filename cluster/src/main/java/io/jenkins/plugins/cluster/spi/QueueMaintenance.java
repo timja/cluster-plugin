@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Housekeeping of the shared queue ({@link jenkins.persistence.ClusterQueue}). */
+/** Housekeeping of the shared queue ({@link ClusterQueue}). */
 public interface QueueMaintenance {
     /** Puts items claimed by gone controllers back into the queue, and forgets old ones; how many were put back. */
     int reclaimAndPrune() throws IOException;
@@ -19,14 +19,18 @@ public interface QueueMaintenance {
     /** Puts a started item back into the queue (its build never began), or cancels it if an equal one waits. */
     void requeueStarted(long id) throws IOException;
 
-    /** Cancels the started items of an item, and of the items inside it (it was deleted or renamed). */
-    void cancelStartedOf(@NonNull String fullName) throws IOException;
+    /**
+     * Cancels the started items of an item (it was deleted), by its {@linkplain hudson.model.Item#getItemUuid identity}.
+     * A rename or move does not change the identity, so needs no call. The caller cancels those of the items inside a
+     * deleted folder one by one.
+     */
+    void cancelStartedOf(@NonNull String itemUuid) throws IOException;
 
     /** How many items are in each state ({@code WAITING}, {@code CLAIMED}). */
     @NonNull
     Map<String, Integer> queueCounts() throws IOException;
 
-    /** A queue item recorded as started, with the number of its build. */
-    record StartedItem(long id, String task, int buildNumber) {}
+    /** A queue item recorded as started, with the number of its build; {@code task} is the full name, for display. */
+    record StartedItem(long id, String itemUuid, String task, int buildNumber) {}
 }
 

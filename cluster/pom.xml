@@ -15,8 +15,10 @@
   <description>Runs several Jenkins controllers as one cluster: shared items, builds, queue and plugins, and adoption of running builds. Backends come from store and blob store plugins.</description>
   <properties>
     <changelist>999999-SNAPSHOT</changelist>
-    <!-- Needs the jenkins.persistence SPI from the cnj/t* core branches, installed locally. -->
-    <jenkins.version>2.586-SNAPSHOT</jenkins.version>
+    <!-- Builds against the frozen core API of timja/jenkins cnj2/api (DESIGN-17 S0), installed locally as
+         2.586-cnj2-api-SNAPSHOT: mvn -pl war -am install -Dchangelist=-cnj2-api-SNAPSHOT -DskipTests there.
+         Moves to the cnj2/all incrementals once the core stack exists. -->
+    <jenkins.version>2.586-cnj2-api-SNAPSHOT</jenkins.version>
     <useBeta>true</useBeta>
     <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
     <spotbugs.failOnError>false</spotbugs.failOnError>

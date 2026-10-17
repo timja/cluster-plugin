@@ -3,24 +3,46 @@ package io.jenkins.plugins.cluster.spi;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import jenkins.persistence.BlobStore;
-import jenkins.persistence.PersistenceStores;
 
 /**
- * What the cluster needs of a {@link BlobStore} beyond the core SPI: implemented by the blob store a backend plugin
- * provides (such as the Azure Blob Storage or the S3 one).
+ * Stores large, rarely changing content which the controllers of a cluster share, such as snapshots and logs of
+ * builds: implemented by the blob store a backend plugin provides (such as the Azure Blob Storage or the S3 one),
+ * through a {@link ClusterBlobStoreProvider}. Complements the {@link ClusterStore}, which holds small records.
+ *
+ * <p>Keys use the layout of {@link Keys}: everything kept about an item is below {@code items/<uuid>/}, so blobs
+ * never move when an item is renamed or moved. There are no versions or change events: writers publish a blob before
+ * the record which refers to it.
  */
-public interface ClusterBlobStore extends BlobStore {
+public interface ClusterBlobStore {
 
-    /** The active blob store, if it is a cluster blob store. */
+    /** The active blob store, or null if none is configured (or no {@link ClusterStore} is active). */
     @CheckForNull
     static ClusterBlobStore get() {
-        return PersistenceStores.getBlobStore() instanceof ClusterBlobStore b ? b : null;
+        throw new UnsupportedOperationException("cnj2/api stub: resolved once from the ClusterBlobStoreProviders (P0)");
     }
+
+    /**
+     * Stores a blob, replacing any existing blob with the same key.
+     *
+     * @param length the number of bytes {@code content} will deliver
+     */
+    void put(@NonNull String key, @NonNull InputStream content, long length) throws IOException;
+
+    /**
+     * Opens a blob for reading.
+     *
+     * @return the content, which the caller must close, or null if there is no such blob
+     */
+    @CheckForNull
+    InputStream get(@NonNull String key) throws IOException;
+
+    /** Deletes the blob with this key and every blob below it ({@code prefix/…}), if any. */
+    void delete(@NonNull String prefix) throws IOException;
 
     /** The keys of the blob with this key and of every blob below it ({@code prefix/…}), in no particular order. */
     @NonNull
