@@ -2,6 +2,7 @@ package io.jenkins.plugins.cluster.azure;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -107,6 +108,38 @@ class AzureBlobStoreTest {
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void aStaleWriterCannotAppendToASegmentAnotherWentOnFrom() throws Exception {
+        String container = "test-" + UUID.randomUUID();
+        AzureBlobStore a = new AzureBlobStore(connectionString(), container, 2);
+        AzureBlobStore b = new AzureBlobStore(connectionString(), container, 2);
+        String log = "jobs/p/builds/1/log";
+        assertTrue(a.logs().appendAt(log, b("one\n"), 0, 4, 0)); // segment 0, one block
+        // b adopts the build and appends two blocks' worth: more than segment 0 has room for
+        byte[] big = new byte[AzureBlobStore.MAX_APPEND_BLOCK + 10];
+        java.util.Arrays.fill(big, (byte) 'b');
+        long end = b.logs().size(log);
+        assertTrue(b.logs().appendAt(log, big, 0, big.length, end));
+        assertEquals(2, b.segments(log).size(), "its first block filled segment 0, its second went on in segment 1");
+        // a wakes: one more block would fit in segment 0 as a last saw it
+        assertFalse(a.logs().appendAt(log, b("stale\n"), 0, 6, 4), "refused: segment 0 is longer");
+        assertEquals(4 + big.length, a.logs().size(log));
+        byte[] all = a.logs().readFrom(log, 0);
+        assertEquals("one\n", new String(all, 0, 4, StandardCharsets.UTF_8));
+        assertEquals(4 + big.length, all.length);
+        for (int i = 4; i < all.length; i++) {
+            assertEquals('b', all[i]);
+        }
+
+        // at a segment's end: whoever appends next goes on in the next segment, so a stale writer meets the other there
+        String log2 = "jobs/p/builds/2/log";
+        assertTrue(a.logs().appendAt(log2, b("1"), 0, 1, 0));
+        assertTrue(a.logs().appendAt(log2, b("2"), 0, 1, 1)); // segment 0 is full
+        assertTrue(b.logs().appendAt(log2, b("3"), 0, 1, b.logs().size(log2)));
+        assertFalse(a.logs().appendAt(log2, b("X"), 0, 1, 2), "segment 1 is b's already");
+        assertEquals("123", new String(a.logs().readFrom(log2, 0), StandardCharsets.UTF_8));
     }
 
     @Test

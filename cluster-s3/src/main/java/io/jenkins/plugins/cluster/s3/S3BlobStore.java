@@ -161,6 +161,23 @@ public class S3BlobStore implements ClusterBlobStore {
         return keys;
     }
 
+    @NonNull
+    @Override
+    public java.util.Map<String, Long> sizes(@NonNull String key) throws IOException {
+        java.util.Map<String, Long> sizes = new java.util.HashMap<>();
+        try {
+            for (S3Object o : s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(object(key))).contents()) {
+                String k = o.key().substring(prefix.length());
+                if (k.equals(key) || k.startsWith(key + "/")) {
+                    sizes.put(k, o.size());
+                }
+            }
+        } catch (SdkException e) {
+            throw wrap("list", key, e);
+        }
+        return sizes;
+    }
+
     @Override
     public void delete(@NonNull String key) throws IOException {
         List<String> keys = list(key);

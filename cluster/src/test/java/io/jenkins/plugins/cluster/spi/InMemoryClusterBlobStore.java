@@ -13,8 +13,21 @@ import java.util.concurrent.ConcurrentSkipListMap;
 /** A blob store in memory, with no appendable blobs (logs are {@link ChunkedLogBlobs}), as S3 is. */
 public class InMemoryClusterBlobStore implements ClusterBlobStore {
 
-    final Map<String, byte[]> blobs = new ConcurrentSkipListMap<>();
+    final java.util.concurrent.ConcurrentMap<String, byte[]> blobs;
     private final LogBlobs logs = new ChunkedLogBlobs(this);
+
+    public InMemoryClusterBlobStore() {
+        this(new ConcurrentSkipListMap<>());
+    }
+
+    /** Over the same blobs as another one (as another controller sees them). */
+    public InMemoryClusterBlobStore(InMemoryClusterBlobStore other) {
+        this(other.blobs);
+    }
+
+    private InMemoryClusterBlobStore(java.util.concurrent.ConcurrentMap<String, byte[]> blobs) {
+        this.blobs = blobs;
+    }
 
     @Override
     public void put(@NonNull String key, @NonNull InputStream content, long length) throws IOException {

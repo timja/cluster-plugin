@@ -4,7 +4,9 @@ import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import jenkins.persistence.BlobStore;
 import jenkins.persistence.PersistenceStores;
 
@@ -33,6 +35,16 @@ public interface ClusterBlobStore extends BlobStore {
 
     /** The size of a blob, or 0 if there is no such blob. */
     long size(@NonNull String key) throws IOException;
+
+    /** The sizes of the blob with this key and of every blob below it, by key, as {@link #list} and {@link #size}. */
+    @NonNull
+    default Map<String, Long> sizes(@NonNull String prefix) throws IOException {
+        Map<String, Long> result = new HashMap<>();
+        for (String key : list(prefix)) {
+            result.put(key, size(key));
+        }
+        return result;
+    }
 
     /**
      * Logs: blobs appended to while builds run. A backend without appendable blobs returns

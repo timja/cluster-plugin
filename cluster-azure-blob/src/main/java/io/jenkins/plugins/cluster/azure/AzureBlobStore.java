@@ -36,10 +36,18 @@ public class AzureBlobStore implements ClusterBlobStore {
 
     private final BlobContainerClient container;
 
+    /** {@link #MAX_SEGMENT_BLOCKS}, or fewer in tests. */
+    private final int maxSegmentBlocks;
+
     /** Per try of one blob request (large snapshots and artifacts included). */
     static final int TRY_TIMEOUT_SECONDS = Integer.getInteger(AzureBlobStore.class.getName() + ".tryTimeoutSeconds", 120);
 
     public AzureBlobStore(@NonNull String connectionString, @NonNull String containerName) {
+        this(connectionString, containerName, MAX_SEGMENT_BLOCKS);
+    }
+
+    AzureBlobStore(@NonNull String connectionString, @NonNull String containerName, int maxSegmentBlocks) {
+        this.maxSegmentBlocks = maxSegmentBlocks;
         // the SDK discovers its HTTP client through the context class loader
         this.container = withPluginClassLoader(() -> new BlobServiceClientBuilder()
                 .connectionString(connectionString)
@@ -216,8 +224,11 @@ public class AzureBlobStore implements ClusterBlobStore {
 
     /**
      * Logs as segmented append blobs ({@code log}, {@code log.1}, …): a new segment starts before the current one reaches
-     * {@link #MAX_SEGMENT_BLOCKS} blocks. Each append is conditional on the segment's length, so an append by another
-     * writer meanwhile is detected.
+     * {@link #MAX_SEGMENT_BLOCKS} blocks. Each block is appended on its own, conditional on the segment's length, so an
+     * append by another writer meanwhile is detected. Where a block goes depends only on the segment as it is at that
+     * length (the next segment once this one holds the most blocks), never on how much the writer has to append, so two
+     * writers at the same position always pick the same segment: a writer with a stale idea of the log's end cannot
+     * append to a segment that another writer has gone on from.
      */
     private final class SegmentedLogs implements LogBlobs {
 
@@ -255,15 +266,22 @@ public class AzureBlobStore implements ClusterBlobStore {
                     return false;
                 }
             }
-            int blocks = (len + MAX_APPEND_BLOCK - 1) / MAX_APPEND_BLOCK;
-            if (t.blocks() > 0 && t.blocks() + blocks > MAX_SEGMENT_BLOCKS) {
-                t = new Tail(t.segment() + 1, t.end(), 0, t.end());
+            if (len == 0) {
+                // nothing to append, but the log exists from now on, as it always has
+                return AzureBlobStore.this.appendAt(segment(log, t.segment()), bytes, off, 0, t.end() - t.segmentStart());
             }
-            if (!AzureBlobStore.this.appendAt(segment(log, t.segment()), bytes, off, len, position - t.segmentStart())) {
-                tails.remove(log);
-                return false;
+            for (int pos = off; pos < off + len; pos += MAX_APPEND_BLOCK) {
+                int n = Math.min(MAX_APPEND_BLOCK, off + len - pos);
+                if (t.blocks() >= maxSegmentBlocks) {
+                    t = new Tail(t.segment() + 1, t.end(), 0, t.end()); // this one is full
+                }
+                if (!AzureBlobStore.this.appendAt(segment(log, t.segment()), bytes, pos, n, t.end() - t.segmentStart())) {
+                    tails.remove(log);
+                    return false;
+                }
+                t = new Tail(t.segment(), t.segmentStart(), t.blocks() + 1, t.end() + n);
             }
-            tails.put(log, new Tail(t.segment(), t.segmentStart(), t.blocks() + blocks, position + len));
+            tails.put(log, t);
             return true;
         }
 

@@ -20,6 +20,9 @@ public abstract class ClusterBlobStoreContract {
     /** A fresh, empty blob store. */
     protected abstract ClusterBlobStore blobs();
 
+    /** Another instance over the same storage as one from {@link #blobs()}, as another controller has. */
+    protected abstract ClusterBlobStore another(ClusterBlobStore blobs);
+
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
     }
@@ -116,5 +119,47 @@ public abstract class ClusterBlobStoreContract {
         assertEquals(4, end);
         assertTrue(blobs.logs().appendAt(log, b("two"), 0, 3, end));
         assertEquals("one two", s(blobs.logs().readFrom(log, 0)));
+    }
+
+    @Test
+    void sizes() throws Exception {
+        ClusterBlobStore blobs = blobs();
+        put(blobs, "jobs/p/builds/1/log.d/x", "one");
+        put(blobs, "jobs/p/builds/1/log.d/y", "three");
+        put(blobs, "jobs/p/builds/1/log.dx", "beside");
+        assertEquals(java.util.Map.of("jobs/p/builds/1/log.d/x", 3L, "jobs/p/builds/1/log.d/y", 5L), blobs.sizes("jobs/p/builds/1/log.d"));
+    }
+
+    @Test
+    void aStaleWriterIsRefused() throws Exception {
+        ClusterBlobStore a = blobs();
+        ClusterBlobStore b = another(a);
+        String log = "jobs/p/builds/1/log";
+        assertTrue(a.logs().appendAt(log, b("one "), 0, 4, 0));
+        // a pauses; b adopts the build, learns where the log ends from the store, and appends
+        long end = b.logs().size(log);
+        assertEquals(4, end);
+        assertTrue(b.logs().appendAt(log, b("two "), 0, 4, end));
+        // a wakes, still sure the log ends where it left it
+        assertFalse(a.logs().appendAt(log, b("ONE!"), 0, 4, 4), "a stale writer is refused by the store");
+        assertFalse(a.logs().appendAt(log, b("again"), 0, 5, 4));
+        assertTrue(b.logs().appendAt(log, b("three"), 0, 5, 8));
+        assertEquals("one two three", s(a.logs().readFrom(log, 0)));
+        assertEquals("one two three", s(b.logs().readFrom(log, 0)));
+        assertEquals(13, a.logs().size(log));
+    }
+
+    @Test
+    void writersRacingForTheSameEndOneWins() throws Exception {
+        ClusterBlobStore a = blobs();
+        ClusterBlobStore b = another(a);
+        String log = "jobs/p/builds/1/log";
+        assertTrue(a.logs().appendAt(log, b("start "), 0, 6, 0));
+        assertEquals(6, b.logs().size(log));
+        // neither knows of the other's append: both are at 6
+        boolean first = a.logs().appendAt(log, b("aaa"), 0, 3, 6);
+        boolean second = b.logs().appendAt(log, b("bbbbb"), 0, 5, 6);
+        assertTrue(first ^ second, "exactly one append at 6");
+        assertEquals("start aaa", s(b.logs().readFrom(log, 0)));
     }
 }

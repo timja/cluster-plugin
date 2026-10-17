@@ -69,9 +69,19 @@ class S3BlobStoreTest extends ClusterBlobStoreContract {
                 .build();
     }
 
+    private final java.util.Map<ClusterBlobStore, String> prefixes = new java.util.IdentityHashMap<>();
+
     @Override
     protected ClusterBlobStore blobs() {
-        return new S3BlobStore(client(), BUCKET, "test-" + UUID.randomUUID() + "/"); // a fresh prefix: an empty store
+        String prefix = "test-" + UUID.randomUUID() + "/"; // a fresh prefix: an empty store
+        ClusterBlobStore blobs = new S3BlobStore(client(), BUCKET, prefix);
+        prefixes.put(blobs, prefix);
+        return blobs;
+    }
+
+    @Override
+    protected ClusterBlobStore another(ClusterBlobStore blobs) {
+        return new S3BlobStore(client(), BUCKET, prefixes.get(blobs));
     }
 
     @Test
