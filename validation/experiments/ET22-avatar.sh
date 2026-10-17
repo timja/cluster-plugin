@@ -7,7 +7,7 @@
 #
 # Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
-export CNJ_JAVA_OPTS="-Djenkins.persistence.ItemFiles.enabled=true -Djenkins.persistence.ItemFiles.periodSeconds=5"
+export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.files.ItemFiles.enabled=true -Dio.jenkins.plugins.cluster.files.ItemFiles.periodSeconds=5"
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET22" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
