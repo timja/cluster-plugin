@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
+import hudson.slaves.DumbSlave;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
 import java.util.List;
@@ -58,5 +59,11 @@ class NoStoreTest {
     void buildStepEventsAreNotRelayed(JenkinsRule r) throws Exception {
         FreeStyleBuild b = r.buildAndAssertSuccess(r.createFreeStyleProject("p"));
         assertNull(BuildTriggerRelay.get().returnAddress(b, "3"), "a build step's events stay on this controller");
+    }
+
+    @Test
+    void agentsAreLaunchedWithoutLease(JenkinsRule r) throws Exception {
+        DumbSlave agent = r.createOnlineSlave();
+        assertTrue(agent.toComputer().isOnline());
     }
 }
