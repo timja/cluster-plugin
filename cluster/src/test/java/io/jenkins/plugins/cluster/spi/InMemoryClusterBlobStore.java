@@ -46,13 +46,6 @@ public class InMemoryClusterBlobStore implements ClusterBlobStore {
         }
     }
 
-    @Override
-    public void move(@NonNull String fromPrefix, @NonNull String toPrefix) {
-        for (String key : list(fromPrefix)) {
-            blobs.put(toPrefix + key.substring(fromPrefix.length()), blobs.remove(key));
-        }
-    }
-
     @NonNull
     @Override
     public List<String> list(@NonNull String prefix) {

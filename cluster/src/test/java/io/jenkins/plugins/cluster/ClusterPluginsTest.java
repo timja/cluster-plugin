@@ -15,10 +15,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.jenkins.plugins.cluster.ClusterPlugins.Entry;
 import io.jenkins.plugins.cluster.ClusterPlugins.Overlay;
 import io.jenkins.plugins.cluster.ClusterPlugins.State;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -27,7 +28,6 @@ import java.util.Map;
 import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
-import jenkins.persistence.BlobStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -176,29 +176,12 @@ class ClusterPluginsTest {
         return new Entry(State.installed, version, sha, blob, "cnj-0", 1);
     }
 
-    private static BlobStore blobStore(Map<String, byte[]> blobs) {
-        return new BlobStore() {
-            @Override
-            public void put(String key, InputStream content, long length) {
-                throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public InputStream get(String key) {
-                byte[] b = blobs.get(key);
-                return b == null ? null : new ByteArrayInputStream(b);
-            }
-
-            @Override
-            public void delete(String prefix) {
-                throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public void move(String fromPrefix, String toPrefix) {
-                throw new UnsupportedOperationException();
-            }
-        };
+    private static ClusterBlobStore blobStore(Map<String, byte[]> blobs) throws IOException {
+        ClusterBlobStore store = new io.jenkins.plugins.cluster.spi.InMemoryClusterBlobStore();
+        for (Map.Entry<String, byte[]> e : blobs.entrySet()) {
+            store.put(e.getKey(), new ByteArrayInputStream(e.getValue()), e.getValue().length);
+        }
+        return store;
     }
 
     @Test

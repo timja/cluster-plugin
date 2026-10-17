@@ -2,12 +2,12 @@ package io.jenkins.plugins.cluster.s3;
 
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.Extension;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStoreProvider;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import java.net.URI;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.persistence.BlobStore;
-import jenkins.persistence.BlobStoreProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
@@ -31,13 +31,13 @@ import software.amazon.awssdk.services.s3.S3ClientBuilder;
  * a web identity token such as IRSA, or instance metadata).
  */
 @Extension
-public class S3BlobStoreProvider implements BlobStoreProvider {
+public class S3BlobStoreProvider implements ClusterBlobStoreProvider {
 
     private static final Logger LOGGER = Logger.getLogger(S3BlobStoreProvider.class.getName());
 
     @CheckForNull
     @Override
-    public BlobStore create() {
+    public ClusterBlobStore create() {
         String bucket = setting("bucket", "CLUSTER_S3_BUCKET");
         if (bucket == null) {
             return null;

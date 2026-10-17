@@ -24,8 +24,12 @@ public interface BuildLeases {
 
     /**
      * Whether this origin still holds the lease with this epoch.
-     * Answers false, rather than throwing, once this controller cannot have been considered alive by the others for
-     * long enough for the lease to lapse ({@link Membership#mayHaveLapsed}).
+     * False only on evidence from the store that it does not (another epoch, another holder, no lease). When the state
+     * of the lease is unknown it throws: the store is unreachable, or this controller's membership may have lapsed
+     * ({@link Membership#mayHaveLapsed}) and the store cannot vouch for it. A build is then not taken for lost, which
+     * would stop it; its holder holds back its fenced writes until the answer is known.
+     *
+     * @throws IOException if the state of the lease is unknown
      */
     boolean holds(@NonNull String leaseKey, long epoch) throws IOException;
 

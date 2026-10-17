@@ -20,10 +20,13 @@ import java.util.Map;
  */
 public interface ClusterBlobStore {
 
-    /** The active blob store, or null if none is configured (or no {@link ClusterStore} is active). */
+    /**
+     * The active blob store, or null if none is configured (or no {@link ClusterStore} is active): the first non-null
+     * one of the {@link ClusterBlobStoreProvider}s, resolved once for the active store.
+     */
     @CheckForNull
     static ClusterBlobStore get() {
-        throw new UnsupportedOperationException("cnj2/api stub: resolved once from the ClusterBlobStoreProviders (P0)");
+        return BlobStores.get();
     }
 
     /**

@@ -211,33 +211,6 @@ public class S3BlobStore implements ClusterBlobStore {
         }
     }
 
-    @Override
-    public void move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
-        // copy then delete each object, so a repeated move after a partial failure finishes the job
-        for (String key : list(fromPrefix)) {
-            String target = toPrefix + key.substring(fromPrefix.length());
-            try {
-                if (size(key) > multipartThreshold) {
-                    try (InputStream in = get(key)) { // a single copy takes at most 5 GiB
-                        if (in != null) {
-                            putInParts(target, in, size(key));
-                        }
-                    }
-                } else {
-                    s3.copyObject(b -> b.sourceBucket(bucket)
-                            .sourceKey(object(key))
-                            .destinationBucket(bucket)
-                            .destinationKey(object(target)));
-                }
-                s3.deleteObject(b -> b.bucket(bucket).key(object(key)));
-            } catch (SdkException e) {
-                if (!notFound(e)) {
-                    throw wrap("move", key, e);
-                }
-            }
-        }
-    }
-
     @NonNull
     @Override
     public LogBlobs logs() {

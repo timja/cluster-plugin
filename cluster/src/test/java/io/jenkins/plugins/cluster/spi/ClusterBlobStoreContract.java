@@ -62,14 +62,11 @@ public abstract class ClusterBlobStoreContract {
                 blobs.list("jobs/p/builds/1"),
                 "below the key, not beside it (builds/10)");
         assertEquals(3, blobs.list("jobs/p").size());
-        blobs.move("jobs/p", "jobs/q");
+        blobs.delete("jobs/p/builds/1");
+        assertEquals(2, blobs.list("jobs/p").size());
+        assertEquals("three", get(blobs, "jobs/p/builds/2/files.tgz"));
+        blobs.delete("jobs/p");
         assertTrue(blobs.list("jobs/p").isEmpty());
-        assertEquals("three", get(blobs, "jobs/q/builds/2/files.tgz"));
-        blobs.move("jobs/p", "jobs/q"); // repeated after a partial failure: nothing left to do
-        blobs.delete("jobs/q/builds/1");
-        assertEquals(2, blobs.list("jobs/q").size());
-        blobs.delete("jobs/q");
-        assertTrue(blobs.list("jobs/q").isEmpty());
     }
 
     @Test

@@ -441,35 +441,6 @@ public class AzureBlobStore implements ClusterBlobStore {
         }
     }
 
-    @Override
-    public void move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
-        // copy then delete each blob, so a repeated move after a partial failure finishes the job
-        for (String key : list(fromPrefix)) {
-            String target = toPrefix + key.substring(fromPrefix.length());
-            Path tmp = Files.createTempFile("blob-move", null);
-            try {
-                try (OutputStream out = Files.newOutputStream(tmp)) {
-                    if (!download(key, out)) {
-                        continue;
-                    }
-                }
-                if (isAppendBlob(key)) {
-                    // a running build's log stays appendable under its new name (Target 14)
-                    copyAsAppendBlob(tmp, target);
-                } else {
-                    try (InputStream in = Files.newInputStream(tmp)) {
-                        put(target, in, Files.size(tmp));
-                    }
-                }
-                container.getBlobClient(key).deleteIfExists();
-            } catch (RuntimeException e) {
-                throw wrap("move", key, e);
-            } finally {
-                Files.deleteIfExists(tmp);
-            }
-        }
-    }
-
     private boolean isAppendBlob(String key) {
         try {
             return container.getBlobClient(key).getProperties().getBlobType()

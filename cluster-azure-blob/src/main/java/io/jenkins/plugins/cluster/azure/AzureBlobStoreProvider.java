@@ -2,11 +2,11 @@ package io.jenkins.plugins.cluster.azure;
 
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.Extension;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStoreProvider;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.persistence.BlobStore;
-import jenkins.persistence.BlobStoreProvider;
 
 /**
  * Configures an {@link AzureBlobStore} from the environment:
@@ -15,13 +15,13 @@ import jenkins.persistence.BlobStoreProvider;
  * System properties {@code io.jenkins.plugins.cluster.azure.connectionString} and {@code ...container} take precedence.
  */
 @Extension
-public class AzureBlobStoreProvider implements BlobStoreProvider {
+public class AzureBlobStoreProvider implements ClusterBlobStoreProvider {
 
     private static final Logger LOGGER = Logger.getLogger(AzureBlobStoreProvider.class.getName());
 
     @CheckForNull
     @Override
-    public BlobStore create() {
+    public ClusterBlobStore create() {
         String connectionString = setting("connectionString", "CLUSTER_AZURE_BLOB_CONNECTION_STRING");
         if (connectionString == null) {
             return null;

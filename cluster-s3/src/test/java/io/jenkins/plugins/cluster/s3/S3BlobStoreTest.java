@@ -108,9 +108,5 @@ class S3BlobStoreTest extends ClusterBlobStoreContract {
         try (InputStream in = blobs.get("jobs/p/builds/1/files.tgz")) {
             assertArrayEquals(big, in.readAllBytes());
         }
-        blobs.move("jobs/p", "jobs/q"); // too large for one CopyObject at real thresholds: copied in parts too
-        try (InputStream in = blobs.get("jobs/q/builds/1/files.tgz")) {
-            assertArrayEquals(big, in.readAllBytes());
-        }
     }
 }

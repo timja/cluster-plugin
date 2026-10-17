@@ -113,14 +113,14 @@ public interface ClusterQueue {
      */
     boolean claim(long id, @CheckForNull String expectedPin) throws IOException;
 
-    /** {@link #claim(long, String)}, expecting the pin the item has when read now; for callers which checked nothing. */
-    default boolean claim(long id) throws IOException {
-        Record r = get(id);
-        return r != null && claim(id, r.pinnedTo());
-    }
-
-    /** Records that an item claimed here started as the given build. */
-    void started(long id, int buildNumber) throws IOException;
+    /**
+     * Records that an item claimed here started as the given build, only while this controller still has it claimed
+     * (or recorded as started): stores must compare and update atomically.
+     *
+     * @return false if this controller no longer has the item (its claim lapsed and another controller took it, say):
+     *     the build started here for it must not go on
+     */
+    boolean started(long id, int buildNumber) throws IOException;
 
     /**
      * Cancels an item which has not started: a waiting one, or one claimed by this controller (whose copy here was

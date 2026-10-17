@@ -21,7 +21,7 @@ public final class ClusterMember {
      * The version of the cluster protocol this controller speaks: what it stores and expects of its peers.
      * Raised when a change cannot coexist with older peers (which then must be gone before this version starts).
      */
-    public static final int PROTOCOL = 2; // 2 (Target 15): writes jenkins_store.size (SchemaMigrations.STORE_SIZE)
+    public static final int PROTOCOL = 3; // 3: build data keyed by item identity (Keys); 2: writes jenkins_store.size
 
     /** What this controller runs: core and plugin versions, shown in the cluster view. */
     public static final String VERSION = jenkins.model.Jenkins.VERSION + " / "

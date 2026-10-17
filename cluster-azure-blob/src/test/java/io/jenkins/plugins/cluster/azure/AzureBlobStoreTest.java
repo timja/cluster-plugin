@@ -61,13 +61,11 @@ class AzureBlobStoreTest {
     }
 
     @Test
-    void deleteAndMoveWholePrefixesOnly() throws Exception {
-        put("jobs/a/builds/1/files.tgz", "a1");
-        put("jobs/a/builds/2/files.tgz", "a2");
+    void deleteWholePrefixesOnly() throws Exception {
+        put("jobs/f/jobs/a/builds/1/files.tgz", "a1");
+        put("jobs/f/jobs/a/builds/2/files.tgz", "a2");
         put("jobs/ab/builds/1/files.tgz", "ab1");
 
-        blobs.move("jobs/a", "jobs/f/jobs/a");
-        assertNull(get("jobs/a/builds/1/files.tgz"));
         assertEquals("a1", get("jobs/f/jobs/a/builds/1/files.tgz"));
         assertEquals("a2", get("jobs/f/jobs/a/builds/2/files.tgz"));
         assertEquals("ab1", get("jobs/ab/builds/1/files.tgz"), "sibling with a common name prefix untouched");
@@ -165,18 +163,5 @@ class AzureBlobStoreTest {
         blobs.deleteSegmented(base);
         assertTrue(blobs.segments(base).isEmpty());
         assertEquals(3, blobs.size(base + "-index"), "the index is left alone");
-    }
-
-    @Test
-    void movedLogsStayAppendable() throws Exception {
-        assertTrue(blobs.appendAt("jobs/old/builds/1/log", b("before\n"), 0, 7, 0));
-        put("jobs/old/builds/1/files.tgz", "snapshot");
-        blobs.move("jobs/old", "jobs/new");
-        assertTrue(
-                blobs.appendAt("jobs/new/builds/1/log", b("after\n"), 0, 6, 7), "still an append blob, at its length");
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        blobs.download("jobs/new/builds/1/log", out);
-        assertEquals("before\nafter\n", out.toString(StandardCharsets.UTF_8));
-        assertEquals("snapshot", get("jobs/new/builds/1/files.tgz"));
     }
 }

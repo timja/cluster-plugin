@@ -21,11 +21,14 @@ import jenkins.persistence.PersistenceStores;
  * <tr><td>running placeholder</td><td>{@code _items/<uuid>/running/<N>.xml}</td></tr>
  * <tr><td>stop request, delivery</td><td>{@code _items/<uuid>/running/<N>.stop}, {@code …/<N>.deliver-<id>}</td></tr>
  * <tr><td>build lease</td><td>{@code _items/<uuid>/running/<N>}</td></tr>
+ * <tr><td>milestones (pipeline-milestone-step)</td><td>{@code _items/<uuid>/milestones}</td></tr>
+ * <tr><td>folder computation lease</td><td>{@code _items/<uuid>/computation}</td></tr>
  * <tr><td>item files</td><td>{@code _items/<uuid>/files/<rel>}; users {@code _users/<id>/files/<rel>}</td></tr>
  * <tr><td>blobs</td><td>{@code items/<uuid>/builds/<N>/files.tgz}, {@code items/<uuid>/builds/<N>/log},
- *     {@code items/<uuid>/files/<rel>}</td></tr>
+ *     {@code items/<uuid>/files/<rel>}; users {@code users/<id>/files/<rel>}</td></tr>
  * <tr><td>locks</td><td>{@code _locks/<resource>}, {@code _locks-meta/<name>}</td></tr>
  * <tr><td>launch lease</td><td>{@code _nodes/<name>/launch}</td></tr>
+ * <tr><td>queue reservation</td><td>{@code _queue/reserved/<id>}</td></tr>
  * </table>
  *
  * <p>While the engines are ported from core (DESIGN-17 §8.3, risk 2), {@link #LAYOUT} may be {@link Layout#PATH}:
@@ -125,6 +128,18 @@ public final class Keys {
         return running(itemPrefix) + "/" + number;
     }
 
+    /** A job's milestones (pipeline-milestone-step). */
+    @NonNull
+    public static String milestones(@NonNull String itemPrefix) {
+        return itemPrefix + "/milestones";
+    }
+
+    /** The key of the lease of a folder's computation (branch indexing, an organization scan). */
+    @NonNull
+    public static String computation(@NonNull String itemPrefix) {
+        return itemPrefix + "/computation";
+    }
+
     /** A plugin file in an item's directory, at {@code rel} relative to it. */
     @NonNull
     public static String itemFile(@NonNull String itemPrefix, @NonNull String rel) {
@@ -149,6 +164,11 @@ public final class Keys {
     }
 
     @NonNull
+    public static String userFileBlob(@NonNull String userId, @NonNull String rel) {
+        return "users/" + userId + "/files/" + rel;
+    }
+
+    @NonNull
     public static String itemFileBlob(@NonNull String blobPrefix, @NonNull String rel) {
         return LAYOUT == Layout.PATH ? blobPrefix + "/" + rel : blobPrefix + "/files/" + rel;
     }
@@ -168,6 +188,12 @@ public final class Keys {
     @NonNull
     public static String launchLease(@NonNull String node) {
         return "_nodes/" + node + "/launch";
+    }
+
+    /** A controller's reservation of a queue item it is starting an agent for. */
+    @NonNull
+    public static String queueReservation(long id) {
+        return "_queue/reserved/" + id;
     }
 
     /**
