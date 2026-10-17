@@ -26,8 +26,7 @@ class SchemaMigrationsTest {
     private PostgresPersistenceStore b;
 
     private static PostgresPersistenceStore store() throws Exception {
-        return new PostgresPersistenceStore(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(), key -> true);
+        return new PostgresPersistenceStore(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
     }
 
     private static long query(String sql) throws Exception {
@@ -50,7 +49,7 @@ class SchemaMigrationsTest {
     void setUp() throws Exception {
         exec(
                 "drop table if exists jenkins_store, jenkins_store_events, jenkins_members, jenkins_trigger_claims, jenkins_build_leases,"
-                        + " jenkins_queue, jenkins_schema_migrations");
+                        + " jenkins_queue, jenkins_launch_leases, jenkins_schema_migrations");
         System.setProperty(SchemaMigrations.class.getName() + ".batch", "100");
         a = store();
         b = store();
@@ -64,8 +63,8 @@ class SchemaMigrationsTest {
     }
 
     @Test
-    void noProtocolFloorUntilAMigrationIsContracted() throws Exception {
-        assertEquals(0, a.protocolFloor());
+    void aNewStoreHasTheProtocolFloorOfItsLayout() throws Exception {
+        assertEquals(io.jenkins.plugins.cluster.spi.ClusterMember.PROTOCOL, a.protocolFloor());
     }
 
     @Test
@@ -106,14 +105,19 @@ class SchemaMigrationsTest {
                 query("select count(*) from pg_index i join pg_class r on r.oid = i.indexrelid"
                         + " where r.relname = 'jenkins_store_key_prefix' and i.indisvalid"),
                 "the index, built concurrently");
-        assertEquals(2, query("select count(*) from jenkins_schema_migrations where state = 'done'"));
+        assertEquals(
+                2,
+                query("select count(*) from jenkins_schema_migrations where state = 'done' and id <> '"
+                        + PostgresPersistenceStore.LAYOUT + "'"));
         assertEquals(
                 0,
                 query("select count(*) from information_schema.columns where table_name = 'jenkins_store'"
                         + " and column_name = 'size' and is_nullable = 'YES'"),
                 "contracted: no older controller is alive");
         assertEquals(
-                2, b.protocolFloor(), "controllers older than the contracted migration's protocol may no longer join");
+                2,
+                query("select contract_protocol from jenkins_schema_migrations where id = 'store-size'"),
+                "controllers older than the contracted migration's protocol may no longer join");
         a = store(); // for tearDown
     }
 }

@@ -2,8 +2,13 @@ package io.jenkins.plugins.cluster.postgresql;
 
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
+import io.jenkins.plugins.cluster.spi.BuildLeases;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterQueue;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
+import io.jenkins.plugins.cluster.spi.LaunchLeases;
+import io.jenkins.plugins.cluster.spi.LeaseLostException;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -25,13 +30,9 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.persistence.BuildLeases;
-import jenkins.persistence.ClusterQueue;
 import jenkins.persistence.ConflictException;
-import jenkins.persistence.LeaseLostException;
 import jenkins.persistence.PersistenceStore;
 import org.postgresql.PGConnection;
 
@@ -58,7 +59,6 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     private final String url;
     private final String user;
     private final String password;
-    private final Predicate<String> owns;
     private final String origin = UUID.randomUUID().toString();
     /** Ordinary store traffic. */
     private final com.zaxxer.hikari.HikariDataSource work;
@@ -72,12 +72,21 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     private Thread listenerThread;
     private volatile boolean closed;
 
-    public PostgresPersistenceStore(String url, String user, String password, Predicate<String> owns)
-            throws IOException {
+    /**
+     * The layout of the stored data, recorded when the store is first used: build data keyed by item identity
+     * ({@link Keys}). A store holding data of an earlier layout (keyed by item path) is refused; it is not migrated.
+     */
+    static final String LAYOUT_KEY = "cluster/layout";
+
+    static final String LAYOUT = "items-by-uuid";
+
+    /**
+     * @throws IllegalStateException if the database holds data of an earlier layout, which this version does not read
+     */
+    public PostgresPersistenceStore(String url, String user, String password) throws IOException {
         this.url = url;
         this.user = user;
         this.password = password;
-        this.owns = owns;
         this.work = pool("work", WORK_POOL_SIZE);
         this.control = pool("control", 2);
         try {
@@ -117,9 +126,13 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     s.execute("alter table jenkins_members add column if not exists lock_key int");
                     s.execute("create sequence if not exists jenkins_queue_ids");
                     s.execute("create table if not exists jenkins_queue ("
-                            + "id bigint primary key, task text not null, dedup_key text not null, actions text not null,"
-                            + " due_at bigint not null, state text not null, origin text not null, pinned_to text, claimed_by text,"
-                            + " build_number int not null default 0, updated_at timestamptz not null default now())");
+                            + "id bigint primary key, item_uuid text not null, task text not null, dedup_key text not null,"
+                            + " actions text not null, due_at bigint not null, state text not null, origin text not null,"
+                            + " pinned_to text, claimed_by text, build_number int not null default 0,"
+                            + " updated_at timestamptz not null default now())");
+                    // a table left by an earlier version, holding nothing (else the layout check below refuses the
+                    // store)
+                    s.execute("alter table jenkins_queue add column if not exists item_uuid text not null default ''");
                     s.execute(
                             "create unique index if not exists jenkins_queue_waiting on jenkins_queue (dedup_key) where state = 'WAITING'");
                     // Target 7: which controller holds each agent's channel
@@ -134,17 +147,78 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
                     s.execute("create index if not exists jenkins_store_events_at on jenkins_store_events (at)");
+                    // which controller holds the outbound connection of each static agent
+                    s.execute("create table if not exists jenkins_launch_leases ("
+                            + "node text primary key, owner text not null, epoch bigint not null,"
+                            + " acquired_at timestamptz not null default now())");
+                    checkLayout(c);
                 }
                 return null;
             });
+        } catch (OldLayout e) {
+            work.close();
+            control.close();
+            throw new IllegalStateException(e.getMessage());
         } catch (SQLException e) {
+            work.close();
+            control.close();
             throw new IOException("Failed to initialize persistence store at " + url, e);
         }
     }
 
-    @Override
-    public boolean owns(@NonNull String key) {
-        return owns.test(key);
+    /**
+     * Records the layout in a store used for the first time; refuses one holding data without that record: data of an
+     * earlier layout, keyed by item path, which this version neither reads nor migrates.
+     */
+    private void checkLayout(Connection c) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("select content from jenkins_store where key = ?")) {
+            ps.setString(1, LAYOUT_KEY);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String layout = new String(rs.getBytes(1), java.nio.charset.StandardCharsets.UTF_8);
+                    if (!layout.equals(LAYOUT)) {
+                        throw new OldLayout("The persistence store at " + url + " holds data of layout " + layout
+                                + ", which this version does not read (it expects " + LAYOUT + ")");
+                    }
+                    return;
+                }
+            }
+        }
+        boolean used;
+        try (Statement s = c.createStatement();
+                ResultSet rs = s.executeQuery(
+                        "select exists (select 1 from jenkins_store) or exists (select 1 from jenkins_queue)")) {
+            rs.next();
+            used = rs.getBoolean(1);
+        }
+        if (used) {
+            throw new OldLayout(
+                    "The persistence store at " + url + " holds data of an earlier layout (build data keyed by"
+                            + " item path), which this version does not read and does not migrate. Stop every controller, empty the"
+                            + " database (drop its jenkins_* tables and sequences), and start again: the controllers then share"
+                            + " what they have from then on.");
+        }
+        byte[] layout = LAYOUT.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        writeIn(c, LAYOUT_KEY, layout, sha256(layout), ABSENT);
+        // the protocol floor (SchemaMigrations.protocolFloor): a controller of an earlier version, which would write
+        // the
+        // earlier layout, refuses to join
+        try (PreparedStatement ps =
+                c.prepareStatement("insert into jenkins_schema_migrations (id, state, contract_protocol, finished_at)"
+                        + " values (?, 'done', ?, now()) on conflict (id) do nothing")) {
+            ps.setString(1, LAYOUT);
+            ps.setInt(2, ClusterMember.PROTOCOL);
+            ps.executeUpdate();
+        }
+    }
+
+    /** The database holds data this version does not read. */
+    private static final class OldLayout extends SQLException {
+        private static final long serialVersionUID = 1L;
+
+        OldLayout(String message) {
+            super(message);
+        }
     }
 
     @NonNull
@@ -190,8 +264,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
      * Writes only while this controller holds the lease with this epoch, in the same transaction: the lease row is
      * locked first, so a takeover (which updates it) waits until this write is committed, or finds it rolled back.
      */
-    @Override
-    public long writeIfHeld(
+    long writeIfHeld(
             @NonNull String leaseKey, long epoch, @NonNull String key, @NonNull byte[] content, long expectedVersion)
             throws IOException {
         byte[] sha = sha256(content);
@@ -370,17 +443,41 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
+    /**
+     * Moves the keys below a prefix in one transaction, once every precondition holds: each precondition's row is locked
+     * ({@code for update}) and compared first, so that a concurrent write or move of those keys either commits before
+     * (and fails the precondition) or waits until this move commits.
+     */
     @Override
-    public List<Moved> move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
+    public List<Moved> move(
+            @NonNull String fromPrefix, @NonNull String toPrefix, @NonNull List<Precondition> preconditions)
+            throws IOException {
         try {
             return withTransaction(c -> {
+                for (Precondition p : preconditions) {
+                    long actual = ABSENT;
+                    try (PreparedStatement ps =
+                            c.prepareStatement("select version from jenkins_store where key = ? for update")) {
+                        ps.setString(1, p.key());
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) {
+                                actual = rs.getLong(1);
+                            }
+                        }
+                    }
+                    long expected = p.expectedVersion();
+                    boolean holds = expected == ANY || (expected == PRESENT ? actual != ABSENT : actual == expected);
+                    if (!holds) {
+                        throw new Conflict(new ConflictException(p.key(), expected, actual));
+                    }
+                }
                 try (PreparedStatement ps = c.prepareStatement(
-                        "select 1 from jenkins_store where key = ? or key like ? escape '\\' limit 1")) {
+                        "select key, version from jenkins_store where key = ? or key like ? escape '\\' limit 1")) {
                     ps.setString(1, toPrefix);
                     ps.setString(2, likePrefix(toPrefix + "/"));
                     try (ResultSet rs = ps.executeQuery()) {
                         if (rs.next()) {
-                            throw new Conflict(new ConflictException(toPrefix, ABSENT, -1));
+                            throw new Conflict(new ConflictException(rs.getString(1), ABSENT, rs.getLong(2)));
                         }
                     }
                 }
@@ -416,6 +513,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         } catch (Conflict e) {
             throw e.conflict;
         } catch (SQLException e) {
+            if ("23505".equals(e.getSQLState())) {
+                // a key at the destination was created meanwhile: the move would have overwritten it
+                throw new ConflictException(toPrefix, ABSENT, -1);
+            }
             throw new IOException("Failed to move " + fromPrefix + " to " + toPrefix, e);
         }
     }
@@ -658,8 +759,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         public boolean holds(@NonNull String key, long epoch) throws IOException {
             // only the database can tell that the lease was lost: while it cannot be reached this fails (unknown),
             // and the build carries on; its log and save points wait (mayHaveLapsed) until the heartbeat is back
+            boolean held;
             try {
-                return withControl(c -> {
+                held = withControl(c -> {
                     try (PreparedStatement ps = c.prepareStatement(
                             "select 1 from jenkins_build_leases where key = ? and owner = ? and epoch = ?")) {
                         ps.setString(1, key);
@@ -673,6 +775,13 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
             } catch (SQLException e) {
                 throw new IOException("Failed to check lease on " + key, e);
             }
+            if (held && mayHaveLapsed()) {
+                // still ours in the table, but the others may take this controller for gone and take it any moment:
+                // unknown, not lost
+                throw new IOException(
+                        "Cannot vouch for the lease on " + key + ": this controller's membership may have lapsed");
+            }
+            return held;
         }
 
         @Override
@@ -692,20 +801,114 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 throw new IOException("Failed to release lease on " + key, e);
             }
         }
+
+        @Override
+        public long writeIfHeld(
+                @NonNull String leaseKey,
+                long epoch,
+                @NonNull String key,
+                @NonNull byte[] content,
+                long expectedVersion)
+                throws IOException {
+            return PostgresPersistenceStore.this.writeIfHeld(leaseKey, epoch, key, content, expectedVersion);
+        }
     };
 
+    @NonNull
     @Override
     public BuildLeases leases() {
         return leases;
     }
 
+    // ------------------------------------------------------------------ launch leases of static agents
+
+    private final LaunchLeases launchLeases = new LaunchLeases() {
+        @Override
+        public long acquire(@NonNull String node) throws IOException {
+            boolean judge = canJudgeLiveness();
+            try {
+                return withControl(c -> {
+                    // create-only; or, once this controller can judge liveness, take it over from a holder that is gone
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "insert into jenkins_launch_leases (node, owner, epoch) values (?, ?, nextval('jenkins_store_version'))"
+                                    + " on conflict (node) do update set owner = excluded.owner, epoch = excluded.epoch, acquired_at = now()"
+                                    + " where ? and jenkins_launch_leases.owner <> excluded.owner and not exists (select 1 from jenkins_members m"
+                                    + " where m.origin = jenkins_launch_leases.owner and m.heartbeat_at > now() - ? * interval '1 millisecond'"
+                                    + fast("m.") + ") returning epoch")) {
+                        ps.setString(1, node);
+                        ps.setString(2, origin);
+                        ps.setBoolean(3, judge);
+                        ps.setLong(4, MEMBER_TIMEOUT_MILLIS);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            if (rs.next()) {
+                                return rs.getLong(1);
+                            }
+                        }
+                    }
+                    try (PreparedStatement ps =
+                            c.prepareStatement("select owner, epoch from jenkins_launch_leases where node = ?")) {
+                        ps.setString(1, node);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            return rs.next() && rs.getString(1).equals(origin) ? rs.getLong(2) : 0L;
+                        }
+                    }
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to acquire the launch lease of " + node, e);
+            }
+        }
+
+        @CheckForNull
+        @Override
+        public Holder holder(@NonNull String node) throws IOException {
+            try {
+                return withControl(c -> {
+                    try (PreparedStatement ps =
+                            c.prepareStatement("select owner, epoch from jenkins_launch_leases where node = ?")) {
+                        ps.setString(1, node);
+                        try (ResultSet rs = ps.executeQuery()) {
+                            return rs.next() ? new Holder(rs.getString(1), rs.getLong(2)) : null;
+                        }
+                    }
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to read the launch lease of " + node, e);
+            }
+        }
+
+        @Override
+        public void release(@NonNull String node, long epoch) throws IOException {
+            try {
+                withControl(c -> {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "delete from jenkins_launch_leases where node = ? and owner = ? and epoch = ?")) {
+                        ps.setString(1, node);
+                        ps.setString(2, origin);
+                        ps.setLong(3, epoch);
+                        ps.executeUpdate();
+                    }
+                    return null;
+                });
+            } catch (SQLException e) {
+                throw new IOException("Failed to release the launch lease of " + node, e);
+            }
+        }
+    };
+
+    @NonNull
+    @Override
+    public LaunchLeases launchLeases() {
+        return launchLeases;
+    }
+
     // ------------------------------------------------------------------ shared build queue (Target 5)
 
-    static final String QUEUE_PREFIX = "queue/";
+    /** Changes of queue records are events under this prefix (reserved for direct users: core routes none of it). */
+    static final String QUEUE_PREFIX = "_queue/";
 
     private final ClusterQueue queue = new ClusterQueue() {
         private static final String COLUMNS =
-                "id, task, dedup_key, actions, due_at, state, origin, pinned_to, claimed_by, build_number";
+                "id, item_uuid, task, dedup_key, actions, due_at, state, origin, pinned_to, claimed_by, build_number";
 
         private Record record(ResultSet rs) throws SQLException {
             return new Record(
@@ -713,12 +916,13 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     rs.getString(2),
                     rs.getString(3),
                     rs.getString(4),
-                    rs.getLong(5),
-                    State.valueOf(rs.getString(6)),
-                    rs.getString(7),
+                    rs.getString(5),
+                    rs.getLong(6),
+                    State.valueOf(rs.getString(7)),
                     rs.getString(8),
                     rs.getString(9),
-                    rs.getInt(10));
+                    rs.getString(10),
+                    rs.getInt(11));
         }
 
         private Record select(Connection c, String where, Object... args) throws SQLException {
@@ -792,9 +996,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     int n = change(
                             c,
                             item.id(),
-                            "insert into jenkins_queue (" + COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                            "insert into jenkins_queue (" + COLUMNS + ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                                     + " on conflict do nothing",
                             item.id(),
+                            item.itemUuid(),
                             item.task(),
                             item.dedupKey(),
                             item.actions(),
@@ -858,17 +1063,24 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
             });
         }
 
+        /**
+         * Only while this controller has the item claimed (or recorded as started, by this very build): a claim that
+         * lapsed meanwhile was put back by {@link #reclaimAndPrune} and perhaps taken by another controller.
+         */
         @Override
-        public void started(long id, int buildNumber) throws IOException {
-            run(
+        public boolean started(long id, int buildNumber) throws IOException {
+            return run(
                     "record the start of queue item " + id,
                     c -> change(
-                            c,
-                            id,
-                            "update jenkins_queue set state = 'STARTED', build_number = ?, updated_at = now() where id = ? and claimed_by = ?",
-                            buildNumber,
-                            id,
-                            origin));
+                                    c,
+                                    id,
+                                    "update jenkins_queue set state = 'STARTED', build_number = ?, updated_at = now() where id = ?"
+                                            + " and claimed_by = ? and (state = 'CLAIMED' or state = 'STARTED' and build_number = ?)",
+                                    buildNumber,
+                                    id,
+                                    origin,
+                                    buildNumber)
+                            == 1);
         }
 
         @Override
@@ -933,13 +1145,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
-    /** Whether the build queue is shared through this store; on by default. */
-    static final boolean SHARED_QUEUE =
-            !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".sharedQueue"));
-
+    @NonNull
     @Override
     public ClusterQueue queue() {
-        return SHARED_QUEUE ? queue : null;
+        return queue;
     }
 
     /**
@@ -1011,14 +1220,15 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
         return run("list queue items started by gone controllers", c -> {
             List<StartedItem> items = new ArrayList<>();
-            try (PreparedStatement ps = c.prepareStatement("select id, task, build_number from jenkins_queue"
+            try (PreparedStatement ps = c.prepareStatement("select id, item_uuid, task, build_number from jenkins_queue"
                     + " where state = 'STARTED' and build_number > 0 and updated_at > now() - interval '1 hour'"
                     + " and claimed_by not in (select origin from jenkins_members"
                     + " where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ")")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        items.add(new ClusterStore.StartedItem(rs.getLong(1), rs.getString(2), rs.getInt(3)));
+                        items.add(new ClusterStore.StartedItem(
+                                rs.getLong(1), rs.getString(2), rs.getString(3), rs.getInt(4)));
                     }
                 }
             }
@@ -1027,17 +1237,16 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     /**
-     * Cancels the items recorded as started for an item, and for the items inside it, when it is deleted or renamed: the
-     * builds they stand for went with it, and an item later created under that name must not have them requeued.
+     * Cancels the items recorded as started for a deleted item, by its identity: the builds they stand for went with
+     * it, and must not be requeued.
      */
     @Override
-    public void cancelStartedOf(@NonNull String fullName) throws IOException {
-        run("cancel started queue items of " + fullName, c -> {
+    public void cancelStartedOf(@NonNull String itemUuid) throws IOException {
+        run("cancel started queue items of " + itemUuid, c -> {
             try (PreparedStatement ps =
                     c.prepareStatement("update jenkins_queue set state = 'CANCELLED', updated_at = now()"
-                            + " where state = 'STARTED' and (task = ? or starts_with(task, ?))")) {
-                ps.setString(1, fullName);
-                ps.setString(2, fullName + "/");
+                            + " where state = 'STARTED' and item_uuid = ?")) {
+                ps.setString(1, itemUuid);
                 ps.executeUpdate();
             }
             return null;
@@ -1267,32 +1476,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
-    /** Whether completed builds are shared ({@link jenkins.persistence.BuildRecords}); on by default. */
-    static final boolean BUILD_RECORDS =
-            !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".buildRecords"));
-
-    @Override
-    public boolean storesBuildRecords(@NonNull String jobKey) {
-        return BUILD_RECORDS;
-    }
-
     /** Confidential keys made at runtime are shared, so that every controller signs and encrypts with the same ones. */
     @Override
     public boolean storesConfidentialKeys() {
         return true;
-    }
-
-    @Override
-    public Set<String> liveOrigins() throws IOException {
-        synchronized (this) {
-            if (heartbeatThread == null) {
-                return null; // not taking part in membership, so cannot tell
-            }
-        }
-        if (!canJudgeLiveness()) {
-            return null; // cannot tell yet (just started, or the database was unreachable): nobody is taken for gone
-        }
-        return aliveMembers();
     }
 
     /**
@@ -1417,7 +1604,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         return run("list running builds", c -> {
             Map<String, byte[]> result = new TreeMap<>();
             try (PreparedStatement ps = c.prepareStatement(
-                    "select key, content from jenkins_store where key ~ '^jobs/.+/running/[0-9]+\\.xml$'")) {
+                    "select key, content from jenkins_store where key ~>=~ ? and key ~<~ ? and key ~ ?")) {
+                ps.setString(1, Keys.ITEMS + "/");
+                ps.setString(2, Keys.ITEMS + "0");
+                ps.setString(3, "^" + Keys.ITEMS + "/[^/]+/running/[0-9]+\\.xml$");
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         result.put(rs.getString(1), rs.getBytes(2));
