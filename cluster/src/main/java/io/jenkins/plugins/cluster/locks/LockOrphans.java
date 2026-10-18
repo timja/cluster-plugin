@@ -17,7 +17,8 @@ import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
  * Releases locks held by builds that no longer run anywhere: their controller is gone, and the build is neither
- * running nor waiting to be adopted ({@link Keys#placeholder} is gone too). Reservations belong to users, and stay.
+ * running nor waiting to be adopted ({@link Keys#placeholder} is gone too), and remote locks (lockable-resources'
+ * remote lock API) of a controller that is gone. Reservations belong to users, and stay.
  */
 @Extension(optional = true)
 @ClusterSingleton
@@ -53,7 +54,14 @@ public final class LockOrphans extends AsyncPeriodicWork {
             String key = ClusterLocks.key(name);
             PersistenceStore.Entry entry = store.read(key);
             ClusterLocks.Holder h = ClusterLocks.Holder.parse(entry);
-            if (entry == null || h == null || !h.isLock() || h.origin() == null || alive.contains(h.origin())) {
+            if (entry == null || h == null || h.isReservation() || h.origin() == null || alive.contains(h.origin())) {
+                continue;
+            }
+            if (h.isRemote()) {
+                // a remote lock lives in its controller's memory only, and went with it
+                if (release(store, name, key, entry, h)) {
+                    released++;
+                }
                 continue;
             }
             String build = h.build();
@@ -70,15 +78,23 @@ public final class LockOrphans extends AsyncPeriodicWork {
             if (store.read(Keys.placeholder(Keys.itemByUuid(build.substring(0, hash)), number)) != null) {
                 continue; // still running, or being adopted, somewhere
             }
-            try {
-                store.delete(key, entry.version());
-            } catch (ConflictException e) {
-                continue; // changed meanwhile: not the orphan any more
+            if (release(store, name, key, entry, h)) {
+                released++;
             }
-            LOGGER.info(() -> "Released " + name + ", held by " + h.describe() + " which is gone");
-            released++;
-            ClusterLocks.get().changed(key, true);
         }
         return released;
+    }
+
+    private static boolean release(
+            ClusterStore store, String name, String key, PersistenceStore.Entry entry, ClusterLocks.Holder h)
+            throws IOException {
+        try {
+            store.delete(key, entry.version());
+        } catch (ConflictException e) {
+            return false; // changed meanwhile: not the orphan any more
+        }
+        LOGGER.info(() -> "Released " + name + ", held by " + h.describe() + " which is gone");
+        ClusterLocks.get().changed(key, true);
+        return true;
     }
 }
