@@ -5,7 +5,6 @@ import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.XmlFile;
 import hudson.model.AbstractItem;
-import hudson.model.Items;
 import hudson.model.Saveable;
 import hudson.model.listeners.SaveableListener;
 import io.jenkins.plugins.cluster.PerItemCache;
@@ -23,7 +22,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
 import jenkins.persistence.StoredConfigReconciler;
@@ -147,7 +145,8 @@ public final class ClusterReconciler implements StoredConfigReconciler {
             return false;
         }
         try {
-            // read without the item's lock: a setter assigning meanwhile is not held up, nor overwritten
+            // core calls this under the item's lock, and takes the entry's version as held before it lets go of it: a
+            // save here never merges against what the item held before this reload
             Object scratch = file.getXStream().fromXML(new ByteArrayInputStream(entry.content()));
             if (scratch == null || scratch.getClass() != item.getClass()) {
                 return false;
@@ -186,14 +185,12 @@ public final class ClusterReconciler implements StoredConfigReconciler {
                 for (Field f : fields.values()) {
                     f.set(item, f.get(scratch));
                 }
-                // as AbstractItem.load does after unmarshalling
-                Items.runWhileUpdatingByXml(
-                        () -> item.onLoad(item.getParent(), item.getParent().getItemName(item.getRootDir(), item)));
                 if (live.equals(before)) {
                     synced(file, item, entry.content()); // in sync with the stored version now
                 } // else other fields changed here: their pending save merges with the store
             }
-            Jenkins.get().rebuildDependencyGraphAsync();
+            // core runs the item's onLoad once it lets go of the item's lock: onLoad takes the job's build lock,
+            // which a new build holds while it asks for the item's lock to be numbered
             return true;
         } catch (Exception | LinkageError e) {
             LOGGER.log(Level.FINE, "Cannot reload " + item.getFullName() + " field by field", e);

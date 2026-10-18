@@ -148,6 +148,59 @@ class ClusterReconcilerTest {
     }
 
     @Test
+    void anItemIsReloadedWithoutHoldingItsLockWhileItWaitsForItsBuildsLock(JenkinsRule r) throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("locks");
+        p.setDescription("before"); // saved: in sync with this
+        String key = "jobs/locks/config.xml";
+        String theirs = new String(ClusterFixture.store().read(key).content(), StandardCharsets.UTF_8)
+                .replace("<description>before</description>", "<description>elsewhere</description>");
+        ClusterFixture.store().loseEvents(true); // reloaded below, as a change made elsewhere is
+        try {
+            ClusterFixture.store().as("other").write(key, b(theirs), PersistenceStore.ANY);
+        } finally {
+            ClusterFixture.store().loseEvents(false);
+        }
+        PersistenceStore.Entry entry = ClusterFixture.store().read(key);
+        java.util.concurrent.atomic.AtomicReference<Exception> failure =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        // through core, which calls the reconciler under the item's lock and then the item's onLoad without it
+        Thread reload = new Thread(
+                () -> {
+                    try (hudson.security.ACLContext ignored = hudson.security.ACL.as2(hudson.security.ACL.SYSTEM2)) {
+                        jenkins.persistence.PersistenceStores.applyingRemoteChange(() -> {
+                            jenkins.persistence.StoredReloads.reload(p.getConfigFile(), p, entry);
+                            return null;
+                        });
+                    } catch (Exception e) {
+                        failure.set(e);
+                    }
+                },
+                "reload");
+        java.lang.management.ThreadMXBean threads = java.lang.management.ManagementFactory.getThreadMXBean();
+        // a new build holds the job's build lock, and asks for the job's lock to be numbered
+        synchronized (p.getLazyBuildMixIn()) {
+            reload.start();
+            java.lang.management.ThreadInfo info;
+            long deadline = System.nanoTime() + 10_000_000_000L;
+            do {
+                assertTrue(System.nanoTime() < deadline, "the reload never waited for the build lock");
+                Thread.sleep(10);
+                info = threads.getThreadInfo(new long[] {reload.getId()}, true, false)[0];
+            } while (info.getThreadState() != Thread.State.BLOCKED
+                    || info.getLockInfo().getIdentityHashCode() != System.identityHashCode(p.getLazyBuildMixIn()));
+            for (java.lang.management.MonitorInfo held : info.getLockedMonitors()) {
+                assertTrue(
+                        held.getIdentityHashCode() != System.identityHashCode(p),
+                        "the reload holds the job's lock while it waits for the build lock: a new build deadlocks");
+            }
+        }
+        reload.join(10_000);
+        assertFalse(reload.isAlive());
+        assertNull(failure.get());
+        assertEquals("elsewhere", p.getDescription());
+    }
+
+    @Test
     void aRefusedEditDoesNotStayInMemoryToBeSavedLater(JenkinsRule r) throws Exception {
         FreeStyleProject p = r.createFreeStyleProject("refused");
         // too large for core to keep what it was loaded from: a conflicting save cannot be merged, it is refused
