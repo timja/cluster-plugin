@@ -1,9 +1,8 @@
 package io.jenkins.plugins.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -57,11 +56,16 @@ class ClusterTriggerCoordinatorTest {
                 member("c", true, null), // an older controller, which does not say
                 member("d", false, null)); // gone
         assertEquals(Set.of("a", "c"), ClusterTriggerCoordinator.readyMembers(all, "a", true, () -> Set.of("x")));
-        assertEquals(Set.of("c"), ClusterTriggerCoordinator.readyMembers(all, "a", false, () -> Set.of("x")),
+        assertEquals(
+                Set.of("c"),
+                ClusterTriggerCoordinator.readyMembers(all, "a", false, () -> Set.of("x")),
                 "this controller as it knows itself, whatever its last heartbeat said");
         assertEquals(Set.of("a", "b", "c"), ClusterTriggerCoordinator.readyMembers(all, "b", true, () -> Set.of("x")));
-        assertEquals(Set.of("x"), ClusterTriggerCoordinator.readyMembers(List.of(member("b", true, MemberStatus.STARTING)), "b", false,
-                () -> Set.of("x")), "nobody ready: every live member, as before");
+        assertEquals(
+                Set.of("x"),
+                ClusterTriggerCoordinator.readyMembers(
+                        List.of(member("b", true, MemberStatus.STARTING)), "b", false, () -> Set.of("x")),
+                "nobody ready: every live member, as before");
     }
 
     /** A name that hashes to {@code owner} among {@code members}. */
@@ -80,7 +84,8 @@ class ClusterTriggerCoordinatorTest {
         String ready = new MemberStatus.Info(0, 0, java.util.Map.of(), 0, 0).toJson();
         when(store.members()).thenReturn(List.of(member("a", true, ready), member("b", true, ready)));
         Set<String> claims = new HashSet<>();
-        when(store.claim(anyString(), anyString(), anyLong())).thenAnswer(i -> claims.add(i.getArgument(0) + "/" + i.getArgument(1) + "@" + i.getArgument(2)));
+        when(store.claim(anyString(), anyString(), anyLong()))
+                .thenAnswer(i -> claims.add(i.getArgument(0) + "/" + i.getArgument(1) + "@" + i.getArgument(2)));
         ClusterTriggerCoordinator c = new ClusterTriggerCoordinator();
         c.readyHere = () -> true;
         String job = itemOwnedBy("b", List.of("a", "b"));

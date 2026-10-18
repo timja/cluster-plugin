@@ -40,14 +40,14 @@
   </dependencyManagement>
   <dependencies>
     <dependency>
-      <groupId>io.jenkins.plugins</groupId>
-      <artifactId>cluster</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
       <!-- Azure Blob Storage client (the harness uses Azurite) -->
       <groupId>io.jenkins.plugins</groupId>
       <artifactId>azure-sdk</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.jenkins.plugins</groupId>
+      <artifactId>cluster</artifactId>
+      <version>${project.version}</version>
     </dependency>
     <dependency>
       <!-- the shared contract tests (ClusterBlobStoreContract) -->

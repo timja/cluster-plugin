@@ -37,8 +37,12 @@ public final class KeyCheck {
         PersistenceStore.Entry e = store.read(KEY);
         if (e == null) {
             try {
-                store.write(KEY, Secret.fromString(VALUE).getEncryptedValue().getBytes(StandardCharsets.UTF_8), PersistenceStore.ABSENT);
-                LOGGER.info("Recorded the cluster's key check: controllers started without this controller's keys will refuse to start");
+                store.write(
+                        KEY,
+                        Secret.fromString(VALUE).getEncryptedValue().getBytes(StandardCharsets.UTF_8),
+                        PersistenceStore.ABSENT);
+                LOGGER.info(
+                        "Recorded the cluster's key check: controllers started without this controller's keys will refuse to start");
             } catch (ConflictException raced) {
                 verify(store); // another controller recorded it first: check against theirs
             }
@@ -55,10 +59,11 @@ public final class KeyCheck {
                     // best effort: failing to start is what matters
                 }
             }
-            throw new IllegalStateException("This controller does not have the key material of the cluster it shares a store with:"
-                    + " it cannot decrypt the cluster's secrets, and would write secrets the others cannot read. Start it with"
-                    + " the cluster's seeded keys (secret.key, secrets/; the chart's seed Secret), or set"
-                    + " -Dio.jenkins.plugins.cluster.KeyCheck.skip=true to start anyway.");
+            throw new IllegalStateException(
+                    "This controller does not have the key material of the cluster it shares a store with:"
+                            + " it cannot decrypt the cluster's secrets, and would write secrets the others cannot read. Start it with"
+                            + " the cluster's seeded keys (secret.key, secrets/; the chart's seed Secret), or set"
+                            + " -Dio.jenkins.plugins.cluster.KeyCheck.skip=true to start anyway.");
         }
     }
 }

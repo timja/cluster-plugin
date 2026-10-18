@@ -34,10 +34,19 @@ final class WebSocketProxy {
     private static final Logger LOGGER = Logger.getLogger(WebSocketProxy.class.getName());
 
     /** Request headers not passed on: the WebSocket handshake's own, and hop-by-hop ones. */
-    private static final Set<String> NOT_PASSED = Set.of("connection", "upgrade", "host", "content-length", "sec-websocket-key",
-            "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-accept", "sec-websocket-protocol");
+    private static final Set<String> NOT_PASSED = Set.of(
+            "connection",
+            "upgrade",
+            "host",
+            "content-length",
+            "sec-websocket-key",
+            "sec-websocket-version",
+            "sec-websocket-extensions",
+            "sec-websocket-accept",
+            "sec-websocket-protocol");
 
-    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    private static final HttpClient HTTP =
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     private WebSocketProxy() {}
 
@@ -49,13 +58,19 @@ final class WebSocketProxy {
     /**
      * @return false if the owner could not be reached and nothing was written, so the caller may serve it locally
      */
-    static boolean proxy(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url)
+    static boolean proxy(
+            @NonNull HttpServletRequest req,
+            @NonNull HttpServletResponse rsp,
+            @NonNull String owner,
+            @NonNull String url)
             throws IOException, ServletException {
         if (!WebSockets.isSupported()) {
             return false;
         }
         String path = req.getRequestURI().substring(req.getContextPath().length());
-        String target = url.replaceAll("/+$", "").replaceFirst("^http", "ws") + req.getContextPath() + path
+        String target = url.replaceAll("/+$", "").replaceFirst("^http", "ws")
+                + req.getContextPath()
+                + path
                 + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
         Front front = new Front();
         WebSocket.Builder b = HTTP.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10));
@@ -113,7 +128,10 @@ final class WebSocketProxy {
         protected void closed(int statusCode, String reason) {
             WebSocket w = backend;
             if (w != null && !w.isOutputClosed()) {
-                w.sendClose(statusCode >= 1000 && statusCode < 5000 && statusCode != 1005 && statusCode != 1006 ? statusCode : WebSocket.NORMAL_CLOSURE,
+                w.sendClose(
+                        statusCode >= 1000 && statusCode < 5000 && statusCode != 1005 && statusCode != 1006
+                                ? statusCode
+                                : WebSocket.NORMAL_CLOSURE,
                         reason == null ? "" : reason);
             }
         }

@@ -44,12 +44,20 @@ class ClusterAgentLimitsTest {
                 agent("k8s", null, 1), // its template is gone: the plugin never releases it either
                 mock(Node.class)); // not a Kubernetes agent
         Map<List<String>, Integer> survivors = ClusterAgentLimits.survivors(nodes);
-        assertEquals(Map.of(
-                List.of("k8s-cloud:k8s", "k8s-template:k8s:" + key), 2,
-                List.of("k8s-cloud:k8s", "k8s-template:k8s:" + ClusterAgentLimits.templateKey(template("go", "id-2"))), 2), survivors);
+        assertEquals(
+                Map.of(
+                        List.of("k8s-cloud:k8s", "k8s-template:k8s:" + key), 2,
+                        List.of(
+                                        "k8s-cloud:k8s",
+                                        "k8s-template:k8s:" + ClusterAgentLimits.templateKey(template("go", "id-2"))),
+                                2),
+                survivors);
 
         ClusterStore store = mock(ClusterStore.class);
         ClusterAgentLimits.countSurvivors(store, nodes);
-        verify(store).addWithinCaps(eq(Map.of("k8s-cloud:k8s", Integer.MAX_VALUE, "k8s-template:k8s:" + key, Integer.MAX_VALUE)), eq(2));
+        verify(store)
+                .addWithinCaps(
+                        eq(Map.of("k8s-cloud:k8s", Integer.MAX_VALUE, "k8s-template:k8s:" + key, Integer.MAX_VALUE)),
+                        eq(2));
     }
 }

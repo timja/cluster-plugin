@@ -1,9 +1,9 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.AbortException;
 import hudson.Extension;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
 import java.io.IOException;
 import java.util.logging.Logger;
@@ -26,12 +26,14 @@ public final class ClusterCliPlugins implements PluginArchiveListener {
         if (!(PersistenceStores.get() instanceof ClusterStore)) {
             return;
         }
-        String refusal = ClusterPluginSet.refusal(ClusterPluginSet.MODE, new ClusterPluginSet.Change("install", shortName), ClusterPlugins.active());
+        String refusal = ClusterPluginSet.refusal(
+                ClusterPluginSet.MODE, new ClusterPluginSet.Change("install", shortName), ClusterPlugins.active());
         if (refusal == null && ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster) {
             try {
                 refusal = ClusterPlugins.archiveRefusal(archive); // a downgrade
             } catch (IOException e) {
-                throw new AbortException("Cannot compare " + shortName + " with the cluster's plugin set, so not installing it: " + e);
+                throw new AbortException(
+                        "Cannot compare " + shortName + " with the cluster's plugin set, so not installing it: " + e);
             }
         }
         if (refusal != null) {

@@ -45,7 +45,9 @@ final class MissedTicks {
         if (windowMinutes <= 0 || entries >= maxEntries) {
             return; // catching up is off, or too much is pending: such ticks are skipped, as before
         }
-        if (deferred.computeIfAbsent(new Key(item, trigger), k -> new TreeMap<>()).put(tick, owner) == null) {
+        if (deferred.computeIfAbsent(new Key(item, trigger), k -> new TreeMap<>())
+                        .put(tick, owner)
+                == null) {
             entries++;
         }
     }
@@ -66,10 +68,16 @@ final class MissedTicks {
      * @param ownerOf the owner now of an item, by its full name
      */
     @NonNull
-    synchronized List<Due> due(long nowMinute, @NonNull Set<String> ready, @NonNull String self, @NonNull Function<String, String> ownerOf) {
+    synchronized List<Due> due(
+            long nowMinute,
+            @NonNull Set<String> ready,
+            @NonNull String self,
+            @NonNull Function<String, String> ownerOf) {
         List<Due> result = new ArrayList<>();
         long oldest = nowMinute - windowMinutes;
-        for (Iterator<Map.Entry<Key, TreeMap<Long, String>>> it = deferred.entrySet().iterator(); it.hasNext(); ) {
+        for (Iterator<Map.Entry<Key, TreeMap<Long, String>>> it =
+                        deferred.entrySet().iterator();
+                it.hasNext(); ) {
             Map.Entry<Key, TreeMap<Long, String>> e = it.next();
             TreeMap<Long, String> ticks = e.getValue();
             int before = ticks.size();

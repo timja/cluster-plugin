@@ -1,11 +1,9 @@
 package io.jenkins.plugins.cluster.spi;
 
-import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /** Housekeeping of the shared queue ({@link ClusterQueue}). */
 public interface QueueMaintenance {
@@ -33,4 +31,3 @@ public interface QueueMaintenance {
     /** A queue item recorded as started, with the number of its build; {@code task} is the full name, for display. */
     record StartedItem(long id, String itemUuid, String task, int buildNumber) {}
 }
-

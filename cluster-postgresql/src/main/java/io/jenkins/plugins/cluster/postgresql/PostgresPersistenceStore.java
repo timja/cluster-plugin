@@ -52,6 +52,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     static final String MEMBERS_CHANNEL = "jenkins_members";
     /** Advisory lock serializing schema creation between controllers. */
     private static final long SCHEMA_LOCK = 0x6a656e6b696e73L;
+
     private static final long COUNTERS_LOCK = 0x636e6a636e7472L;
 
     private final String url;
@@ -89,8 +90,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     s.execute("create table if not exists jenkins_store ("
                             + "key text primary key, content bytea not null, sha256 bytea not null, version bigint not null,"
                             + " updated_at timestamptz not null default now(), updated_by text not null)");
-                    // Target 14 (scale): prefix listings (children, moves) use an index on keys; Target 15: it is built in the
-                    // background (SchemaMigrations.KEY_INDEX), concurrently, so that a large table is not locked meanwhile
+                    // Target 14 (scale): prefix listings (children, moves) use an index on keys; Target 15: it is built
+                    // in the
+                    // background (SchemaMigrations.KEY_INDEX), concurrently, so that a large table is not locked
+                    // meanwhile
                     SchemaMigrations.expand(s);
                     s.execute(
                             "create table if not exists jenkins_members ("
@@ -120,11 +123,13 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     s.execute(
                             "create unique index if not exists jenkins_queue_waiting on jenkins_queue (dedup_key) where state = 'WAITING'");
                     // Target 7: which controller holds each agent's channel
-                    s.execute("create table if not exists jenkins_channels ("
-                            + "agent text primary key, origin text not null, since timestamptz not null default now())");
+                    s.execute(
+                            "create table if not exists jenkins_channels ("
+                                    + "agent text primary key, origin text not null, since timestamptz not null default now())");
                     // Target 9: cluster-wide counters (e.g. cloud agent caps), one row per scope and controller
-                    s.execute("create table if not exists jenkins_counters ("
-                            + "scope text not null, origin text not null, count int not null, primary key (scope, origin))");
+                    s.execute(
+                            "create table if not exists jenkins_counters ("
+                                    + "scope text not null, origin text not null, count int not null, primary key (scope, origin))");
                     s.execute("create table if not exists jenkins_store_events ("
                             + "seq bigserial primary key, kind text not null, key text not null, old_key text,"
                             + " version bigint not null, origin text not null, at timestamptz not null default now())");
@@ -186,7 +191,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
      * locked first, so a takeover (which updates it) waits until this write is committed, or finds it rolled back.
      */
     @Override
-    public long writeIfHeld(@NonNull String leaseKey, long epoch, @NonNull String key, @NonNull byte[] content, long expectedVersion)
+    public long writeIfHeld(
+            @NonNull String leaseKey, long epoch, @NonNull String key, @NonNull byte[] content, long expectedVersion)
             throws IOException {
         byte[] sha = sha256(content);
         try {
@@ -221,7 +227,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         private static final long serialVersionUID = 1L;
     }
 
-    private long writeIn(Connection c, String key, byte[] content, byte[] sha, long expectedVersion) throws SQLException {
+    private long writeIn(Connection c, String key, byte[] content, byte[] sha, long expectedVersion)
+            throws SQLException {
         long actual = ABSENT;
         byte[] actualSha = null;
         try (PreparedStatement ps =
@@ -344,9 +351,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         try {
             return withTransaction(c -> {
                 int n;
-                try (PreparedStatement ps = c.prepareStatement("with d as (delete from jenkins_store where key ~>=~ ? and key ~<~ ? returning key)"
-                        + " insert into jenkins_store_events (kind, key, old_key, version, origin)"
-                        + " select 'DELETED', key, null, nextval('jenkins_store_version'), ? from d")) {
+                try (PreparedStatement ps = c.prepareStatement(
+                        "with d as (delete from jenkins_store where key ~>=~ ? and key ~<~ ? returning key)"
+                                + " insert into jenkins_store_events (kind, key, old_key, version, origin)"
+                                + " select 'DELETED', key, null, nextval('jenkins_store_version'), ? from d")) {
                     ps.setString(1, lower);
                     ps.setString(2, upper);
                     ps.setString(3, origin);
@@ -430,7 +438,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
      * {@code -Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.sessionLocks=false}, e.g. behind a pooler in
      * transaction mode, which does not keep sessions.
      */
-    static final boolean SESSION_LOCKS = !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".sessionLocks"));
+    static final boolean SESSION_LOCKS =
+            !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".sessionLocks"));
     /** How long after its last heartbeat a controller whose session lock is free is taken for gone. */
     static final long FAST_DEAD_MILLIS = 3 * HEARTBEAT_MILLIS;
     /** The first key of the advisory locks (the second is the member's {@code lock_key}). */
@@ -441,8 +450,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         if (!SESSION_LOCKS) {
             return "";
         }
-        return " and (" + alias + "heartbeat_at > now() - interval '" + FAST_DEAD_MILLIS + " milliseconds' or " + alias + "lock_key is null"
-                + " or exists (select 1 from pg_locks l where l.locktype = 'advisory' and l.granted and l.classid = " + LOCK_CLASS
+        return " and (" + alias + "heartbeat_at > now() - interval '" + FAST_DEAD_MILLIS + " milliseconds' or " + alias
+                + "lock_key is null"
+                + " or exists (select 1 from pg_locks l where l.locktype = 'advisory' and l.granted and l.classid = "
+                + LOCK_CLASS
                 + " and l.objid = " + alias + "lock_key::oid and l.objsubid = 2))";
     }
 
@@ -482,6 +493,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     private volatile boolean lockHeld;
     /** Whether this controller's membership row (as last written) names its session lock. */
     private volatile boolean lockNamed;
+
     private Thread lockThread;
     /** Woken to compare members at once: a controller announced it left. */
     private final java.util.concurrent.Semaphore wake = new java.util.concurrent.Semaphore(0);
@@ -497,7 +509,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     try (ResultSet rs = ps.executeQuery()) {
                         rs.next();
                         if (!rs.getBoolean(1)) {
-                            LOGGER.warning("Another session holds this controller's liveness lock key; going by heartbeats only");
+                            LOGGER.warning(
+                                    "Another session holds this controller's liveness lock key; going by heartbeats only");
                             return;
                         }
                     }
@@ -555,7 +568,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     /** Whether this controller runs schema migrations in the background (Target 15); on by default. */
-    static final boolean MIGRATE = !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".migrate"));
+    static final boolean MIGRATE =
+            !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".migrate"));
+
     final SchemaMigrations migrations = new SchemaMigrations(this);
     private Thread migrationThread;
 
@@ -577,7 +592,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     @Override
     public boolean canJudgeLiveness() {
         return !mayHaveLapsed()
-                && System.nanoTime() - stableSince > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS + HEARTBEAT_MILLIS);
+                && System.nanoTime() - stableSince
+                        > TimeUnit.MILLISECONDS.toNanos(MEMBER_TIMEOUT_MILLIS + HEARTBEAT_MILLIS);
     }
 
     private final BuildLeases leases = new BuildLeases() {
@@ -612,7 +628,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                             "insert into jenkins_build_leases (key, owner, epoch) values (?, ?, nextval('jenkins_store_version'))"
                                     + " on conflict (key) do update set owner = excluded.owner, epoch = excluded.epoch, acquired_at = now()"
                                     + " where jenkins_build_leases.owner <> excluded.owner and not exists (select 1 from jenkins_members m"
-                                    + " where m.origin = jenkins_build_leases.owner and m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + ")"
+                                    + " where m.origin = jenkins_build_leases.owner and m.heartbeat_at > now() - ? * interval '1 millisecond'"
+                                    + fast("m.") + ")"
                                     + " returning epoch")) {
                         ps.setString(1, key);
                         ps.setString(2, origin);
@@ -800,20 +817,25 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
         @Override
         public boolean update(
-                long id, @NonNull String expectedActions, @NonNull String actions, long dueAt, @CheckForNull String pinTo)
+                long id,
+                @NonNull String expectedActions,
+                @NonNull String actions,
+                long dueAt,
+                @CheckForNull String pinTo)
                 throws IOException {
             return run(
                     "update queue item " + id,
                     c -> change(
-                            c,
-                            id,
-                            "update jenkins_queue set actions = ?, due_at = least(due_at, ?), pinned_to = coalesce(pinned_to, ?),"
-                                    + " updated_at = now() where id = ? and state = 'WAITING' and actions = ?",
-                            actions,
-                            dueAt,
-                            pinTo,
-                            id,
-                            expectedActions) > 0);
+                                    c,
+                                    id,
+                                    "update jenkins_queue set actions = ?, due_at = least(due_at, ?), pinned_to = coalesce(pinned_to, ?),"
+                                            + " updated_at = now() where id = ? and state = 'WAITING' and actions = ?",
+                                    actions,
+                                    dueAt,
+                                    pinTo,
+                                    id,
+                                    expectedActions)
+                            > 0);
         }
 
         @Override
@@ -931,16 +953,18 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         boolean judge = canJudgeLiveness();
         return run("reclaim queue items", c -> {
             List<Long> claimed = new ArrayList<>();
-            if (judge) try (PreparedStatement ps = c.prepareStatement(
-                    "select id from jenkins_queue where state = 'CLAIMED' and claimed_by not in (select origin from jenkins_members"
-                            + " where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ") for update")) {
-                ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        claimed.add(rs.getLong(1));
+            if (judge)
+                try (PreparedStatement ps = c.prepareStatement(
+                        "select id from jenkins_queue where state = 'CLAIMED' and claimed_by not in (select origin from jenkins_members"
+                                + " where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("")
+                                + ") for update")) {
+                    ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            claimed.add(rs.getLong(1));
+                        }
                     }
                 }
-            }
             List<Long> ids = new ArrayList<>();
             int putBack = 0;
             for (long id : claimed) {
@@ -1009,8 +1033,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     @Override
     public void cancelStartedOf(@NonNull String fullName) throws IOException {
         run("cancel started queue items of " + fullName, c -> {
-            try (PreparedStatement ps = c.prepareStatement("update jenkins_queue set state = 'CANCELLED', updated_at = now()"
-                    + " where state = 'STARTED' and (task = ? or starts_with(task, ?))")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("update jenkins_queue set state = 'CANCELLED', updated_at = now()"
+                            + " where state = 'STARTED' and (task = ? or starts_with(task, ?))")) {
                 ps.setString(1, fullName);
                 ps.setString(2, fullName + "/");
                 ps.executeUpdate();
@@ -1027,8 +1052,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     public void requeueStarted(long id) throws IOException {
         run("requeue a queue item", c -> {
             int n;
-            try (PreparedStatement ps = c.prepareStatement("update jenkins_queue set state = 'WAITING', claimed_by = null,"
-                    + " build_number = 0, updated_at = now() where id = ? and state = 'STARTED'")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("update jenkins_queue set state = 'WAITING', claimed_by = null,"
+                            + " build_number = 0, updated_at = now() where id = ? and state = 'STARTED'")) {
                 ps.setLong(1, id);
                 n = ps.executeUpdate();
             } catch (SQLException e) {
@@ -1054,17 +1080,19 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
      */
     public synchronized void startHeartbeat() throws IOException {
         if (migrationThread == null && MIGRATE) {
-            migrationThread = new Thread(() -> {
-                while (!closed) {
-                    try {
-                        Thread.sleep(TimeUnit.SECONDS.toMillis(10));
-                        migrations.runPending();
-                        Thread.sleep(TimeUnit.SECONDS.toMillis(50));
-                    } catch (InterruptedException e) {
-                        return;
-                    }
-                }
-            }, "PostgresPersistenceStore schema migrations");
+            migrationThread = new Thread(
+                    () -> {
+                        while (!closed) {
+                            try {
+                                Thread.sleep(TimeUnit.SECONDS.toMillis(10));
+                                migrations.runPending();
+                                Thread.sleep(TimeUnit.SECONDS.toMillis(50));
+                            } catch (InterruptedException e) {
+                                return;
+                            }
+                        }
+                    },
+                    "PostgresPersistenceStore schema migrations");
             migrationThread.setDaemon(true);
             migrationThread.start();
         }
@@ -1082,10 +1110,12 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                         while (!closed) {
                             try {
                                 // wake for the next heartbeat, the next member due to expire, or a member leaving
-                                long untilBeat = Math.max(0, TimeUnit.NANOSECONDS.toMillis(nextBeat - System.nanoTime()));
+                                long untilBeat =
+                                        Math.max(0, TimeUnit.NANOSECONDS.toMillis(nextBeat - System.nanoTime()));
                                 long untilExpiry = millisUntilNextExpiry();
                                 wake.drainPermits();
-                                boolean woken = wake.tryAcquire(Math.min(untilBeat, untilExpiry), TimeUnit.MILLISECONDS);
+                                boolean woken =
+                                        wake.tryAcquire(Math.min(untilBeat, untilExpiry), TimeUnit.MILLISECONDS);
                                 if (woken || System.nanoTime() - nextBeat < 0) {
                                     watchMembers(); // a member left, or one may have just expired
                                     continue;
@@ -1159,11 +1189,16 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
         try {
             return run("next member expiry", c -> {
-                try (PreparedStatement ps = c.prepareStatement("select coalesce(min(extract(epoch from (m.heartbeat_at + case when "
-                        + (SESSION_LOCKS ? "m.lock_key is not null and not exists (select 1 from pg_locks l where l.locktype = 'advisory'"
-                                + " and l.granted and l.classid = " + LOCK_CLASS + " and l.objid = m.lock_key::oid and l.objsubid = 2)" : "false")
-                        + " then ? else ? end * interval '1 millisecond' - now())) * 1000), ?) from jenkins_members m"
-                        + " where m.origin <> ? and m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m."))) {
+                try (PreparedStatement ps =
+                        c.prepareStatement("select coalesce(min(extract(epoch from (m.heartbeat_at + case when "
+                                + (SESSION_LOCKS
+                                        ? "m.lock_key is not null and not exists (select 1 from pg_locks l where l.locktype = 'advisory'"
+                                                + " and l.granted and l.classid = " + LOCK_CLASS
+                                                + " and l.objid = m.lock_key::oid and l.objsubid = 2)"
+                                        : "false")
+                                + " then ? else ? end * interval '1 millisecond' - now())) * 1000), ?) from jenkins_members m"
+                                + " where m.origin <> ? and m.heartbeat_at > now() - ? * interval '1 millisecond'"
+                                + fast("m."))) {
                     ps.setLong(1, FAST_DEAD_MILLIS);
                     ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
                     ps.setLong(3, HEARTBEAT_MILLIS);
@@ -1208,7 +1243,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 }
                 if (System.nanoTime() - lastMemberPrune > TimeUnit.MINUTES.toNanos(10)) {
                     // every start is a new member: forget incarnations gone for a day (nothing refers to them by then)
-                    try (PreparedStatement ps = c.prepareStatement("delete from jenkins_members where heartbeat_at < now() - interval '1 day'")) {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "delete from jenkins_members where heartbeat_at < now() - interval '1 day'")) {
                         ps.executeUpdate();
                     }
                     lastMemberPrune = System.nanoTime();
@@ -1266,7 +1302,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     @Override
     public List<ClusterStore.Migration> migrations() throws IOException {
         try {
-            return migrations.progress().stream().map(p -> new ClusterStore.Migration(p.id(), p.state(), p.owner(), p.rows())).toList();
+            return migrations.progress().stream()
+                    .map(p -> new ClusterStore.Migration(p.id(), p.state(), p.owner(), p.rows()))
+                    .toList();
         } catch (SQLException e) {
             throw new IOException("Failed to read schema migrations", e);
         }
@@ -1286,8 +1324,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     public List<String> peersBelow(int minimum) throws IOException {
         return run("check peer versions", c -> {
             List<String> result = new ArrayList<>();
-            try (PreparedStatement ps = c.prepareStatement("select coalesce(name, origin), coalesce(protocol, 0) from jenkins_members"
-                    + " where origin <> ? and coalesce(protocol, 0) < ? and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + "")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("select coalesce(name, origin), coalesce(protocol, 0) from jenkins_members"
+                            + " where origin <> ? and coalesce(protocol, 0) < ? and heartbeat_at > now() - ? * interval '1 millisecond'"
+                            + fast("") + "")) {
                 ps.setString(1, origin);
                 ps.setInt(2, minimum);
                 ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
@@ -1311,7 +1351,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     public String urlOf(@NonNull String name) throws IOException {
         return run("look up controller " + name, c -> {
             try (PreparedStatement ps = c.prepareStatement("select url from jenkins_members where name = ?"
-                    + " and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + " order by heartbeat_at desc limit 1")) {
+                    + " and heartbeat_at > now() - ? * interval '1 millisecond'" + fast("")
+                    + " order by heartbeat_at desc limit 1")) {
                 ps.setString(1, name);
                 ps.setLong(2, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
@@ -1328,13 +1369,23 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         return run("list members", c -> {
             List<Member> result = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("select origin, name, url, heartbeat_at, started_at,"
-                    + " heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + ", version, coalesce(protocol, 0), plugins, info from jenkins_members"
+                    + " heartbeat_at > now() - ? * interval '1 millisecond'" + fast("")
+                    + ", version, coalesce(protocol, 0), plugins, info from jenkins_members"
                     + " order by started_at desc")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        result.add(new ClusterStore.Member(rs.getString(1), rs.getString(2), rs.getString(3),
-                                rs.getTimestamp(4).getTime(), rs.getTimestamp(5).getTime(), rs.getBoolean(6), rs.getString(7), rs.getInt(8), rs.getString(9), rs.getString(10)));
+                        result.add(new ClusterStore.Member(
+                                rs.getString(1),
+                                rs.getString(2),
+                                rs.getString(3),
+                                rs.getTimestamp(4).getTime(),
+                                rs.getTimestamp(5).getTime(),
+                                rs.getBoolean(6),
+                                rs.getString(7),
+                                rs.getInt(8),
+                                rs.getString(9),
+                                rs.getString(10)));
                     }
                 }
             }
@@ -1349,7 +1400,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         return run("count queue items", c -> {
             Map<String, Integer> result = new java.util.TreeMap<>();
             try (PreparedStatement ps = c.prepareStatement(
-                    "select state, count(*) from jenkins_queue where state in ('WAITING', 'CLAIMED') group by state");
+                            "select state, count(*) from jenkins_queue where state in ('WAITING', 'CLAIMED') group by state");
                     ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     result.put(rs.getString(1), rs.getInt(2));
@@ -1383,9 +1434,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     public Map<String, String> channels() throws IOException {
         return run("list channels", c -> {
             Map<String, String> result = new TreeMap<>();
-            try (PreparedStatement ps = c.prepareStatement("select ch.agent, coalesce(m.name, ch.origin) from jenkins_channels ch"
-                    + " left join jenkins_members m on m.origin = ch.origin"
-                    + " where m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + "")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("select ch.agent, coalesce(m.name, ch.origin) from jenkins_channels ch"
+                            + " left join jenkins_members m on m.origin = ch.origin"
+                            + " where m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + "")) {
                 ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
@@ -1411,9 +1463,11 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 s.execute("select pg_advisory_xact_lock(" + COUNTERS_LOCK + ")");
             }
             for (Map.Entry<String, Integer> cap : caps.entrySet()) {
-                try (PreparedStatement ps = c.prepareStatement("select coalesce(sum(k.count), 0) from jenkins_counters k"
-                        + " join jenkins_members m on m.origin = k.origin"
-                        + " where k.scope = ? and (k.origin = ? or m.heartbeat_at > now() - ? * interval '1 millisecond'" + fast("m.") + ")")) {
+                try (PreparedStatement ps =
+                        c.prepareStatement("select coalesce(sum(k.count), 0) from jenkins_counters k"
+                                + " join jenkins_members m on m.origin = k.origin"
+                                + " where k.scope = ? and (k.origin = ? or m.heartbeat_at > now() - ? * interval '1 millisecond'"
+                                + fast("m.") + ")")) {
                     ps.setString(1, cap.getKey());
                     ps.setString(2, origin);
                     ps.setLong(3, MEMBER_TIMEOUT_MILLIS);
@@ -1444,8 +1498,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     private void addToCounter(Connection c, String scope, int delta) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("insert into jenkins_counters (scope, origin, count) values (?, ?, greatest(?, 0))"
-                + " on conflict (scope, origin) do update set count = greatest(jenkins_counters.count + ?, 0)")) {
+        try (PreparedStatement ps = c.prepareStatement(
+                "insert into jenkins_counters (scope, origin, count) values (?, ?, greatest(?, 0))"
+                        + " on conflict (scope, origin) do update set count = greatest(jenkins_counters.count + ?, 0)")) {
             ps.setString(1, scope);
             ps.setString(2, origin);
             ps.setInt(3, delta);
@@ -1454,7 +1509,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
         if (delta < 0) {
             // Target 15: a row at 0 says nothing; Pipelines' own pod templates would otherwise leave one each
-            try (PreparedStatement ps = c.prepareStatement("delete from jenkins_counters where scope = ? and origin = ? and count = 0")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("delete from jenkins_counters where scope = ? and origin = ? and count = 0")) {
                 ps.setString(1, scope);
                 ps.setString(2, origin);
                 ps.executeUpdate();
@@ -1495,7 +1551,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     @Override
     public void channelDisconnected(@NonNull String agent) throws IOException {
         run("forget the channel of " + agent, c -> {
-            try (PreparedStatement ps = c.prepareStatement("delete from jenkins_channels where agent = ? and origin = ?")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("delete from jenkins_channels where agent = ? and origin = ?")) {
                 ps.setString(1, agent);
                 ps.setString(2, origin);
                 ps.executeUpdate();
@@ -1559,7 +1616,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 Set<String> members = new TreeSet<>();
                 members.add(origin);
                 try (PreparedStatement ps = c.prepareStatement(
-                        "select origin from jenkins_members where heartbeat_at > now() - ? * interval '1 millisecond'" + fast("") + "")) {
+                        "select origin from jenkins_members where heartbeat_at > now() - ? * interval '1 millisecond'"
+                                + fast("") + "")) {
                     ps.setLong(1, MEMBER_TIMEOUT_MILLIS);
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
@@ -1620,8 +1678,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 try (Statement s = c.createStatement()) {
                     s.executeUpdate("delete from jenkins_trigger_claims where claimed_at < now() - interval '1 day'");
                     s.executeUpdate("delete from jenkins_store_events where at < now() - interval '1 day'");
-                    s.executeUpdate("delete from jenkins_counters k where not exists (select 1 from jenkins_members m where m.origin = k.origin"
-                            + " and m.heartbeat_at > now() - interval '1 hour')");
+                    s.executeUpdate(
+                            "delete from jenkins_counters k where not exists (select 1 from jenkins_members m where m.origin = k.origin"
+                                    + " and m.heartbeat_at > now() - interval '1 hour')");
                 }
                 return null;
             });
@@ -1663,7 +1722,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 PGConnection pg = c.unwrap(PGConnection.class);
                 while (!closed) {
                     lastSeq = drain(c, lastSeq);
-                    org.postgresql.PGNotification[] notes = pg.getNotifications(1000); // wake up on NOTIFY, or poll every second
+                    org.postgresql.PGNotification[] notes =
+                            pg.getNotifications(1000); // wake up on NOTIFY, or poll every second
                     if (notes != null) {
                         for (org.postgresql.PGNotification n : notes) {
                             if (MEMBERS_CHANNEL.equals(n.getName())) {
@@ -1692,12 +1752,14 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
      * rolled back). Consumers compare versions, so a late event never undoes a newer change (Target 14).
      */
     private final java.util.NavigableMap<Long, Long> holes = new java.util.concurrent.ConcurrentSkipListMap<>();
+
     static final long HOLE_MILLIS = 60_000;
 
     private long drain(Connection c, long lastSeq) throws SQLException {
         long now = System.currentTimeMillis();
         holes.values().removeIf(since -> now - since > HOLE_MILLIS);
-        StringBuilder sql = new StringBuilder("select seq, kind, key, old_key, version, origin from jenkins_store_events where seq > ?");
+        StringBuilder sql = new StringBuilder(
+                "select seq, kind, key, old_key, version, origin from jenkins_store_events where seq > ?");
         List<Long> waiting = List.copyOf(holes.keySet());
         if (!waiting.isEmpty()) {
             sql.append(" or seq = any (?)");
@@ -1789,7 +1851,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
     /** When this JVM last notified listeners of a change, {@link System#nanoTime}. */
     private volatile long lastNotify;
-    private final java.util.concurrent.atomic.AtomicBoolean trailingNotify = new java.util.concurrent.atomic.AtomicBoolean();
+
+    private final java.util.concurrent.atomic.AtomicBoolean trailingNotify =
+            new java.util.concurrent.atomic.AtomicBoolean();
     /** Notifications are at most this often per controller (Target 15); listeners also poll every second. */
     static final long NOTIFY_MILLIS = Long.getLong(PostgresPersistenceStore.class.getName() + ".notifyMillis", 100);
 
@@ -1806,20 +1870,27 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                 s.execute("notify " + CHANNEL);
             }
         } else if (trailingNotify.compareAndSet(false, true)) {
-            jenkins.util.Timer.get().schedule(() -> {
-                trailingNotify.set(false);
-                lastNotify = System.nanoTime();
-                try {
-                    withControl(cc -> {
-                        try (Statement s = cc.createStatement()) {
-                            s.execute("notify " + CHANNEL);
-                        }
-                        return null;
-                    });
-                } catch (SQLException | RuntimeException e) {
-                    LOGGER.log(Level.FINE, "Could not notify listeners", e); // they poll every second anyway
-                }
-            }, NOTIFY_MILLIS, TimeUnit.MILLISECONDS);
+            jenkins.util.Timer.get()
+                    .schedule(
+                            () -> {
+                                trailingNotify.set(false);
+                                lastNotify = System.nanoTime();
+                                try {
+                                    withControl(cc -> {
+                                        try (Statement s = cc.createStatement()) {
+                                            s.execute("notify " + CHANNEL);
+                                        }
+                                        return null;
+                                    });
+                                } catch (SQLException | RuntimeException e) {
+                                    LOGGER.log(
+                                            Level.FINE,
+                                            "Could not notify listeners",
+                                            e); // they poll every second anyway
+                                }
+                            },
+                            NOTIFY_MILLIS,
+                            TimeUnit.MILLISECONDS);
         }
     }
 
@@ -1841,7 +1912,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         if (until != 0 && System.nanoTime() < until) {
             // fail fast while the database is unreachable, so that pages and the queue do not wait for it call after
             // call (Target 14); the heartbeat keeps probing on its own pool and closes this as soon as it gets through
-            throw new java.sql.SQLTransientConnectionException("The persistence store is unreachable; retrying shortly");
+            throw new java.sql.SQLTransientConnectionException(
+                    "The persistence store is unreachable; retrying shortly");
         }
         try {
             T result = withTransaction(work, w);
@@ -1857,7 +1929,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
     /** {@link System#nanoTime} until which ordinary store calls fail at once (0: they do not). */
     private volatile long unreachableUntil;
-    static final long FAIL_FAST_MILLIS = Long.getLong(PostgresPersistenceStore.class.getName() + ".failFastMillis", 5_000);
+
+    static final long FAIL_FAST_MILLIS =
+            Long.getLong(PostgresPersistenceStore.class.getName() + ".failFastMillis", 5_000);
 
     /** Whether the database was found unreachable lately (calls fail fast). */
     boolean isUnreachable() {
@@ -1898,7 +1972,10 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
             } catch (Conflict e) {
                 throw e;
             } catch (SQLException e) {
-                if (attempt == 0 && !committing && isConnectionFailure(e) && !(e instanceof java.sql.SQLTransientConnectionException)) {
+                if (attempt == 0
+                        && !committing
+                        && isConnectionFailure(e)
+                        && !(e instanceof java.sql.SQLTransientConnectionException)) {
                     LOGGER.log(Level.FINE, "Retrying on another connection", e);
                     continue;
                 }
@@ -1910,7 +1987,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     /** SQL state class 08 (connection exception), or a timeout reaching the database. */
     static boolean isConnectionFailure(SQLException e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t instanceof SQLException se && se.getSQLState() != null && se.getSQLState().startsWith("08")) {
+            if (t instanceof SQLException se
+                    && se.getSQLState() != null
+                    && se.getSQLState().startsWith("08")) {
                 return true;
             }
             if (t instanceof java.sql.SQLTransientConnectionException || t instanceof java.net.SocketTimeoutException) {
@@ -1921,10 +2000,15 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     /** Connection limits, so that an unreachable or stalled database fails calls instead of hanging them. */
-    static final int SOCKET_TIMEOUT_SECONDS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".socketTimeoutSeconds", 30);
-    static final int CONNECT_TIMEOUT_SECONDS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".connectTimeoutSeconds", 5);
-    static final int STATEMENT_TIMEOUT_MILLIS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".statementTimeoutMillis", 25_000);
-    static final int LOCK_TIMEOUT_MILLIS = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".lockTimeoutMillis", 10_000);
+    static final int SOCKET_TIMEOUT_SECONDS =
+            Integer.getInteger(PostgresPersistenceStore.class.getName() + ".socketTimeoutSeconds", 30);
+
+    static final int CONNECT_TIMEOUT_SECONDS =
+            Integer.getInteger(PostgresPersistenceStore.class.getName() + ".connectTimeoutSeconds", 5);
+    static final int STATEMENT_TIMEOUT_MILLIS =
+            Integer.getInteger(PostgresPersistenceStore.class.getName() + ".statementTimeoutMillis", 25_000);
+    static final int LOCK_TIMEOUT_MILLIS =
+            Integer.getInteger(PostgresPersistenceStore.class.getName() + ".lockTimeoutMillis", 10_000);
     static final int WORK_POOL_SIZE = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".poolSize", 8);
 
     /** Uses the driver directly: {@code DriverManager} does not see drivers loaded by a plugin class loader. */
@@ -1995,7 +2079,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         config.setMinimumIdle(1);
         config.setConnectionTimeout(TimeUnit.SECONDS.toMillis(CONNECT_TIMEOUT_SECONDS)); // waiting for a connection
         config.setValidationTimeout(TimeUnit.SECONDS.toMillis(CONNECT_TIMEOUT_SECONDS));
-        config.setInitializationFailTimeout(-1); // created even while the database is unreachable; calls fail until it is back
+        config.setInitializationFailTimeout(
+                -1); // created even while the database is unreachable; calls fail until it is back
         config.setKeepaliveTime(TimeUnit.MINUTES.toMillis(1));
         return new com.zaxxer.hikari.HikariDataSource(config);
     }

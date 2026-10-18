@@ -43,10 +43,13 @@ public class S3BlobStoreProvider implements BlobStoreProvider {
             return null;
         }
         String prefix = setting("prefix", "CLUSTER_S3_PREFIX");
-        S3Client s3 = client(setting("region", "CLUSTER_S3_REGION"), setting("endpoint", "CLUSTER_S3_ENDPOINT"),
+        S3Client s3 = client(
+                setting("region", "CLUSTER_S3_REGION"),
+                setting("endpoint", "CLUSTER_S3_ENDPOINT"),
                 Boolean.parseBoolean(setting("pathStyle", "CLUSTER_S3_PATH_STYLE")));
         S3BlobStore store = new S3BlobStore(s3, bucket, prefix == null ? "" : prefix);
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
+        long deadline =
+                System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
         long delay = 1000;
         while (true) {
             try {

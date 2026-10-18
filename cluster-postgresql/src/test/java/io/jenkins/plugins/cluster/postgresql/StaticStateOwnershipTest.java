@@ -1,8 +1,6 @@
 package io.jenkins.plugins.cluster.postgresql;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -37,5 +35,4 @@ class StaticStateOwnershipTest {
             assertFalse(PostgresPersistenceStoreProvider.owns(local), local);
         }
     }
-
 }

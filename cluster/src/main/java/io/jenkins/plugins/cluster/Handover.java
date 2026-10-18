@@ -1,6 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
@@ -10,6 +9,7 @@ import hudson.model.Label;
 import hudson.model.Node;
 import hudson.model.Queue;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
@@ -34,7 +34,8 @@ public final class Handover {
     private static final Logger LOGGER = Logger.getLogger(Handover.class.getName());
     static final String SUFFIX = ".handover";
     static final long WAIT_SECONDS = Long.getLong(Handover.class.getName() + ".waitSeconds", 15);
-    private static final String PLACEHOLDER_TASK = "org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution$PlaceholderTask";
+    private static final String PLACEHOLDER_TASK =
+            "org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution$PlaceholderTask";
 
     private Handover() {}
 
@@ -44,7 +45,9 @@ public final class Handover {
             return;
         }
         store.subscribe(e -> {
-            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN && e.key().endsWith(SUFFIX) && !store.getOrigin().equals(e.origin())) {
+            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN
+                    && e.key().endsWith(SUFFIX)
+                    && !store.getOrigin().equals(e.origin())) {
                 Timer.get().submit(() -> takeOver(store, e.key()));
             }
         });
@@ -58,7 +61,8 @@ public final class Handover {
         }
         long now = System.currentTimeMillis();
         for (Queue.Item item : Queue.getInstance().getItems()) {
-            if (!item.task.getClass().getName().equals(PLACEHOLDER_TASK) || now - item.getInQueueSince() < TimeUnit.SECONDS.toMillis(WAIT_SECONDS)) {
+            if (!item.task.getClass().getName().equals(PLACEHOLDER_TASK)
+                    || now - item.getInQueueSince() < TimeUnit.SECONDS.toMillis(WAIT_SECONDS)) {
                 continue;
             }
             Label label = item.getAssignedLabel();
@@ -77,12 +81,14 @@ public final class Handover {
                 }
                 String base = PersistenceStores.keyFor(run.getParent().getRootDir()) + "/running/" + run.getNumber();
                 if (!countHop(store, base + HOPS)) {
-                    LOGGER.warning(() -> run + " waits for '" + label + "', which only another controller has, but it was handed over "
-                            + MAX_HOPS + " times already (node blocks needing agents of different controllers); it waits here");
+                    LOGGER.warning(() -> run + " waits for '" + label
+                            + "', which only another controller has, but it was handed over " + MAX_HOPS
+                            + " times already (node blocks needing agents of different controllers); it waits here");
                     continue;
                 }
                 String key = base + SUFFIX;
-                LOGGER.info(() -> "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
+                LOGGER.info(() ->
+                        "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
                 SavePoints.flush(run);
                 store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
                 RunningBuilds.handOver(run);
@@ -133,7 +139,10 @@ public final class Handover {
                 return false;
             }
             try {
-                store.write(key, String.valueOf(hops + 1).getBytes(StandardCharsets.UTF_8), e == null ? PersistenceStore.ABSENT : e.version());
+                store.write(
+                        key,
+                        String.valueOf(hops + 1).getBytes(StandardCharsets.UTF_8),
+                        e == null ? PersistenceStore.ABSENT : e.version());
                 return true;
             } catch (jenkins.persistence.ConflictException again) {
                 // counted by another at the same moment: count again

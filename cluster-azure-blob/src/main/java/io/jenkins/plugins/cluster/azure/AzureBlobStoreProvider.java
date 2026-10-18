@@ -1,8 +1,8 @@
 package io.jenkins.plugins.cluster.azure;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.Extension;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.persistence.BlobStore;
@@ -27,7 +27,8 @@ public class AzureBlobStoreProvider implements BlobStoreProvider {
             return null;
         }
         String container = setting("container", "CLUSTER_AZURE_BLOB_CONTAINER");
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
+        long deadline =
+                System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
         long delay = 1000;
         while (true) {
             try {

@@ -1,12 +1,12 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.Util;
 import hudson.model.Job;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -69,10 +69,12 @@ public class PipelineAdopter implements BuildAdopter {
             // the flow nodes: those of every save point up to the committed one, in order (later ones overwrite), and
             // none of a later save point an owner uploaded but did not commit
             long[] committed = SavePoints.parseSavePoint(savePoint);
-            java.util.TreeMap<long[], java.util.List<String>> bySavePoint = new java.util.TreeMap<>(SavePoints::compareSavePoints);
+            java.util.TreeMap<long[], java.util.List<String>> bySavePoint =
+                    new java.util.TreeMap<>(SavePoints::compareSavePoints);
             java.util.List<String> unversioned = new java.util.ArrayList<>();
             String nodes = base + "/" + SavePoints.NODES;
-            for (String key : blobs.list(base)) { // not list(nodes): that holds only workflow/..., not workflow.<epoch>.<seq>/...
+            for (String key :
+                    blobs.list(base)) { // not list(nodes): that holds only workflow/..., not workflow.<epoch>.<seq>/...
                 if (!key.startsWith(nodes)) {
                     continue;
                 }
@@ -82,7 +84,9 @@ public class PipelineAdopter implements BuildAdopter {
                 } else if (rest.startsWith(".") && rest.indexOf('/') > 0) {
                     long[] sp = SavePoints.parseSavePoint(rest.substring(1, rest.indexOf('/')));
                     if (sp != null && committed != null && SavePoints.compareSavePoints(sp, committed) <= 0) {
-                        bySavePoint.computeIfAbsent(sp, k -> new java.util.ArrayList<>()).add(key);
+                        bySavePoint
+                                .computeIfAbsent(sp, k -> new java.util.ArrayList<>())
+                                .add(key);
                     }
                 }
             }
@@ -91,7 +95,10 @@ public class PipelineAdopter implements BuildAdopter {
             }
             for (java.util.List<String> keys : bySavePoint.values()) {
                 for (String key : keys) {
-                    download(blobs, key, staging.resolve(SavePoints.NODES).resolve(key.substring(key.lastIndexOf('/') + 1)));
+                    download(
+                            blobs,
+                            key,
+                            staging.resolve(SavePoints.NODES).resolve(key.substring(key.lastIndexOf('/') + 1)));
                 }
             }
             BlobLogStorage.fetch(blobs, build, staging.toFile());

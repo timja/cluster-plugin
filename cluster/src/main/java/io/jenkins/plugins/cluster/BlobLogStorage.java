@@ -1,8 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
-import io.jenkins.plugins.cluster.spi.LogBlobs;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
@@ -14,6 +11,9 @@ import hudson.model.Queue;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.model.listeners.RunListener;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.LogBlobs;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -248,14 +248,17 @@ public final class BlobLogStorage {
          * Fewer, larger appends (Target 14): a build's log is shipped once this much is pending, or
          * {@link #COALESCE_MILLIS} after the last shipment; save points and the end of a build ship at once.
          */
-        static final int COALESCE_BYTES = Integer.getInteger(BlobLogStorage.class.getName() + ".coalesceBytes", 32 * 1024);
+        static final int COALESCE_BYTES =
+                Integer.getInteger(BlobLogStorage.class.getName() + ".coalesceBytes", 32 * 1024);
+
         static final long COALESCE_MILLIS = Long.getLong(BlobLogStorage.class.getName() + ".coalesceMillis", 3_000);
 
         private static boolean due(Tracked t) {
             return t.finishing
                     || t.logStream.pending() >= COALESCE_BYTES
                     || System.currentTimeMillis() - t.logStream.lastShip >= COALESCE_MILLIS
-                    || t.indexStream.pending() > 0 && System.currentTimeMillis() - t.indexStream.lastShip >= COALESCE_MILLIS;
+                    || t.indexStream.pending() > 0
+                            && System.currentTimeMillis() - t.indexStream.lastShip >= COALESCE_MILLIS;
         }
 
         private static void shipAll() {
@@ -453,7 +456,8 @@ public final class BlobLogStorage {
     }
 
     /** Whether logs of builds other than Pipelines are shipped while they run (Target 15); on by default. */
-    static final boolean SHIP_OTHER_LOGS = !"false".equals(System.getProperty(BlobLogStorage.class.getName() + ".shipOtherLogs"));
+    static final boolean SHIP_OTHER_LOGS =
+            !"false".equals(System.getProperty(BlobLogStorage.class.getName() + ".shipOtherLogs"));
 
     /** What a build that cannot be resumed printed before its controller died (Target 15). */
     @Extension
@@ -465,7 +469,9 @@ public final class BlobLogStorage {
                 return null;
             }
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            return blobs.logs().download(base + "/" + LOG, out) ? new java.io.ByteArrayInputStream(out.toByteArray()) : null;
+            return blobs.logs().download(base + "/" + LOG, out)
+                    ? new java.io.ByteArrayInputStream(out.toByteArray())
+                    : null;
         }
     }
 
@@ -473,7 +479,9 @@ public final class BlobLogStorage {
     @Extension
     public static final class RemoteLogs implements RunningBuilds.RemoteLog {
         @Override
-        public long copy(@NonNull hudson.model.Job<?, ?> job, int number, long offset, @NonNull java.io.OutputStream out) throws IOException {
+        public long copy(
+                @NonNull hudson.model.Job<?, ?> job, int number, long offset, @NonNull java.io.OutputStream out)
+                throws IOException {
             ClusterBlobStore blobs = blobs();
             String key = blobs == null ? null : buildKey(new File(job.getBuildDir(), String.valueOf(number)));
             if (key == null) {

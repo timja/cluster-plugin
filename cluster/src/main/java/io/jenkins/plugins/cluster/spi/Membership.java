@@ -57,10 +57,18 @@ public interface Membership {
     }
 
     /** A controller of the cluster, alive or gone (shown in the cluster view). */
-    record Member(String origin, String name, String url, long heartbeatAt, long startedAt, boolean alive, String version, int protocol,
-            String plugins, String info) {}
+    record Member(
+            String origin,
+            String name,
+            String url,
+            long heartbeatAt,
+            long startedAt,
+            boolean alive,
+            String version,
+            int protocol,
+            String plugins,
+            String info) {}
 
     /** A background migration of the store's data. */
     record Migration(String id, String state, String owner, long rows) {}
 }
-

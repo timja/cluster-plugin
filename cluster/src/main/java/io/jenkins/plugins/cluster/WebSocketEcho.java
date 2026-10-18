@@ -1,10 +1,10 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.model.Action;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.List;

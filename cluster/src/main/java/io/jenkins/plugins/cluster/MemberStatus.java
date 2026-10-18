@@ -1,13 +1,13 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.model.Computer;
 import hudson.model.UpdateCenter;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -48,7 +48,15 @@ public final class MemberStatus {
      * A member's report, as parsed back. {@code ready}: done starting (Jenkins {@link InitMilestone#COMPLETED}, so its
      * items are loaded), as {@link ClusterTriggerCoordinator} needs of an owner of triggers.
      */
-    record Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt, long merged, long overwritten, long refused,
+    record Info(
+            int busy,
+            int total,
+            Map<String, int[]> agents,
+            int installing,
+            long installAt,
+            long merged,
+            long overwritten,
+            long refused,
             boolean ready) {
         static final Info NONE = new Info(0, 0, Map.of(), 0, 0, 0, 0, 0);
 
@@ -56,7 +64,15 @@ public final class MemberStatus {
             this(busy, total, agents, installing, installAt, 0, 0, 0);
         }
 
-        Info(int busy, int total, Map<String, int[]> agents, int installing, long installAt, long merged, long overwritten, long refused) {
+        Info(
+                int busy,
+                int total,
+                Map<String, int[]> agents,
+                int installing,
+                long installAt,
+                long merged,
+                long overwritten,
+                long refused) {
             this(busy, total, agents, installing, installAt, merged, overwritten, refused, true);
         }
 
@@ -91,8 +107,15 @@ public final class MemberStatus {
                         agents.put((String) name, new int[] {counts.getInt(0), counts.getInt(1)});
                     }
                 }
-                return new Info(o.optInt("busy"), o.optInt("total"), Collections.unmodifiableMap(agents),
-                        o.optInt("installing"), o.optLong("installAt"), o.optLong("merged"), o.optLong("overwritten"), o.optLong("refused"),
+                return new Info(
+                        o.optInt("busy"),
+                        o.optInt("total"),
+                        Collections.unmodifiableMap(agents),
+                        o.optInt("installing"),
+                        o.optLong("installAt"),
+                        o.optLong("merged"),
+                        o.optLong("overwritten"),
+                        o.optLong("refused"),
                         o.optBoolean("ready", true));
             } catch (RuntimeException e) {
                 return NONE;
@@ -139,11 +162,20 @@ public final class MemberStatus {
                 agents.put(c.getName().isEmpty() ? "(built-in)" : c.getName(), new int[] {b, t});
             }
         }
-        // concurrent edits since this controller started (Target 15): merged, overwritten (lenient), refused (strict-ui)
+        // concurrent edits since this controller started (Target 15): merged, overwritten (lenient), refused
+        // (strict-ui)
         long merged = jenkins.persistence.PersistenceStores.getMergeCount();
         long refused = jenkins.persistence.PersistenceStores.getRefusedCount();
         long overwritten = Math.max(0, jenkins.persistence.PersistenceStores.getConflictCount() - merged - refused);
-        return new Info(busy, total, agents, activeInstalls(j.getUpdateCenter()), lastInstallAt, merged, overwritten, refused,
+        return new Info(
+                busy,
+                total,
+                agents,
+                activeInstalls(j.getUpdateCenter()),
+                lastInstallAt,
+                merged,
+                overwritten,
+                refused,
                 ClusterTriggerCoordinator.readyHere());
     }
 
@@ -152,7 +184,8 @@ public final class MemberStatus {
         int n = 0;
         for (UpdateCenter.UpdateCenterJob job : uc.getJobs()) {
             if (job instanceof UpdateCenter.DownloadJob dj
-                    && (dj.status instanceof UpdateCenter.DownloadJob.Pending || dj.status instanceof UpdateCenter.DownloadJob.Installing)) {
+                    && (dj.status instanceof UpdateCenter.DownloadJob.Pending
+                            || dj.status instanceof UpdateCenter.DownloadJob.Installing)) {
                 n++;
             }
         }

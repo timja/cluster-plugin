@@ -1,9 +1,9 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.util.List;
 import java.util.logging.Logger;
@@ -23,15 +23,18 @@ public final class PeerVersionCheck {
 
     private PeerVersionCheck() {}
 
-    @Initializer(after = InitMilestone.EXTENSIONS_AUGMENTED, before = InitMilestone.SYSTEM_CONFIG_LOADED) // the store exists from EXTENSIONS_AUGMENTED
+    @Initializer(
+            after = InitMilestone.EXTENSIONS_AUGMENTED,
+            before = InitMilestone.SYSTEM_CONFIG_LOADED) // the store exists from EXTENSIONS_AUGMENTED
     public static void check() throws IOException {
         if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return;
         }
         int floor = store.protocolFloor();
         if (ClusterMember.PROTOCOL < floor) {
-            String message = "This controller speaks cluster protocol " + ClusterMember.PROTOCOL + ", but the cluster's schema needs "
-                    + floor + " or later (a contracted migration); run a newer version";
+            String message = "This controller speaks cluster protocol " + ClusterMember.PROTOCOL
+                    + ", but the cluster's schema needs " + floor
+                    + " or later (a contracted migration); run a newer version";
             LOGGER.severe(message);
             leave(store);
             throw new IllegalStateException(message);

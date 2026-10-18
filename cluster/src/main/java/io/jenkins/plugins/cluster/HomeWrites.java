@@ -1,8 +1,8 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.PluginWrapper;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
 import java.io.File;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -37,9 +37,9 @@ public final class HomeWrites {
         return hudson.ExtensionList.lookupSingleton(ClusterView.class);
     }
 
-
     /** Local by design: never reported. */
-    static final Pattern ALLOWED = Pattern.compile(String.join("|",
+    static final Pattern ALLOWED = Pattern.compile(String.join(
+            "|",
             "(plugins|war|logs|caches|workspace|tmp|updates|\\.cache|\\.groovy|\\.java|\\.m2|secrets)(/.*)?",
             "secret\\.key(\\.not-so-secret)?|identity\\.key\\.enc|cluster-import-report\\.txt|\\.lastStarted|\\.owner",
             "jenkins\\.install\\..*|queue\\.xml|nodeMonitors\\.xml|hudson\\.model\\.UpdateCenter\\.xml|.*FlowExecutionList\\.xml",
@@ -119,7 +119,8 @@ public final class HomeWrites {
     static String pattern(String key) {
         String[] parts = key.split("/");
         for (int i = 0; i < parts.length; i++) {
-            boolean named = i > 0 && (parts[i - 1].equals("jobs") || parts[i - 1].equals("users") || parts[i - 1].equals("nodes"));
+            boolean named = i > 0
+                    && (parts[i - 1].equals("jobs") || parts[i - 1].equals("users") || parts[i - 1].equals("nodes"));
             if (named || NUMBER.matcher(parts[i]).matches()) {
                 parts[i] = "*";
             }
@@ -129,7 +130,9 @@ public final class HomeWrites {
 
     static boolean reportable(String key, @CheckForNull PersistenceStore store) {
         // declared per controller by the code writing it (Target 15: @PerController, LocalFiles): not a finding
-        return !ALLOWED.matcher(key).matches() && (store == null || !store.owns(key)) && !PersistenceStores.declaredLocal(key);
+        return !ALLOWED.matcher(key).matches()
+                && (store == null || !store.owns(key))
+                && !PersistenceStores.declaredLocal(key);
     }
 
     static List<Finding> scan() throws IOException {
@@ -140,14 +143,18 @@ public final class HomeWrites {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                 String key = home.relativize(dir).toString().replace(File.separatorChar, '/');
-                return !key.isEmpty() && ALLOWED.matcher(key).matches() ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+                return !key.isEmpty() && ALLOWED.matcher(key).matches()
+                        ? FileVisitResult.SKIP_SUBTREE
+                        : FileVisitResult.CONTINUE;
             }
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                 String key = home.relativize(file).toString().replace(File.separatorChar, '/');
                 if (attrs.isRegularFile() && attrs.lastModifiedTime().toMillis() >= STARTED && reportable(key, store)) {
-                    byPattern.computeIfAbsent(pattern(key), k -> new ArrayList<>()).add(key);
+                    byPattern
+                            .computeIfAbsent(pattern(key), k -> new ArrayList<>())
+                            .add(key);
                 }
                 return FileVisitResult.CONTINUE;
             }

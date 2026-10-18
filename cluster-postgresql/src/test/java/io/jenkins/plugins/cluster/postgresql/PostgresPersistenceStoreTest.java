@@ -49,7 +49,8 @@ class PostgresPersistenceStoreTest {
     }
 
     /** How long until {@code observer} takes {@code other} for gone, at most {@code limitMillis} (then -1). */
-    private static long goneAfter(PostgresPersistenceStore observer, PostgresPersistenceStore other, long limitMillis) throws Exception {
+    private static long goneAfter(PostgresPersistenceStore observer, PostgresPersistenceStore other, long limitMillis)
+            throws Exception {
         long start = System.nanoTime();
         while (System.nanoTime() - start < java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(limitMillis)) {
             if (!observer.aliveMembers().contains(other.getOrigin())) {
@@ -83,7 +84,11 @@ class PostgresPersistenceStoreTest {
         b.heartbeat();
         b.stopHeartbeatForTests(false); // paused, or cut off: its session (and lock) lives on
         long paused = goneAfter(a, b, PostgresPersistenceStore.MEMBER_TIMEOUT_MILLIS + 5000);
-        assertTrue(paused >= PostgresPersistenceStore.MEMBER_TIMEOUT_MILLIS - PostgresPersistenceStore.HEARTBEAT_MILLIS - 500,
+        assertTrue(
+                paused
+                        >= PostgresPersistenceStore.MEMBER_TIMEOUT_MILLIS
+                                - PostgresPersistenceStore.HEARTBEAT_MILLIS
+                                - 500,
                 "a paused controller is not taken for gone early: " + paused + " ms");
     }
 
@@ -123,15 +128,20 @@ class PostgresPersistenceStoreTest {
     @Test
     void readsBeforeTheStoreIsSetUp() throws Exception {
         a.write("cluster/plugins.json", bytes("{}"), PersistenceStore.ABSENT);
-        assertArrayEquals(bytes("{}"), PostgresPersistenceStore.readEarly(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
-                POSTGRES.getPassword(), "cluster/plugins.json"));
-        assertNull(PostgresPersistenceStore.readEarly(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(), "cluster/none"));
+        assertArrayEquals(
+                bytes("{}"),
+                PostgresPersistenceStore.readEarly(
+                        POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(), "cluster/plugins.json"));
+        assertNull(PostgresPersistenceStore.readEarly(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(), "cluster/none"));
         try (var c = POSTGRES.createConnection("");
                 var s = c.createStatement()) {
             s.execute("drop table jenkins_store");
         }
-        assertNull(PostgresPersistenceStore.readEarly(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(),
-                "cluster/plugins.json"), "no controller has started yet");
+        assertNull(
+                PostgresPersistenceStore.readEarly(
+                        POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword(), "cluster/plugins.json"),
+                "no controller has started yet");
     }
 
     @Test
@@ -238,7 +248,9 @@ class PostgresPersistenceStoreTest {
         a.write("jobs/fx/config.xml", bytes("not part of f"), PersistenceStore.ANY);
         long fVersion = a.read("jobs/f/config.xml").version();
         List<PersistenceStore.Moved> moved = a.move("jobs/f", "jobs/g");
-        assertEquals(List.of("jobs/f/config.xml", "jobs/f/jobs/x/config.xml"), moved.stream().map(PersistenceStore.Moved::from).toList());
+        assertEquals(
+                List.of("jobs/f/config.xml", "jobs/f/jobs/x/config.xml"),
+                moved.stream().map(PersistenceStore.Moved::from).toList());
         assertEquals(fVersion, moved.get(0).fromVersion());
         assertEquals(b.read("jobs/g/config.xml").version(), moved.get(0).version(), "the version it has now");
         assertNull(b.read("jobs/f/config.xml"));
@@ -252,9 +264,13 @@ class PostgresPersistenceStoreTest {
         String lease = "jobs/p/running/1.xml";
         long epoch = a.leases().acquire(lease);
         assertTrue(a.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("mine"), PersistenceStore.ANY) > 0);
-        assertThrows(LeaseLostException.class, () -> b.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("not b's"), PersistenceStore.ANY));
+        assertThrows(
+                LeaseLostException.class,
+                () -> b.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("not b's"), PersistenceStore.ANY));
         a.leases().release(lease, epoch);
-        assertThrows(LeaseLostException.class, () -> a.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("lost"), PersistenceStore.ANY));
+        assertThrows(
+                LeaseLostException.class,
+                () -> a.writeIfHeld(lease, epoch, "jobs/p/builds/1/build.xml", bytes("lost"), PersistenceStore.ANY));
         assertArrayEquals(bytes("mine"), b.read("jobs/p/builds/1/build.xml").content());
     }
 
@@ -262,15 +278,37 @@ class PostgresPersistenceStoreTest {
     void foldsCompareAndSet() throws Exception {
         ClusterQueue q = a.queue();
         long id = q.nextId();
-        q.publish(new ClusterQueue.Record(id, "p", "p", "<actions/>", System.currentTimeMillis() + 60_000, ClusterQueue.State.WAITING,
-                a.getOrigin(), null, null, 0));
+        q.publish(new ClusterQueue.Record(
+                id,
+                "p",
+                "p",
+                "<actions/>",
+                System.currentTimeMillis() + 60_000,
+                ClusterQueue.State.WAITING,
+                a.getOrigin(),
+                null,
+                null,
+                0));
         assertTrue(q.update(id, "<actions/>", "<actions><first/></actions>", System.currentTimeMillis()));
-        assertFalse(b.queue().update(id, "<actions/>", "<actions><second/></actions>", System.currentTimeMillis()), "read before the first: merge again");
+        assertFalse(
+                b.queue().update(id, "<actions/>", "<actions><second/></actions>", System.currentTimeMillis()),
+                "read before the first: merge again");
         assertEquals("<actions><first/></actions>", q.get(id).actions());
         // a request which must run on b pins the item, unless it is pinned already
-        assertTrue(b.queue().update(id, "<actions><first/></actions>", "<actions><second/></actions>", System.currentTimeMillis(), b.getOrigin()));
+        assertTrue(b.queue()
+                .update(
+                        id,
+                        "<actions><first/></actions>",
+                        "<actions><second/></actions>",
+                        System.currentTimeMillis(),
+                        b.getOrigin()));
         assertEquals(b.getOrigin(), q.get(id).pinnedTo());
-        assertTrue(q.update(id, "<actions><second/></actions>", "<actions><third/></actions>", System.currentTimeMillis(), a.getOrigin()));
+        assertTrue(q.update(
+                id,
+                "<actions><second/></actions>",
+                "<actions><third/></actions>",
+                System.currentTimeMillis(),
+                a.getOrigin()));
         assertEquals(b.getOrigin(), q.get(id).pinnedTo());
         assertEquals("<actions><third/></actions>", q.get(id).actions());
     }
@@ -279,10 +317,20 @@ class PostgresPersistenceStoreTest {
     void claimsOnlyAsPinnedWhenRead() throws Exception {
         ClusterQueue q = a.queue();
         long id = q.nextId();
-        q.publish(new ClusterQueue.Record(id, "pins", "pins", "<actions/>", System.currentTimeMillis() + 60_000, ClusterQueue.State.WAITING,
-                a.getOrigin(), null, null, 0));
+        q.publish(new ClusterQueue.Record(
+                id,
+                "pins",
+                "pins",
+                "<actions/>",
+                System.currentTimeMillis() + 60_000,
+                ClusterQueue.State.WAITING,
+                a.getOrigin(),
+                null,
+                null,
+                0));
         // a request which must run on b was folded in after a read the item unpinned
-        assertTrue(b.queue().update(id, "<actions/>", "<actions><b/></actions>", System.currentTimeMillis(), b.getOrigin()));
+        assertTrue(b.queue()
+                .update(id, "<actions/>", "<actions><b/></actions>", System.currentTimeMillis(), b.getOrigin()));
         assertFalse(q.claim(id, null));
         assertEquals(ClusterQueue.State.WAITING, q.get(id).state());
         assertTrue(b.queue().claim(id, b.getOrigin()));
@@ -358,13 +406,15 @@ class PostgresPersistenceStoreTest {
                 }
                 a.write("jobs/fast/config.xml", bytes("fast"), PersistenceStore.ANY); // a later number, committed first
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                while (seen.stream().noneMatch(e -> e.key().equals("jobs/fast/config.xml")) && System.nanoTime() < deadline) {
+                while (seen.stream().noneMatch(e -> e.key().equals("jobs/fast/config.xml"))
+                        && System.nanoTime() < deadline) {
                     Thread.sleep(100);
                 }
                 slow.commit();
             }
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            while (seen.stream().noneMatch(e -> e.key().equals("jobs/slow/config.xml")) && System.nanoTime() < deadline) {
+            while (seen.stream().noneMatch(e -> e.key().equals("jobs/slow/config.xml"))
+                    && System.nanoTime() < deadline) {
                 Thread.sleep(100);
             }
             assertTrue(seen.stream().anyMatch(e -> e.key().equals("jobs/slow/config.xml")), "delivered late: " + seen);
@@ -374,8 +424,17 @@ class PostgresPersistenceStoreTest {
     @Test
     void childrenSkipOverEverythingBelowEachChild() throws Exception {
         // names sorting just before and after '/' (".", "-", "0"), nested keys, a key equal to a child's name
-        for (String key : List.of("jobs/a/config.xml", "jobs/a/builds/1/build.xml", "jobs/a/builds/2/build.xml", "jobs/a.b/config.xml",
-                "jobs/a-c/config.xml", "jobs/a0/config.xml", "jobs/b/jobs/c/config.xml", "jobs/z", "jobsx/config.xml", "jobs.y/config.xml")) {
+        for (String key : List.of(
+                "jobs/a/config.xml",
+                "jobs/a/builds/1/build.xml",
+                "jobs/a/builds/2/build.xml",
+                "jobs/a.b/config.xml",
+                "jobs/a-c/config.xml",
+                "jobs/a0/config.xml",
+                "jobs/b/jobs/c/config.xml",
+                "jobs/z",
+                "jobsx/config.xml",
+                "jobs.y/config.xml")) {
             a.write(key, bytes("x"), PersistenceStore.ANY);
         }
         assertEquals(java.util.Set.of("a", "a.b", "a-c", "a0", "b", "z"), a.children("jobs"));
@@ -403,10 +462,19 @@ class PostgresPersistenceStoreTest {
         assertNotNull(a.read("jobs/gone/config.xml"));
         assertNotNull(a.read("jobs/gone2/builds/1/build.xml"), "a sibling with a longer name is not below the prefix");
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
-        while (seen.stream().filter(e -> e.kind() == PersistenceStore.ChangeEvent.Kind.DELETED).count() < 50 && System.nanoTime() < deadline) {
+        while (seen.stream()
+                                .filter(e -> e.kind() == PersistenceStore.ChangeEvent.Kind.DELETED)
+                                .count()
+                        < 50
+                && System.nanoTime() < deadline) {
             Thread.sleep(50);
         }
-        assertEquals(50, seen.stream().filter(e -> e.kind() == PersistenceStore.ChangeEvent.Kind.DELETED).count(), "an event each");
+        assertEquals(
+                50,
+                seen.stream()
+                        .filter(e -> e.kind() == PersistenceStore.ChangeEvent.Kind.DELETED)
+                        .count(),
+                "an event each");
     }
 
     @Test
@@ -439,14 +507,17 @@ class PostgresPersistenceStoreTest {
         assertTrue(a.addWithinCaps(caps, 1));
         assertTrue(b.addWithinCaps(caps, 1));
         assertFalse(b.addWithinCaps(caps, 1), "the template cap (2) holds across both");
-        assertTrue(b.addWithinCaps(java.util.Map.of("cloud", 3, "other-template", 2), 1), "the cloud has room for a third");
+        assertTrue(
+                b.addWithinCaps(java.util.Map.of("cloud", 3, "other-template", 2), 1),
+                "the cloud has room for a third");
         assertFalse(a.addWithinCaps(java.util.Map.of("cloud", 3, "other-template", 2), 1), "but not a fourth");
         a.subtractFromCounters(java.util.Set.of("cloud", "template"), 1);
         assertTrue(b.addWithinCaps(caps, 1), "fits once released");
         // a controller that stops heartbeating no longer counts
         try (var c = POSTGRES.createConnection("");
                 var s = c.createStatement()) {
-            s.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '" + b.getOrigin() + "'");
+            s.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '"
+                    + b.getOrigin() + "'");
         }
         assertTrue(a.addWithinCaps(caps, 2), "b's share lapsed with its membership");
     }
@@ -469,7 +540,8 @@ class PostgresPersistenceStoreTest {
             s.execute("update jenkins_members set heartbeat_at = now() - interval '1 hour' where origin = '"
                     + a.getOrigin() + "'");
         }
-        assertEquals(0, b.leases().acquire(key), "b only just connected: it does not judge a gone yet (as after an outage)");
+        assertEquals(
+                0, b.leases().acquire(key), "b only just connected: it does not judge a gone yet (as after an outage)");
         assertNull(b.liveOrigins(), "cannot tell yet");
         b.steadyForTests();
         long second = b.leases().acquire(key);
@@ -570,8 +642,11 @@ class PostgresPersistenceStoreTest {
             long id9 = qb.nextId();
             assertEquals(id9, qb.publish(waiting(id9, "s", b.getOrigin())).id());
             assertEquals(0, b.reclaimAndPrune(), "none put back");
-            assertEquals(jenkins.persistence.ClusterQueue.State.CANCELLED, qb.get(id8).state());
-            assertEquals(jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id9).state());
+            assertEquals(
+                    jenkins.persistence.ClusterQueue.State.CANCELLED,
+                    qb.get(id8).state());
+            assertEquals(
+                    jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id9).state());
             assertTrue(qb.cancel(id9));
 
             // an item a gone controller recorded as started, with a number but nothing else (it died before the
@@ -580,11 +655,13 @@ class PostgresPersistenceStoreTest {
             qa.publish(waiting(id5, "r", a.getOrigin()));
             assertTrue(qa.claim(id5));
             qa.started(id5, 9);
-            assertEquals(java.util.List.of(new PostgresPersistenceStore.StartedItem(id5, "r", 9)),
+            assertEquals(
+                    java.util.List.of(new PostgresPersistenceStore.StartedItem(id5, "r", 9)),
                     b.startedByGone().stream().filter(i -> i.id() == id5).toList());
             assertTrue(b.startedByGone().stream().noneMatch(i -> i.id() == id1), "started by a live controller");
             b.requeueStarted(id5);
-            assertEquals(jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id5).state());
+            assertEquals(
+                    jenkins.persistence.ClusterQueue.State.WAITING, qb.get(id5).state());
             assertEquals(0, qb.get(id5).buildNumber());
 
             // the started items of a deleted (or renamed) item, and of the items inside it, are forgotten: an item
@@ -598,8 +675,11 @@ class PostgresPersistenceStoreTest {
             assertTrue(qa.claim(id7));
             qa.started(id7, 1);
             b.cancelStartedOf("d");
-            assertEquals(jenkins.persistence.ClusterQueue.State.CANCELLED, qb.get(id6).state());
-            assertEquals(jenkins.persistence.ClusterQueue.State.STARTED, qb.get(id7).state(), "not inside d");
+            assertEquals(
+                    jenkins.persistence.ClusterQueue.State.CANCELLED,
+                    qb.get(id6).state());
+            assertEquals(
+                    jenkins.persistence.ClusterQueue.State.STARTED, qb.get(id7).state(), "not inside d");
             assertTrue(b.startedByGone().stream().noneMatch(i -> i.id() == id6));
         }
     }
@@ -612,5 +692,4 @@ class PostgresPersistenceStoreTest {
         assertTrue(b.claim("job", "trigger", 101));
         assertTrue(b.claim("other", "trigger", 100));
     }
-
 }

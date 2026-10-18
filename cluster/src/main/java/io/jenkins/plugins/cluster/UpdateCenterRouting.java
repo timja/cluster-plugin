@@ -1,11 +1,11 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.util.PluginServletFilter;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -76,15 +76,20 @@ public final class UpdateCenterRouting implements Filter {
     }
 
     @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
         if (request instanceof HttpServletRequest req
                 && response instanceof HttpServletResponse rsp
                 && !Forwarding.wasForwarded(req)
                 && PersistenceStores.get() instanceof ClusterStore store
-                && PROGRESS.matcher(req.getRequestURI().substring(req.getContextPath().length())).matches()) {
+                && PROGRESS.matcher(req.getRequestURI()
+                                .substring(req.getContextPath().length()))
+                        .matches()) {
             try {
                 ClusterStore.Member t = target(store.members(), cookie(req));
-                if (t != null && !ClusterMember.NAME.equals(t.name()) && Forwarding.forward(req, rsp, t.name(), t.url())) {
+                if (t != null
+                        && !ClusterMember.NAME.equals(t.name())
+                        && Forwarding.forward(req, rsp, t.name(), t.url())) {
                     return;
                 }
             } catch (IOException | RuntimeException e) {

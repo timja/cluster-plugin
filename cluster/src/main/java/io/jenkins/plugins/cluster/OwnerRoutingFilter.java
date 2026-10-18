@@ -1,7 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.init.InitMilestone;
@@ -9,6 +7,8 @@ import hudson.init.Initializer;
 import hudson.model.Computer;
 import hudson.model.Job;
 import hudson.util.PluginServletFilter;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -131,7 +131,9 @@ public final class OwnerRoutingFilter implements Filter {
             names.add(decode(segments[i + 1]));
             i += 2;
         }
-        return names.isEmpty() || i >= segments.length || !segments[i].equals("scmPollLog") ? null : String.join("/", names);
+        return names.isEmpty() || i >= segments.length || !segments[i].equals("scmPollLog")
+                ? null
+                : String.join("/", names);
     }
 
     static final String SCM_TRIGGER = "hudson.triggers.SCMTrigger";
@@ -163,7 +165,8 @@ public final class OwnerRoutingFilter implements Filter {
     static final String SERVED_BY = "X-Jenkins-Cluster-Controller";
 
     @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
         if (response instanceof HttpServletResponse r) {
             r.setHeader(SERVED_BY, ClusterMember.NAME); // a forwarded answer overrides it with the owner's
         }
@@ -196,7 +199,8 @@ public final class OwnerRoutingFilter implements Filter {
                 } else if (pollLogPath(path) instanceof String polled
                         && Jenkins.get().getItemByFullName(polled, Job.class) != null
                         && store.lastClaimant(polled, SCM_TRIGGER) instanceof String claimant
-                        && !claimant.equals(store.getOrigin()) && store.urlOfOrigin(claimant) instanceof String pollerUrl) {
+                        && !claimant.equals(store.getOrigin())
+                        && store.urlOfOrigin(claimant) instanceof String pollerUrl) {
                     // Target 15: polling runs once per tick, on whichever controller claimed it; its log is there
                     if (relay(req, rsp, "the controller that polled", pollerUrl)) {
                         return;
@@ -217,8 +221,11 @@ public final class OwnerRoutingFilter implements Filter {
     }
 
     /** Forwards a request to its owner: a WebSocket through {@link WebSocketProxy} (Target 15), anything else through {@link Forwarding}. */
-    private static boolean relay(HttpServletRequest req, HttpServletResponse rsp, String owner, String url) throws IOException, ServletException {
-        return WebSocketProxy.isUpgrade(req) ? WebSocketProxy.proxy(req, rsp, owner, url) : Forwarding.forward(req, rsp, owner, url);
+    private static boolean relay(HttpServletRequest req, HttpServletResponse rsp, String owner, String url)
+            throws IOException, ServletException {
+        return WebSocketProxy.isUpgrade(req)
+                ? WebSocketProxy.proxy(req, rsp, owner, url)
+                : Forwarding.forward(req, rsp, owner, url);
     }
 
     /** The placeholder of a build running on another controller, which this one does not have, or null. */

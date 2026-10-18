@@ -10,15 +10,33 @@ class ClusterPluginSetTest {
 
     @Test
     void pluginChangesAreRecognized() {
-        assertEquals(new ClusterPluginSet.Change("install", null), ClusterPluginSet.changeOf("POST", "/manage/pluginManager/install"));
-        assertEquals("install", ClusterPluginSet.changeOf("POST", "/pluginManager/installPlugins").kind());
-        assertEquals("install", ClusterPluginSet.changeOf("POST", "/manage/pluginManager/uploadPlugin").kind());
-        assertEquals(new ClusterPluginSet.Change("doUninstall", "mock-slave"),
+        assertEquals(
+                new ClusterPluginSet.Change("install", null),
+                ClusterPluginSet.changeOf("POST", "/manage/pluginManager/install"));
+        assertEquals(
+                "install",
+                ClusterPluginSet.changeOf("POST", "/pluginManager/installPlugins")
+                        .kind());
+        assertEquals(
+                "install",
+                ClusterPluginSet.changeOf("POST", "/manage/pluginManager/uploadPlugin")
+                        .kind());
+        assertEquals(
+                new ClusterPluginSet.Change("doUninstall", "mock-slave"),
                 ClusterPluginSet.changeOf("POST", "/manage/pluginManager/plugin/mock-slave/doUninstall"));
-        assertEquals(new ClusterPluginSet.Change("makeDisabled", "git"), ClusterPluginSet.changeOf("POST", "/pluginManager/plugin/git/makeDisabled/"));
-        assertEquals("downgrade", ClusterPluginSet.changeOf("POST", "/updateCenter/downgrade").kind());
-        assertEquals("restart", ClusterPluginSet.changeOf("POST", "/manage/pluginManager/updates/safeRestart").kind());
-        assertEquals("restart", ClusterPluginSet.changeOf("POST", "/updateCenter/cancelRestart").kind());
+        assertEquals(
+                new ClusterPluginSet.Change("makeDisabled", "git"),
+                ClusterPluginSet.changeOf("POST", "/pluginManager/plugin/git/makeDisabled/"));
+        assertEquals(
+                "downgrade",
+                ClusterPluginSet.changeOf("POST", "/updateCenter/downgrade").kind());
+        assertEquals(
+                "restart",
+                ClusterPluginSet.changeOf("POST", "/manage/pluginManager/updates/safeRestart")
+                        .kind());
+        assertEquals(
+                "restart",
+                ClusterPluginSet.changeOf("POST", "/updateCenter/cancelRestart").kind());
     }
 
     @Test
@@ -26,7 +44,9 @@ class ClusterPluginSetTest {
         assertNull(ClusterPluginSet.changeOf("GET", "/manage/pluginManager/install"), "viewing");
         assertNull(ClusterPluginSet.changeOf("GET", "/manage/pluginManager/available"));
         assertNull(ClusterPluginSet.changeOf("POST", "/manage/pluginManager/checkUpdatesServer"));
-        assertNull(ClusterPluginSet.changeOf("POST", "/safeRestart"), "Manage Jenkins > restart: one controller, on purpose");
+        assertNull(
+                ClusterPluginSet.changeOf("POST", "/safeRestart"),
+                "Manage Jenkins > restart: one controller, on purpose");
         assertNull(ClusterPluginSet.changeOf("POST", "/job/install"));
     }
 
@@ -36,16 +56,37 @@ class ClusterPluginSetTest {
         ClusterPluginSet.Change uninstall = new ClusterPluginSet.Change("doUninstall", "git");
         assertNull(ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, install, true));
         assertNull(ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, uninstall, true));
-        assertEquals(ClusterPluginSet.DOWNGRADE, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, new ClusterPluginSet.Change("downgrade", null), true));
-        assertEquals(ClusterPluginSet.CORE_UPGRADE, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, new ClusterPluginSet.Change("upgrade", null), true));
-        assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster,
-                new ClusterPluginSet.Change("doUninstall", "cluster"), true));
-        assertEquals(ClusterPluginSet.FIXED, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, install, false), "no blob storage: cannot share");
+        assertEquals(
+                ClusterPluginSet.DOWNGRADE,
+                ClusterPluginSet.refusal(
+                        ClusterPluginSet.Mode.cluster, new ClusterPluginSet.Change("downgrade", null), true));
+        assertEquals(
+                ClusterPluginSet.CORE_UPGRADE,
+                ClusterPluginSet.refusal(
+                        ClusterPluginSet.Mode.cluster, new ClusterPluginSet.Change("upgrade", null), true));
+        assertEquals(
+                ClusterPluginSet.PROTECTED_CHANGE,
+                ClusterPluginSet.refusal(
+                        ClusterPluginSet.Mode.cluster, new ClusterPluginSet.Change("doUninstall", "cluster"), true));
+        assertEquals(
+                ClusterPluginSet.FIXED,
+                ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, install, false),
+                "no blob storage: cannot share");
         ClusterPluginSet.Change restart = new ClusterPluginSet.Change("restart", null);
-        assertEquals(ClusterPluginSet.RESTART, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, restart, true), "the cluster restarts by itself");
-        assertNull(ClusterPluginSet.refusal(ClusterPluginSet.Mode.fixed, restart, true), "nothing to roll out: a restart is a restart");
-        assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster,
-                new ClusterPluginSet.Change("install", "cluster-postgresql"), true), "e.g. the CLI installing a backend");
+        assertEquals(
+                ClusterPluginSet.RESTART,
+                ClusterPluginSet.refusal(ClusterPluginSet.Mode.cluster, restart, true),
+                "the cluster restarts by itself");
+        assertNull(
+                ClusterPluginSet.refusal(ClusterPluginSet.Mode.fixed, restart, true),
+                "nothing to roll out: a restart is a restart");
+        assertEquals(
+                ClusterPluginSet.PROTECTED_CHANGE,
+                ClusterPluginSet.refusal(
+                        ClusterPluginSet.Mode.cluster,
+                        new ClusterPluginSet.Change("install", "cluster-postgresql"),
+                        true),
+                "e.g. the CLI installing a backend");
         assertEquals(ClusterPluginSet.FIXED, ClusterPluginSet.refusal(ClusterPluginSet.Mode.fixed, install, true));
         assertNull(ClusterPluginSet.refusal(ClusterPluginSet.Mode.local, uninstall, true));
     }
@@ -53,24 +94,38 @@ class ClusterPluginSetTest {
     @Test
     void archivesOfClusterPluginsAndDowngradesAreRefused() {
         ClusterPluginSet.Mode cluster = ClusterPluginSet.Mode.cluster;
-        // the update center's install or upgrade, an upload, or a dependency of another plugin: the name is the archive's
-        assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.archiveRefusal(cluster, "cluster-postgresql", "2.0", "1.0", true));
-        assertEquals(ClusterPluginSet.PROTECTED_CHANGE, ClusterPluginSet.archiveRefusal(cluster, "cluster", "2.0", null, true));
+        // the update center's install or upgrade, an upload, or a dependency of another plugin: the name is the
+        // archive's
+        assertEquals(
+                ClusterPluginSet.PROTECTED_CHANGE,
+                ClusterPluginSet.archiveRefusal(cluster, "cluster-postgresql", "2.0", "1.0", true));
+        assertEquals(
+                ClusterPluginSet.PROTECTED_CHANGE,
+                ClusterPluginSet.archiveRefusal(cluster, "cluster", "2.0", null, true));
         assertNull(ClusterPluginSet.archiveRefusal(cluster, "git", "5.2", "5.1", true), "an upgrade");
         assertNull(ClusterPluginSet.archiveRefusal(cluster, "git", "5.1", "5.1", true), "the same version again");
         assertNull(ClusterPluginSet.archiveRefusal(cluster, "git", "5.1", null, true), "a new plugin");
         String downgrade = ClusterPluginSet.archiveRefusal(cluster, "git", "5.0.1", "5.1", true);
         assertTrue(downgrade.startsWith("git 5.0.1 is older than 5.1"), downgrade);
         assertTrue(downgrade.endsWith(ClusterPluginSet.DOWNGRADE), downgrade);
-        assertEquals(ClusterPluginSet.FIXED, ClusterPluginSet.archiveRefusal(ClusterPluginSet.Mode.fixed, "git", "5.2", "5.1", true));
-        assertNull(ClusterPluginSet.archiveRefusal(ClusterPluginSet.Mode.local, "git", "5.0", "5.1", true), "local: as without a cluster");
+        assertEquals(
+                ClusterPluginSet.FIXED,
+                ClusterPluginSet.archiveRefusal(ClusterPluginSet.Mode.fixed, "git", "5.2", "5.1", true));
+        assertNull(
+                ClusterPluginSet.archiveRefusal(ClusterPluginSet.Mode.local, "git", "5.0", "5.1", true),
+                "local: as without a cluster");
     }
 
     @Test
     void theInstallFormNamesItsPlugins() {
-        assertEquals(java.util.List.of("cluster-postgresql"), ClusterPluginSet.protectedInForm(
-                java.util.List.of("plugin.git.default", "plugin.cluster-postgresql.default", "dynamicLoad", "Jenkins-Crumb")));
-        assertTrue(ClusterPluginSet.protectedInForm(java.util.List.of("plugin.git.default", "plugin.cluster-s3-extra.default")).isEmpty());
-        assertEquals(java.util.List.of("cluster"), ClusterPluginSet.protectedInForm(java.util.List.of("plugin.cluster")));
+        assertEquals(
+                java.util.List.of("cluster-postgresql"),
+                ClusterPluginSet.protectedInForm(java.util.List.of(
+                        "plugin.git.default", "plugin.cluster-postgresql.default", "dynamicLoad", "Jenkins-Crumb")));
+        assertTrue(ClusterPluginSet.protectedInForm(
+                        java.util.List.of("plugin.git.default", "plugin.cluster-s3-extra.default"))
+                .isEmpty());
+        assertEquals(
+                java.util.List.of("cluster"), ClusterPluginSet.protectedInForm(java.util.List.of("plugin.cluster")));
     }
 }

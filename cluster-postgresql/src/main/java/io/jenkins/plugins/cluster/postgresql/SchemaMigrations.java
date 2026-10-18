@@ -36,6 +36,7 @@ final class SchemaMigrations {
     static int batch() {
         return Integer.getInteger(SchemaMigrations.class.getName() + ".batch", 1000);
     }
+
     static final long PAUSE_MILLIS = Long.getLong(SchemaMigrations.class.getName() + ".pauseMillis", 50);
 
     /** One migration. */
@@ -75,7 +76,8 @@ final class SchemaMigrations {
 
         @Override
         public List<String> indexes() {
-            return List.of("create index concurrently if not exists jenkins_store_key_prefix on jenkins_store (key text_pattern_ops)");
+            return List.of(
+                    "create index concurrently if not exists jenkins_store_key_prefix on jenkins_store (key text_pattern_ops)");
         }
     };
 
@@ -88,9 +90,10 @@ final class SchemaMigrations {
 
         @Override
         public String backfill(Connection c, String cursor, int batch) throws SQLException {
-            try (PreparedStatement ps = c.prepareStatement("with b as (select key from jenkins_store where key ~>~ ? and size is null"
-                    + " order by key using ~<~ limit ?) update jenkins_store s set size = octet_length(s.content) from b"
-                    + " where s.key = b.key returning s.key")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("with b as (select key from jenkins_store where key ~>~ ? and size is null"
+                            + " order by key using ~<~ limit ?) update jenkins_store s set size = octet_length(s.content) from b"
+                            + " where s.key = b.key returning s.key")) {
                 ps.setString(1, cursor == null ? "" : cursor);
                 ps.setInt(2, batch);
                 String last = null;
@@ -114,7 +117,8 @@ final class SchemaMigrations {
         @Override
         public void contract(Connection c) throws SQLException {
             try (Statement s = c.createStatement()) {
-                s.execute("update jenkins_store set size = octet_length(content) where size is null"); // written meanwhile
+                s.execute("update jenkins_store set size = octet_length(content) where size is null"); // written
+                // meanwhile
                 s.execute("alter table jenkins_store alter column size set not null");
             }
         }
@@ -133,8 +137,9 @@ final class SchemaMigrations {
 
     /** Creates the progress table; part of the startup schema transaction. */
     static void expand(Statement s) throws SQLException {
-        s.execute("create table if not exists jenkins_schema_migrations (id text primary key, state text not null default 'pending',"
-                + " owner text, cursor text, rows_done bigint not null default 0, started_at timestamptz, finished_at timestamptz)");
+        s.execute(
+                "create table if not exists jenkins_schema_migrations (id text primary key, state text not null default 'pending',"
+                        + " owner text, cursor text, rows_done bigint not null default 0, started_at timestamptz, finished_at timestamptz)");
         s.execute("alter table jenkins_store add column if not exists size int"); // nullable: instant
         // the protocol a contracted migration needed: the cluster's floor (protocolFloor)
         s.execute("alter table jenkins_schema_migrations add column if not exists contract_protocol int");
@@ -147,7 +152,8 @@ final class SchemaMigrations {
     int protocolFloor() throws SQLException {
         return store.migrationTransaction(c -> {
             try (Statement s = c.createStatement();
-                    ResultSet rs = s.executeQuery("select coalesce(max(contract_protocol), 0) from jenkins_schema_migrations")) {
+                    ResultSet rs = s.executeQuery(
+                            "select coalesce(max(contract_protocol), 0) from jenkins_schema_migrations")) {
                 rs.next();
                 return rs.getInt(1);
             }
@@ -209,7 +215,8 @@ final class SchemaMigrations {
             setState(m, "contracting");
         }
         try {
-            if (m.contractProtocol() > 0 && !store.peersBelow(m.contractProtocol()).isEmpty()) {
+            if (m.contractProtocol() > 0
+                    && !store.peersBelow(m.contractProtocol()).isEmpty()) {
                 return; // an older controller is still alive: later
             }
         } catch (java.io.IOException e) {
@@ -217,7 +224,8 @@ final class SchemaMigrations {
         }
         store.migrationTransaction(c -> {
             m.contract(c);
-            try (PreparedStatement ps = c.prepareStatement("update jenkins_schema_migrations set contract_protocol = ? where id = ?")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("update jenkins_schema_migrations set contract_protocol = ? where id = ?")) {
                 ps.setInt(1, m.contractProtocol());
                 ps.setString(2, m.id());
                 ps.executeUpdate();
@@ -225,8 +233,9 @@ final class SchemaMigrations {
             return null;
         });
         store.migrationTransaction(c -> {
-            try (PreparedStatement ps = c.prepareStatement("update jenkins_schema_migrations set state = 'done', finished_at = now(),"
-                    + " owner = null where id = ?")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("update jenkins_schema_migrations set state = 'done', finished_at = now(),"
+                            + " owner = null where id = ?")) {
                 ps.setString(1, m.id());
                 ps.executeUpdate();
             }
@@ -245,14 +254,16 @@ final class SchemaMigrations {
             return null;
         }
         return store.migrationTransaction(c -> {
-            try (PreparedStatement ps = c.prepareStatement("insert into jenkins_schema_migrations (id) values (?) on conflict do nothing")) {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "insert into jenkins_schema_migrations (id) values (?) on conflict do nothing")) {
                 ps.setString(1, m.id());
                 ps.executeUpdate();
             }
             String state;
             String owner;
             long rows;
-            try (PreparedStatement ps = c.prepareStatement("select state, owner, rows_done from jenkins_schema_migrations where id = ? for update")) {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "select state, owner, rows_done from jenkins_schema_migrations where id = ? for update")) {
                 ps.setString(1, m.id());
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
@@ -282,7 +293,8 @@ final class SchemaMigrations {
 
     private String cursorOf(Migration m) throws SQLException {
         return store.migrationTransaction(c -> {
-            try (PreparedStatement ps = c.prepareStatement("select cursor from jenkins_schema_migrations where id = ?")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("select cursor from jenkins_schema_migrations where id = ?")) {
                 ps.setString(1, m.id());
                 try (ResultSet rs = ps.executeQuery()) {
                     return rs.next() ? rs.getString(1) : null;
@@ -293,7 +305,8 @@ final class SchemaMigrations {
 
     private void setState(Migration m, String state) throws SQLException {
         store.migrationTransaction(c -> {
-            try (PreparedStatement ps = c.prepareStatement("update jenkins_schema_migrations set state = ? where id = ?")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("update jenkins_schema_migrations set state = ? where id = ?")) {
                 ps.setString(1, state);
                 ps.setString(2, m.id());
                 ps.executeUpdate();
@@ -307,8 +320,9 @@ final class SchemaMigrations {
         String name = sql.replaceFirst("(?i).*if not exists\\s+(\\S+)\\s+on.*", "$1");
         try (Connection c = store.directConnection()) {
             c.setAutoCommit(true);
-            try (PreparedStatement ps = c.prepareStatement("select i.indisvalid from pg_index i join pg_class r on r.oid = i.indexrelid"
-                    + " where r.relname = ?")) {
+            try (PreparedStatement ps =
+                    c.prepareStatement("select i.indisvalid from pg_index i join pg_class r on r.oid = i.indexrelid"
+                            + " where r.relname = ?")) {
                 ps.setString(1, name);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next() && !rs.getBoolean(1)) {
@@ -329,7 +343,8 @@ final class SchemaMigrations {
     List<Progress> progress() throws SQLException {
         return store.migrationTransaction(c -> {
             List<Progress> result = new ArrayList<>();
-            try (PreparedStatement ps = c.prepareStatement("select id, state, owner, rows_done from jenkins_schema_migrations order by id");
+            try (PreparedStatement ps = c.prepareStatement(
+                            "select id, state, owner, rows_done from jenkins_schema_migrations order by id");
                     ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     result.add(new Progress(rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)));

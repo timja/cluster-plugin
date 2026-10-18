@@ -3,8 +3,8 @@ package io.jenkins.plugins.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.Map;
-import org.kohsuke.stapler.ClassDescriptor;
 import org.junit.jupiter.api.Test;
+import org.kohsuke.stapler.ClassDescriptor;
 
 class ClusterFingerprintStorageTest {
 
@@ -42,7 +42,8 @@ class ClusterFingerprintStorageTest {
         // we read {a: 1-3, b: 1}; we trimmed a#1 and b (deleted builds); meanwhile a#4 was added elsewhere
         assertEquals(
                 Map.of("a", "2-4"),
-                ClusterFingerprintStorage.merge(Map.of("a", "1-3", "b", "1"), Map.of("a", "2-3"), Map.of("a", "1-4", "b", "1")));
+                ClusterFingerprintStorage.merge(
+                        Map.of("a", "1-3", "b", "1"), Map.of("a", "2-3"), Map.of("a", "1-4", "b", "1")));
     }
 
     @Test

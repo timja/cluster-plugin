@@ -21,7 +21,9 @@ public final class ArtifactManagerRequired extends AdministrativeMonitor {
 
     static boolean missing() {
         return PersistenceStores.get() != null
-                && ArtifactManagerConfiguration.get().getArtifactManagerFactories().isEmpty();
+                && ArtifactManagerConfiguration.get()
+                        .getArtifactManagerFactories()
+                        .isEmpty();
     }
 
     @Override
@@ -34,12 +36,15 @@ public final class ArtifactManagerRequired extends AdministrativeMonitor {
         return missing();
     }
 
-    @Initializer(after = InitMilestone.JOB_CONFIG_ADAPTED) // not after COMPLETED: that keeps the reactor from reaching it (JENKINS-37759)
+    @Initializer(
+            after = InitMilestone.JOB_CONFIG_ADAPTED) // not after COMPLETED: that keeps the reactor from reaching it
+    // (JENKINS-37759)
     public static void check() {
         if (missing()) {
-            LOGGER.severe("No artifact manager is configured: artifacts and stashes stay on the controller that made them,"
-                    + " so builds adopted by another controller lose their stashes, and fresh controllers lack earlier"
-                    + " builds' artifacts. Configure one keeping them in shared storage (e.g. azure-artifact-manager or artifact-manager-s3).");
+            LOGGER.severe(
+                    "No artifact manager is configured: artifacts and stashes stay on the controller that made them,"
+                            + " so builds adopted by another controller lose their stashes, and fresh controllers lack earlier"
+                            + " builds' artifacts. Configure one keeping them in shared storage (e.g. azure-artifact-manager or artifact-manager-s3).");
         }
     }
 }

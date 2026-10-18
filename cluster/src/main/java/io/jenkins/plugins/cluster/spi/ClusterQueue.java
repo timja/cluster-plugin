@@ -24,7 +24,12 @@ import java.util.function.Consumer;
  */
 public interface ClusterQueue {
 
-    enum State { WAITING, CLAIMED, STARTED, CANCELLED }
+    enum State {
+        WAITING,
+        CLAIMED,
+        STARTED,
+        CANCELLED
+    }
 
     /**
      * An item in the shared queue.
@@ -40,8 +45,18 @@ public interface ClusterQueue {
      * @param claimedBy the origin which claimed it, if claimed or started
      * @param buildNumber once started
      */
-    record Record(long id, @NonNull String itemUuid, @NonNull String task, @NonNull String dedupKey, @NonNull String actions, long dueAt, @NonNull State state,
-            @NonNull String origin, @CheckForNull String pinnedTo, @CheckForNull String claimedBy, int buildNumber) {}
+    record Record(
+            long id,
+            @NonNull String itemUuid,
+            @NonNull String task,
+            @NonNull String dedupKey,
+            @NonNull String actions,
+            long dueAt,
+            @NonNull State state,
+            @NonNull String origin,
+            @CheckForNull String pinnedTo,
+            @CheckForNull String claimedBy,
+            int buildNumber) {}
 
     /** A new unique id. */
     long nextId() throws IOException;
@@ -77,10 +92,13 @@ public interface ClusterQueue {
      *     must run where it was made)
      * @return false if the item is not waiting, or its actions changed meanwhile (read it again and merge again)
      */
-    boolean update(long id, @NonNull String expectedActions, @NonNull String actions, long dueAt, @CheckForNull String pinTo) throws IOException;
+    boolean update(
+            long id, @NonNull String expectedActions, @NonNull String actions, long dueAt, @CheckForNull String pinTo)
+            throws IOException;
 
     /** {@link #update(long, String, String, long, String)}, pinning nothing. */
-    default boolean update(long id, @NonNull String expectedActions, @NonNull String actions, long dueAt) throws IOException {
+    default boolean update(long id, @NonNull String expectedActions, @NonNull String actions, long dueAt)
+            throws IOException {
         return update(id, expectedActions, actions, dueAt, null);
     }
 

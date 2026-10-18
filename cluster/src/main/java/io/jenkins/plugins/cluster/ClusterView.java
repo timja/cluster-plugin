@@ -1,13 +1,13 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.model.Api;
 import hudson.model.ManagementLink;
 import hudson.security.Permission;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.io.StringReader;
@@ -208,8 +208,11 @@ public final class ClusterView extends ManagementLink {
                 }
                 Properties p = new Properties();
                 p.load(new StringReader(new String(e.getValue(), StandardCharsets.UTF_8)));
-                result.add(new RunningBuild(m.group(1).replace("/jobs/", "/"), Integer.parseInt(m.group(2)),
-                        p.getProperty("controller", "?"), Long.parseLong(p.getProperty("startTime", "0"))));
+                result.add(new RunningBuild(
+                        m.group(1).replace("/jobs/", "/"),
+                        Integer.parseInt(m.group(2)),
+                        p.getProperty("controller", "?"),
+                        Long.parseLong(p.getProperty("startTime", "0"))));
             }
         }
         return result;
@@ -224,10 +227,14 @@ public final class ClusterView extends ManagementLink {
             java.util.Map<String, int[]> executors = new java.util.HashMap<>();
             for (ClusterStore.Member m : store.members()) {
                 if (m.alive()) {
-                    MemberStatus.Info.parse(m.info()).agents().forEach((agent, counts) -> executors.put(m.name() + "/" + agent, counts));
+                    MemberStatus.Info.parse(m.info())
+                            .agents()
+                            .forEach((agent, counts) -> executors.put(m.name() + "/" + agent, counts));
                 }
             }
-            store.channels().forEach((agent, controller) -> result.add(new Channel(agent, controller, executors.get(controller + "/" + agent))));
+            store.channels()
+                    .forEach((agent, controller) ->
+                            result.add(new Channel(agent, controller, executors.get(controller + "/" + agent))));
         }
         return result;
     }

@@ -1,9 +1,9 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import hudson.Extension;
 import hudson.ExtensionList;
 import hudson.model.PageDecorator;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jenkins.persistence.PersistenceStores;
 
 /**
@@ -15,7 +15,8 @@ public final class ClusterPluginManagerNotice extends PageDecorator {
 
     /** Whether to show the notice: a cluster store, with plugin changes shared (not {@code fixed} or {@code local}). */
     public boolean isActive() {
-        return PersistenceStores.get() instanceof ClusterStore && ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster;
+        return PersistenceStores.get() instanceof ClusterStore
+                && ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster;
     }
 
     /** Whether plugin changes are refused here ({@code fixed} mode): the notice says so instead. */

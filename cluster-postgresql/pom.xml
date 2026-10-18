@@ -40,17 +40,6 @@
   </dependencyManagement>
   <dependencies>
     <dependency>
-      <groupId>io.jenkins.plugins</groupId>
-      <artifactId>cluster</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <!-- the PostgreSQL JDBC driver -->
-      <groupId>io.jenkins.plugins</groupId>
-      <artifactId>postgresql-api</artifactId>
-      <version>42.7.11-94.v50c5c1c8f3b_d</version>
-    </dependency>
-    <dependency>
       <!-- Target 14: pooled connections with timeouts, so a slow or unreachable database does not serialize or hang the controller (Jenkins core provides slf4j-api) -->
       <groupId>com.zaxxer</groupId>
       <artifactId>HikariCP</artifactId>
@@ -61,6 +50,17 @@
           <artifactId>slf4j-api</artifactId>
         </exclusion>
       </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.jenkins.plugins</groupId>
+      <artifactId>cluster</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <!-- the PostgreSQL JDBC driver -->
+      <groupId>io.jenkins.plugins</groupId>
+      <artifactId>postgresql-api</artifactId>
+      <version>42.7.11-94.v50c5c1c8f3b_d</version>
     </dependency>
     <dependency>
       <groupId>org.testcontainers</groupId>

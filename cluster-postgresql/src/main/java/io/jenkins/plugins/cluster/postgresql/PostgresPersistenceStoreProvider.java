@@ -1,9 +1,9 @@
 package io.jenkins.plugins.cluster.postgresql;
 
-import io.jenkins.plugins.cluster.ClusterStartup;
-import io.jenkins.plugins.cluster.spi.ClusterMember;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.Extension;
+import io.jenkins.plugins.cluster.ClusterStartup;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -38,10 +38,9 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
      * Per-controller files at the root are excluded, as are files mixing configuration with runtime state:
      * lockable-resources' (declared resources with each controller's waiting builds; Target 5 shares its locks).
      */
-    static final Pattern STATIC = Pattern.compile(
-            "users/[^/]+/config\\.xml|nodes/[^/]+/config\\.xml|log/[^/]+\\.xml"
-                    + "|(?!queue\\.xml$|nodeMonitors\\.xml$|hudson\\.model\\.UpdateCenter\\.xml$|jenkins\\.install\\.|.*FlowExecutionList\\.xml$"
-                    + "|org\\.jenkins\\.plugins\\.lockableresources\\.LockableResourcesManager\\.xml$)[^/]+\\.xml");
+    static final Pattern STATIC = Pattern.compile("users/[^/]+/config\\.xml|nodes/[^/]+/config\\.xml|log/[^/]+\\.xml"
+            + "|(?!queue\\.xml$|nodeMonitors\\.xml$|hudson\\.model\\.UpdateCenter\\.xml$|jenkins\\.install\\.|.*FlowExecutionList\\.xml$"
+            + "|org\\.jenkins\\.plugins\\.lockableresources\\.LockableResourcesManager\\.xml$)[^/]+\\.xml");
 
     /** Whether static state is shared; on by default. */
     static final boolean SHARE_STATIC = !"false"
@@ -59,7 +58,8 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
         if (url == null) {
             return null;
         }
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
+        long deadline =
+                System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(ClusterMember.STARTUP_WAIT_SECONDS);
         long delay = 1000;
         while (true) {
             PostgresPersistenceStore store = null;
@@ -72,7 +72,8 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
                 // a controller leaving: its builds are adopted (or closed) and its queue items put back now (Target 14)
                 PostgresPersistenceStore created = store;
                 store.onMembersLeft(left -> ClusterStartup.membersLeft(created));
-                ClusterStartup.beforeJoining(store); // Target 15: refuses a controller without the cluster's key material
+                ClusterStartup.beforeJoining(
+                        store); // Target 15: refuses a controller without the cluster's key material
                 store.startHeartbeat();
                 ClusterStartup.afterJoining(store); // only with -D…importHome=true
                 return store;

@@ -1,8 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
-import io.jenkins.plugins.cluster.spi.EarlyStoreReader;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
@@ -15,6 +12,9 @@ import hudson.lifecycle.Lifecycle;
 import hudson.lifecycle.RestartNotSupportedException;
 import hudson.model.AdministrativeMonitor;
 import hudson.util.VersionNumber;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.EarlyStoreReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -65,7 +65,8 @@ public final class ClusterPlugins {
     static final String RESTART_KEY = "cluster/plugins.restart";
     static final String BLOBS = "cluster-plugins/";
     /** The cluster plugins themselves are part of the image and never changed through the cluster. */
-    static final java.util.Set<String> PROTECTED = java.util.Set.of("cluster", "cluster-postgresql", "cluster-azure-blob", "cluster-s3");
+    static final java.util.Set<String> PROTECTED =
+            java.util.Set.of("cluster", "cluster-postgresql", "cluster-azure-blob", "cluster-s3");
 
     /** Whether a plugin is one of the cluster plugins, which are never changed at runtime. */
     static boolean isProtected(String name) {
@@ -82,13 +83,25 @@ public final class ClusterPlugins {
     static final String RESTARTED_FOR = ".cluster-restarted-for";
     /** In {@code plugins/}: the generation a fresh home fetched plugins for at boot, so that the boot restart is never repeated. */
     static final String BOOT_FETCHED_FOR = ".cluster-boot-fetched-for";
-    static final long LOCK_TIMEOUT_MILLIS = Long.getLong(ClusterPlugins.class.getName() + ".lockTimeoutMinutes", 10) * 60_000;
+
+    static final long LOCK_TIMEOUT_MILLIS =
+            Long.getLong(ClusterPlugins.class.getName() + ".lockTimeoutMinutes", 10) * 60_000;
     static final long PERIOD_SECONDS = Long.getLong(ClusterPlugins.class.getName() + ".periodSeconds", 60);
 
-    enum State { installed, uninstalled, disabled }
+    enum State {
+        installed,
+        uninstalled,
+        disabled
+    }
 
     /** One plugin's desired state. {@code version}, {@code sha256} and {@code blob} are null when no archive is shared (e.g. enabling an image plugin). */
-    record Entry(State state, @CheckForNull String version, @CheckForNull String sha256, @CheckForNull String blob, String by, long at) {
+    record Entry(
+            State state,
+            @CheckForNull String version,
+            @CheckForNull String sha256,
+            @CheckForNull String blob,
+            String by,
+            long at) {
         JSONObject toJson() {
             JSONObject o = new JSONObject();
             o.put("state", state.name());
@@ -103,8 +116,13 @@ public final class ClusterPlugins {
         }
 
         static Entry fromJson(JSONObject o) {
-            return new Entry(State.valueOf(o.getString("state")), o.optString("version", null), o.optString("sha256", null),
-                    o.optString("blob", null), o.optString("by", ""), o.optLong("at"));
+            return new Entry(
+                    State.valueOf(o.getString("state")),
+                    o.optString("version", null),
+                    o.optString("sha256", null),
+                    o.optString("blob", null),
+                    o.optString("by", ""),
+                    o.optLong("at"));
         }
     }
 
@@ -145,7 +163,14 @@ public final class ClusterPlugins {
     }
 
     /** What this controller has to do to its files for one plugin. */
-    enum Action { NONE, LOAD, REPLACE, DELETE, DISABLE, ENABLE }
+    enum Action {
+        NONE,
+        LOAD,
+        REPLACE,
+        DELETE,
+        DISABLE,
+        ENABLE
+    }
 
     /**
      * The file change one plugin needs here.
@@ -163,7 +188,8 @@ public final class ClusterPlugins {
                 if (localVersion == null) {
                     return desired.blob() == null ? Action.NONE : Action.LOAD;
                 }
-                if (desired.blob() != null && new VersionNumber(localVersion).isOlderThan(new VersionNumber(desired.version()))) {
+                if (desired.blob() != null
+                        && new VersionNumber(localVersion).isOlderThan(new VersionNumber(desired.version()))) {
                     return Action.REPLACE; // never downgrades: a newer image wins
                 }
                 return localEnabled ? Action.NONE : Action.ENABLE;
@@ -178,8 +204,12 @@ public final class ClusterPlugins {
      * @param loadedVersion its version as loaded, or null
      * @param localVersion its version on disk, or null if there is no archive
      */
-    static boolean needsRestart(@NonNull Entry desired, boolean loaded, @CheckForNull String loadedVersion,
-            @CheckForNull String localVersion, boolean localEnabled) {
+    static boolean needsRestart(
+            @NonNull Entry desired,
+            boolean loaded,
+            @CheckForNull String loadedVersion,
+            @CheckForNull String localVersion,
+            boolean localEnabled) {
         switch (desired.state()) {
             case uninstalled:
                 return loaded && localVersion == null;
@@ -205,9 +235,14 @@ public final class ClusterPlugins {
      * The same with what is going on (Target 15): {@code applying=<plugin>} while a plugin is fetched and loaded, and
      * {@code failed=<a>,<b>} for plugins that could not be applied. Older readers ignore the extra words.
      */
-    static String status(long generation, boolean restartPending, boolean restartRefused, @CheckForNull String applying,
+    static String status(
+            long generation,
+            boolean restartPending,
+            boolean restartRefused,
+            @CheckForNull String applying,
             java.util.Collection<String> failed) {
-        return status(generation, restartPending, restartRefused) + (applying == null ? "" : " applying=" + applying)
+        return status(generation, restartPending, restartRefused)
+                + (applying == null ? "" : " applying=" + applying)
                 + (failed.isEmpty() ? "" : " failed=" + String.join(",", failed));
     }
 
@@ -262,6 +297,7 @@ public final class ClusterPlugins {
 
     /** Plugins whose archive here was changed by the cluster since startup: name → version written (or the state). */
     private static final Map<String, String> staged = new ConcurrentHashMap<>();
+
     private static volatile long appliedGeneration;
     private static volatile boolean restartPending;
     private static volatile boolean restartRefused;
@@ -273,7 +309,9 @@ public final class ClusterPlugins {
     }
 
     static boolean active() {
-        return ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster && store() != null && PersistenceStores.getBlobStore() != null;
+        return ClusterPluginSet.MODE == ClusterPluginSet.Mode.cluster
+                && store() != null
+                && PersistenceStores.getBlobStore() != null;
     }
 
     @Initializer(after = InitMilestone.JOB_LOADED)
@@ -283,7 +321,8 @@ public final class ClusterPlugins {
             return;
         }
         store.subscribe(e -> {
-            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN && !store.getOrigin().equals(e.origin())
+            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN
+                    && !store.getOrigin().equals(e.origin())
                     && (KEY.equals(e.key()) || RESTART_KEY.equals(e.key()))) {
                 Timer.get().submit(ClusterPlugins::reconcile);
             } else if (e.kind() == PersistenceStore.ChangeEvent.Kind.DELETED && RESTART_KEY.equals(e.key())) {
@@ -307,7 +346,9 @@ public final class ClusterPlugins {
     @Initializer(after = InitMilestone.PLUGINS_STARTED, before = InitMilestone.EXTENSIONS_AUGMENTED)
     public static void bootstrap() {
         Jenkins j = Jenkins.get();
-        if (ClusterPluginSet.MODE != ClusterPluginSet.Mode.cluster || !isFreshHome(j.getRootDir()) || !Lifecycle.get().canRestart()) {
+        if (ClusterPluginSet.MODE != ClusterPluginSet.Mode.cluster
+                || !isFreshHome(j.getRootDir())
+                || !Lifecycle.get().canRestart()) {
             return; // applied once up, loading new plugins live
         }
         try {
@@ -323,7 +364,8 @@ public final class ClusterPlugins {
             Map<String, Entry> missing = missingAtBoot(overlay, rootDir);
             File guard = new File(rootDir, BOOT_FETCHED_FOR);
             if (missing.isEmpty()
-                    || guard.isFile() && Files.readString(guard.toPath()).trim().equals(String.valueOf(overlay.generation()))) {
+                    || guard.isFile()
+                            && Files.readString(guard.toPath()).trim().equals(String.valueOf(overlay.generation()))) {
                 return;
             }
             BlobStore blobs = null;
@@ -341,7 +383,8 @@ public final class ClusterPlugins {
                 return;
             }
             Files.writeString(guard.toPath(), String.valueOf(overlay.generation()));
-            LOGGER.info(() -> "Fetched the cluster's plugins " + fetched + " for this fresh home; restarting once, before anything is loaded");
+            LOGGER.info(() -> "Fetched the cluster's plugins " + fetched
+                    + " for this fresh home; restarting once, before anything is loaded");
             j.restart();
         } catch (RestartNotSupportedException e) {
             LOGGER.log(Level.WARNING, "Could not restart for the cluster's plugins; they are applied once up", e);
@@ -363,7 +406,8 @@ public final class ClusterPlugins {
         if (interrupted) {
             Thread.currentThread().interrupt();
         }
-        LOGGER.warning("Still not restarted for the cluster's plugins; starting without them loaded (they are applied once up)");
+        LOGGER.warning(
+                "Still not restarted for the cluster's plugins; starting without them loaded (they are applied once up)");
     }
 
     /** Whether this home has never loaded anything: no items and no saved queue. */
@@ -428,7 +472,9 @@ public final class ClusterPlugins {
             }
             marker(name, true);
             staged.put(name, version);
-            record(name, new Entry(State.installed, version, sha256, blob, ClusterMember.NAME, System.currentTimeMillis()));
+            record(
+                    name,
+                    new Entry(State.installed, version, sha256, blob, ClusterMember.NAME, System.currentTimeMillis()));
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.WARNING, "Could not share the installation of " + archive + " with the cluster", e);
         }
@@ -452,7 +498,8 @@ public final class ClusterPlugins {
             return null; // not a plugin: the update center says so
         }
         String version = m.getMainAttributes().getValue("Plugin-Version");
-        return ClusterPluginSet.archiveRefusal(ClusterPluginSet.MODE, name, version, active() ? newestKnown(name) : null, active());
+        return ClusterPluginSet.archiveRefusal(
+                ClusterPluginSet.MODE, name, version, active() ? newestKnown(name) : null, active());
     }
 
     /** The newest version of a plugin in the cluster's plugin set (installed there) or in {@code plugins/} here, or null. */
@@ -500,18 +547,21 @@ public final class ClusterPlugins {
 
     /** What {@link #staged} holds once a plugin's files are as the entry wants them: the version installed, else the state. */
     private static String stagedAs(Entry desired) {
-        return desired.state() == State.installed && desired.version() != null ? desired.version() : desired.state().name();
+        return desired.state() == State.installed && desired.version() != null
+                ? desired.version()
+                : desired.state().name();
     }
 
     private static void record(String name, Entry entry) throws IOException {
         ClusterStore store = store();
         for (int attempt = 0; ; attempt++) {
             PersistenceStore.Entry current = store.read(KEY);
-            Overlay next = Overlay.parse(current == null ? null : current.content()).with(name, entry);
+            Overlay next =
+                    Overlay.parse(current == null ? null : current.content()).with(name, entry);
             try {
                 store.write(KEY, next.toBytes(), current == null ? PersistenceStore.ABSENT : current.version());
-                LOGGER.info(() -> "Cluster plugin set generation " + next.generation() + ": " + name + " " + entry.state()
-                        + (entry.version() == null ? "" : " " + entry.version()));
+                LOGGER.info(() -> "Cluster plugin set generation " + next.generation() + ": " + name + " "
+                        + entry.state() + (entry.version() == null ? "" : " " + entry.version()));
                 // e.g. a restart is now needed here too, once the update center is done with it
                 Timer.get().schedule(ClusterPlugins::reconcile, 15, TimeUnit.SECONDS);
                 return;
@@ -580,8 +630,10 @@ public final class ClusterPlugins {
 
     /** Whether the update center here is still installing this plugin (its archive may be on disk, not yet loaded). */
     private static boolean installing(String name) {
-        for (hudson.model.UpdateCenter.UpdateCenterJob job : Jenkins.get().getUpdateCenter().getJobs()) {
-            if (job instanceof hudson.model.UpdateCenter.DownloadJob dj && name.equals(dj.getName())
+        for (hudson.model.UpdateCenter.UpdateCenterJob job :
+                Jenkins.get().getUpdateCenter().getJobs()) {
+            if (job instanceof hudson.model.UpdateCenter.DownloadJob dj
+                    && name.equals(dj.getName())
                     && (dj.status instanceof hudson.model.UpdateCenter.DownloadJob.Pending
                             || dj.status instanceof hudson.model.UpdateCenter.DownloadJob.Installing)) {
                 return true;
@@ -599,8 +651,10 @@ public final class ClusterPlugins {
         Action action = decide(desired, localVersion, localEnabled);
         String stagedAs = staged.get(name);
         if (action != Action.NONE && !(stagedAs != null && stagedAs.equals(stagedAs(desired)))) {
-            LOGGER.info(() -> "Applying the cluster's plugin set: " + name + " " + action + (desired.version() == null ? "" : " " + desired.version()));
-            ClusterMember.pluginsStatus = status(appliedGeneration, restartPending, restartRefused, name, java.util.List.of());
+            LOGGER.info(() -> "Applying the cluster's plugin set: " + name + " " + action
+                    + (desired.version() == null ? "" : " " + desired.version()));
+            ClusterMember.pluginsStatus =
+                    status(appliedGeneration, restartPending, restartRefused, name, java.util.List.of());
             switch (action) {
                 case LOAD, REPLACE -> {
                     File target = new File(pm.rootDir, name + ".jpi");
@@ -613,11 +667,13 @@ public final class ClusterPlugins {
                             pm.dynamicLoad(target);
                             LOGGER.info(() -> "Loaded " + name + " " + desired.version() + " live");
                         } catch (jenkins.RestartRequiredException ignored) {
-                            // not dynamically loadable, or a dependency is missing until a restart: needsRestart says so below
+                            // not dynamically loadable, or a dependency is missing until a restart: needsRestart says
+                            // so below
                         } catch (InterruptedException x) {
                             Thread.currentThread().interrupt();
                         } catch (RuntimeException | IOException x) {
-                            LOGGER.log(Level.WARNING, "Could not load " + name + " live; it is applied by a restart", x);
+                            LOGGER.log(
+                                    Level.WARNING, "Could not load " + name + " live; it is applied by a restart", x);
                         }
                     }
                 }
@@ -683,7 +739,8 @@ public final class ClusterPlugins {
         String sha = sha256(tmp);
         if (!sha.equals(desired.sha256())) {
             Files.deleteIfExists(tmp.toPath());
-            throw new IOException("The cluster's archive " + desired.blob() + " has checksum " + sha + ", expected " + desired.sha256());
+            throw new IOException("The cluster's archive " + desired.blob() + " has checksum " + sha + ", expected "
+                    + desired.sha256());
         }
         Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
@@ -695,7 +752,9 @@ public final class ClusterPlugins {
     private static void marker(File rootDir, String name, boolean present) throws IOException {
         File marker = new File(rootDir, name + ".jpi" + MARKER);
         if (present) {
-            Files.writeString(marker.toPath(), "written by the cluster's plugin set; the image entrypoint leaves this plugin alone\n");
+            Files.writeString(
+                    marker.toPath(),
+                    "written by the cluster's plugin set; the image entrypoint leaves this plugin alone\n");
         } else {
             Files.deleteIfExists(marker.toPath());
         }
@@ -721,8 +780,8 @@ public final class ClusterPlugins {
         File guard = new File(Jenkins.get().getPluginManager().rootDir, RESTARTED_FOR);
         if (guard.isFile() && Files.readString(guard.toPath()).trim().equals(String.valueOf(generation))) {
             if (!restartRefused) {
-                LOGGER.warning(() -> "The cluster's plugin set (generation " + generation + ") still differs after a restart for it;"
-                        + " not restarting again (see the plugin manager)");
+                LOGGER.warning(() -> "The cluster's plugin set (generation " + generation
+                        + ") still differs after a restart for it;" + " not restarting again (see the plugin manager)");
             }
             restartRefused = true;
             releaseLock(store);
@@ -741,10 +800,11 @@ public final class ClusterPlugins {
                 }
             } else {
                 Set<String> live = store.liveOrigins();
-                boolean holderAlive = live == null || live.contains(holder.optString("origin")); // cannot tell: assume alive
+                boolean holderAlive =
+                        live == null || live.contains(holder.optString("origin")); // cannot tell: assume alive
                 if (lockExpired(holder.optLong("since"), System.currentTimeMillis(), holderAlive)) {
-                    LOGGER.warning(() -> "Breaking the plugin restart lock of " + holder.optString("name") + ", held since "
-                            + new java.util.Date(holder.optLong("since")));
+                    LOGGER.warning(() -> "Breaking the plugin restart lock of " + holder.optString("name")
+                            + ", held since " + new java.util.Date(holder.optLong("since")));
                     store.delete(RESTART_KEY, lock.version());
                 }
                 return; // someone else's turn
@@ -762,7 +822,8 @@ public final class ClusterPlugins {
         }
         Files.writeString(guard.toPath(), String.valueOf(generation));
         restarting = true;
-        LOGGER.info(() -> "Restarting to apply the cluster's plugin set (generation " + generation + "): Pipelines pause and resume, other builds are waited for");
+        LOGGER.info(() -> "Restarting to apply the cluster's plugin set (generation " + generation
+                + "): Pipelines pause and resume, other builds are waited for");
         Thread t = new Thread(ClusterPlugins::restartWhenIdle, "cluster plugins restart");
         t.setDaemon(true);
         t.start();
@@ -802,7 +863,8 @@ public final class ClusterPlugins {
             if (ClusterMember.NAME.equals(holder.optString("name"))) {
                 try {
                     store.delete(RESTART_KEY, lock.version());
-                    LOGGER.info("Released the plugin restart lock: this controller is up to date with the cluster's plugin set");
+                    LOGGER.info(
+                            "Released the plugin restart lock: this controller is up to date with the cluster's plugin set");
                 } catch (ConflictException ignored) {
                     // changed meanwhile
                 }

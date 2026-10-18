@@ -57,7 +57,10 @@ public abstract class ClusterBlobStoreContract {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         assertTrue(blobs.download("jobs/p/builds/1/files.tgz", out));
         assertEquals("two", out.toString(StandardCharsets.UTF_8));
-        assertEquals(List.of("jobs/p/builds/1/files.tgz"), blobs.list("jobs/p/builds/1"), "below the key, not beside it (builds/10)");
+        assertEquals(
+                List.of("jobs/p/builds/1/files.tgz"),
+                blobs.list("jobs/p/builds/1"),
+                "below the key, not beside it (builds/10)");
         assertEquals(3, blobs.list("jobs/p").size());
         blobs.move("jobs/p", "jobs/q");
         assertTrue(blobs.list("jobs/p").isEmpty());
@@ -127,7 +130,9 @@ public abstract class ClusterBlobStoreContract {
         put(blobs, "jobs/p/builds/1/log.d/x", "one");
         put(blobs, "jobs/p/builds/1/log.d/y", "three");
         put(blobs, "jobs/p/builds/1/log.dx", "beside");
-        assertEquals(java.util.Map.of("jobs/p/builds/1/log.d/x", 3L, "jobs/p/builds/1/log.d/y", 5L), blobs.sizes("jobs/p/builds/1/log.d"));
+        assertEquals(
+                java.util.Map.of("jobs/p/builds/1/log.d/x", 3L, "jobs/p/builds/1/log.d/y", 5L),
+                blobs.sizes("jobs/p/builds/1/log.d"));
     }
 
     @Test

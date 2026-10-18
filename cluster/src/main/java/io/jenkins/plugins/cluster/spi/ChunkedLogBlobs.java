@@ -77,7 +77,11 @@ public final class ChunkedLogBlobs implements LogBlobs {
             if (s != null) {
                 int dot = s.indexOf('.');
                 try {
-                    return dot == -1 ? new Epoch(Long.parseLong(s.trim()), "") : new Epoch(Long.parseLong(s.substring(0, dot)), s.substring(dot + 1).trim());
+                    return dot == -1
+                            ? new Epoch(Long.parseLong(s.trim()), "")
+                            : new Epoch(
+                                    Long.parseLong(s.substring(0, dot)),
+                                    s.substring(dot + 1).trim());
                 } catch (NumberFormatException e) {
                     // as none
                 }
@@ -167,7 +171,8 @@ public final class ChunkedLogBlobs implements LogBlobs {
     }
 
     @Override
-    public boolean appendAt(@NonNull String log, @NonNull byte[] bytes, int off, int len, long position) throws IOException {
+    public boolean appendAt(@NonNull String log, @NonNull byte[] bytes, int off, int len, long position)
+            throws IOException {
         Tail t = tails.get(log);
         if (t == null || t.end() != position) {
             // learn where the log ends from the store, and fence off any writer that learnt it before

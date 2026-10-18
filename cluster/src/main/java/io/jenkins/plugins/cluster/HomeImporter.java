@@ -1,11 +1,11 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.model.Job;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -46,7 +46,9 @@ public final class HomeImporter {
     private static final Pattern SKIP = Pattern.compile(
             "(plugins|war|workspace|caches|logs|updates|userContent|fingerprints|secrets|\\.cache|\\.groovy|\\.java|\\.m2|tmp)(/.*)?"
                     + "|.*/(builds|workspace|lastStable|lastSuccessful|indexing)(/.*)?|.*\\.(tmp|log|bak|lock)");
-    private static final Pattern FINGERPRINT = Pattern.compile("fingerprints/[0-9a-f]{2}/[0-9a-f]{2}/([0-9a-f]{28})\\.xml");
+
+    private static final Pattern FINGERPRINT =
+            Pattern.compile("fingerprints/[0-9a-f]{2}/[0-9a-f]{2}/([0-9a-f]{28})\\.xml");
 
     private static final List<String> report = new ArrayList<>();
     private static int imported;
@@ -73,7 +75,8 @@ public final class HomeImporter {
             Matcher fp = FINGERPRINT.matcher(key);
             if (fp.matches()) {
                 String md5 = key.substring("fingerprints/".length(), "fingerprints/".length() + 2)
-                        + key.substring("fingerprints/xx/".length(), "fingerprints/xx/".length() + 2) + fp.group(1);
+                        + key.substring("fingerprints/xx/".length(), "fingerprints/xx/".length() + 2)
+                        + fp.group(1);
                 put(store, ClusterFingerprintStorage.key(md5), f);
             } else if (!SKIP.matcher(key).matches() && store.owns(key)) {
                 put(store, key, f);
@@ -115,7 +118,10 @@ public final class HomeImporter {
                 stored = BuildRecords.listStoredNumbers(job);
             } catch (IOException | java.io.UncheckedIOException e) {
                 // not known what is stored: publishing would overwrite what is (an empty listing would mean all of it)
-                LOGGER.log(Level.WARNING, "Could not list the stored builds of " + job.getFullName() + "; not importing its builds", e);
+                LOGGER.log(
+                        Level.WARNING,
+                        "Could not list the stored builds of " + job.getFullName() + "; not importing its builds",
+                        e);
                 report.add("FAILED " + job.getFullName() + ": its stored builds could not be listed: " + e);
                 continue;
             }

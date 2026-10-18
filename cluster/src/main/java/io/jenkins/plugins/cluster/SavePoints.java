@@ -1,13 +1,13 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.model.Queue;
 import hudson.model.Run;
 import hudson.model.listeners.RunListener;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -158,7 +158,9 @@ public final class SavePoints {
     static long[] parseSavePoint(String id) {
         int dot = id.indexOf('.');
         try {
-            return dot <= 0 ? null : new long[] {Long.parseLong(id.substring(0, dot)), Long.parseLong(id.substring(dot + 1))};
+            return dot <= 0
+                    ? null
+                    : new long[] {Long.parseLong(id.substring(0, dot)), Long.parseLong(id.substring(dot + 1))};
         } catch (NumberFormatException e) {
             return null;
         }
@@ -217,8 +219,7 @@ public final class SavePoints {
         if (p == null || st.stopped || blobs == null) {
             return;
         }
-        if (jenkins.persistence.PersistenceStores.get() instanceof ClusterStore store
-                && store.mayHaveLapsed()) {
+        if (jenkins.persistence.PersistenceStores.get() instanceof ClusterStore store && store.mayHaveLapsed()) {
             // e.g. just woke from a pause: another controller may own the build by now; ship once the heartbeat is back
             synchronized (st) {
                 if (st.pending == null) {
@@ -293,7 +294,8 @@ public final class SavePoints {
      */
     private static void deleteIfCompleted(ClusterBlobStore blobs, State st) {
         try {
-            String placeholder = PersistenceStores.keyFor(st.run.getParent().getRootDir()) + "/running/" + st.run.getNumber() + ".xml";
+            String placeholder = PersistenceStores.keyFor(st.run.getParent().getRootDir()) + "/running/"
+                    + st.run.getNumber() + ".xml";
             if (PersistenceStores.get().read(placeholder) == null) {
                 blobs.delete(st.base);
             }

@@ -46,7 +46,8 @@ class ClusterPluginsTest {
         assertEquals(LOAD, ClusterPlugins.decide(installed("2.0"), null, true), "missing here");
         assertEquals(REPLACE, ClusterPlugins.decide(installed("2.0"), "1.5", true), "older here");
         assertEquals(NONE, ClusterPlugins.decide(installed("2.0"), "2.0", true));
-        assertEquals(NONE, ClusterPlugins.decide(installed("2.0"), "2.1", true), "never downgrades: a newer image wins");
+        assertEquals(
+                NONE, ClusterPlugins.decide(installed("2.0"), "2.1", true), "never downgrades: a newer image wins");
         assertEquals(ENABLE, ClusterPlugins.decide(installed("2.0"), "2.0", false), "enabled in the cluster");
         assertEquals(ENABLE, ClusterPlugins.decide(state(State.installed), "3.0", false), "enabling an image plugin");
         assertEquals(NONE, ClusterPlugins.decide(state(State.installed), null, true), "no archive to install");
@@ -70,18 +71,28 @@ class ClusterPluginsTest {
         assertFalse(ClusterPlugins.needsRestart(state(State.uninstalled), false, null, null, true));
         assertTrue(ClusterPlugins.needsRestart(state(State.disabled), true, "1.0", "1.0", false));
         assertFalse(ClusterPlugins.needsRestart(state(State.disabled), false, null, "1.0", false));
-        assertTrue(ClusterPlugins.needsRestart(state(State.installed), false, null, "1.0", true), "enabled, not yet running");
+        assertTrue(
+                ClusterPlugins.needsRestart(state(State.installed), false, null, "1.0", true),
+                "enabled, not yet running");
     }
 
     @Test
     void overlayKeepsOrderAndCountsGenerations() {
-        Overlay o = Overlay.EMPTY.with("dep", installed("1.0")).with("top", installed("2.0")).with("dep", installed("1.1"));
+        Overlay o = Overlay.EMPTY
+                .with("dep", installed("1.0"))
+                .with("top", installed("2.0"))
+                .with("dep", installed("1.1"));
         assertEquals(3, o.generation());
-        assertEquals(List.of("dep", "top"), List.copyOf(o.plugins().keySet()), "dependencies first, also after an upgrade");
+        assertEquals(
+                List.of("dep", "top"), List.copyOf(o.plugins().keySet()), "dependencies first, also after an upgrade");
         Overlay parsed = Overlay.parse(o.toBytes());
         assertEquals(o, parsed);
         assertEquals(Overlay.EMPTY, Overlay.parse(null));
-        assertEquals(state(State.uninstalled), Overlay.parse(Overlay.EMPTY.with("x", state(State.uninstalled)).toBytes()).plugins().get("x"));
+        assertEquals(
+                state(State.uninstalled),
+                Overlay.parse(Overlay.EMPTY.with("x", state(State.uninstalled)).toBytes())
+                        .plugins()
+                        .get("x"));
     }
 
     @Test
@@ -94,34 +105,54 @@ class ClusterPluginsTest {
 
     @Test
     void statusInWords() {
-        assertEquals("Up to date (the image's plugins)", ClusterPlugins.describe(ClusterPlugins.status(0, false, false), 0));
+        assertEquals(
+                "Up to date (the image's plugins)", ClusterPlugins.describe(ClusterPlugins.status(0, false, false), 0));
         assertEquals("Up to date", ClusterPlugins.describe(ClusterPlugins.status(3, false, false), 3));
         assertEquals("Applying 2 changes", ClusterPlugins.describe(ClusterPlugins.status(1, false, false), 3));
         assertEquals("Applying 1 change", ClusterPlugins.describe(ClusterPlugins.status(2, false, false), 3));
-        assertEquals("Restart pending (one controller at a time)", ClusterPlugins.describe(ClusterPlugins.status(3, true, false), 3));
-        assertEquals("Needs attention: still differs after restarting for it", ClusterPlugins.describe(ClusterPlugins.status(3, true, true), 3));
+        assertEquals(
+                "Restart pending (one controller at a time)",
+                ClusterPlugins.describe(ClusterPlugins.status(3, true, false), 3));
+        assertEquals(
+                "Needs attention: still differs after restarting for it",
+                ClusterPlugins.describe(ClusterPlugins.status(3, true, true), 3));
         assertEquals("Unknown (an older version)", ClusterPlugins.describe(null, 3));
         // Target 15: what is being applied, and what failed
-        assertEquals("Applying rebuild", ClusterPlugins.describe(ClusterPlugins.status(2, false, false, "rebuild", java.util.List.of()), 3));
-        assertEquals("Up to date; could not apply a, b",
+        assertEquals(
+                "Applying rebuild",
+                ClusterPlugins.describe(ClusterPlugins.status(2, false, false, "rebuild", java.util.List.of()), 3));
+        assertEquals(
+                "Up to date; could not apply a, b",
                 ClusterPlugins.describe(ClusterPlugins.status(3, false, false, null, java.util.List.of("a", "b")), 3));
-        assertEquals("Restart pending (one controller at a time); could not apply a",
+        assertEquals(
+                "Restart pending (one controller at a time); could not apply a",
                 ClusterPlugins.describe(ClusterPlugins.status(3, true, false, null, java.util.List.of("a")), 3));
-        assertEquals("3 restart-pending", ClusterPlugins.status(3, true, false, null, java.util.List.of()), "unchanged for older readers");
+        assertEquals(
+                "3 restart-pending",
+                ClusterPlugins.status(3, true, false, null, java.util.List.of()),
+                "unchanged for older readers");
     }
 
     @Test
     void disablingAndEnablingKeepTheArchiveOfAPluginTheClusterInstalled() {
         Entry disabled = ClusterPlugins.next(installed("2.0"), State.disabled, "cnj-1", 2);
         assertEquals(new Entry(State.disabled, "2.0", "abc", "cluster-plugins/p/abc.jpi", "cnj-1", 2), disabled);
-        assertEquals(disabled, Overlay.parse(Overlay.EMPTY.with("p", disabled).toBytes()).plugins().get("p"), "stored as such");
+        assertEquals(
+                disabled,
+                Overlay.parse(Overlay.EMPTY.with("p", disabled).toBytes())
+                        .plugins()
+                        .get("p"),
+                "stored as such");
         assertEquals(NONE, ClusterPlugins.decide(disabled, null, true), "not fetched while disabled");
         Entry enabled = ClusterPlugins.next(disabled, State.installed, "cnj-2", 3);
         assertEquals(new Entry(State.installed, "2.0", "abc", "cluster-plugins/p/abc.jpi", "cnj-2", 3), enabled);
         assertEquals(LOAD, ClusterPlugins.decide(enabled, null, true), "a home without it gets it again");
         Entry uninstalled = ClusterPlugins.next(disabled, State.uninstalled, "cnj-1", 4);
         assertNull(uninstalled.blob());
-        assertNull(ClusterPlugins.next(state(State.disabled), State.installed, "cnj-1", 5).version(), "an image plugin");
+        assertNull(
+                ClusterPlugins.next(state(State.disabled), State.installed, "cnj-1", 5)
+                        .version(),
+                "an image plugin");
         assertNull(ClusterPlugins.next(null, State.disabled, "cnj-1", 5).version());
     }
 
@@ -135,7 +166,8 @@ class ClusterPluginsTest {
         return out.toByteArray();
     }
 
-    private static Entry shared(Map<String, byte[]> blobs, String name, String version, byte[] archive, Path tmp) throws Exception {
+    private static Entry shared(Map<String, byte[]> blobs, String name, String version, byte[] archive, Path tmp)
+            throws Exception {
         File f = tmp.resolve(name + "-" + version + ".tmp").toFile();
         Files.write(f.toPath(), archive);
         String sha = ClusterPlugins.sha256(f);
@@ -180,19 +212,32 @@ class ClusterPluginsTest {
         Entry same = shared(blobs, "same", "3.0", plugin("same", "3.0"), tmp);
         Entry corrupt = new Entry(State.installed, "1.0", "0000", "cluster-plugins/corrupt/0000.jpi", "cnj-0", 1);
         blobs.put(corrupt.blob(), plugin("corrupt", "1.0"));
-        Overlay overlay = Overlay.EMPTY.with("added", added).with("image", upgraded).with("same", same)
-                .with("corrupt", corrupt).with("../escape", added).with("cluster", added)
+        Overlay overlay = Overlay.EMPTY
+                .with("added", added)
+                .with("image", upgraded)
+                .with("same", same)
+                .with("corrupt", corrupt)
+                .with("../escape", added)
+                .with("cluster", added)
                 .with("off", ClusterPlugins.next(added, State.disabled, "cnj-0", 2));
 
         Map<String, Entry> missing = ClusterPlugins.missingAtBoot(overlay, plugins);
-        assertEquals(List.of("added", "image", "corrupt"), List.copyOf(missing.keySet()),
+        assertEquals(
+                List.of("added", "image", "corrupt"),
+                List.copyOf(missing.keySet()),
                 "not one it has, a disabled one, a cluster plugin or a name that is not a file name");
-        assertEquals(List.of("added", "image"), ClusterPlugins.fetchAtBoot(missing, blobStore(blobs), plugins), "verified");
+        assertEquals(
+                List.of("added", "image"), ClusterPlugins.fetchAtBoot(missing, blobStore(blobs), plugins), "verified");
         assertArrayEquals(plugin("added", "1.2"), Files.readAllBytes(new File(plugins, "added.jpi").toPath()));
         assertArrayEquals(plugin("image", "1.1"), Files.readAllBytes(new File(plugins, "image.jpi").toPath()));
-        assertTrue(new File(plugins, "added.jpi" + ClusterPlugins.MARKER).isFile(), "the image entrypoint leaves it alone");
+        assertTrue(
+                new File(plugins, "added.jpi" + ClusterPlugins.MARKER).isFile(),
+                "the image entrypoint leaves it alone");
         assertFalse(new File(plugins, "corrupt.jpi").exists());
-        assertEquals(List.of("corrupt"), List.copyOf(ClusterPlugins.missingAtBoot(overlay, plugins).keySet()), "fetched once");
+        assertEquals(
+                List.of("corrupt"),
+                List.copyOf(ClusterPlugins.missingAtBoot(overlay, plugins).keySet()),
+                "fetched once");
     }
 
     @Test
@@ -204,7 +249,9 @@ class ClusterPluginsTest {
         assertFalse(ClusterPlugins.isFreshHome(home.toFile()), "items");
         Files.delete(home.resolve("jobs/p"));
         Files.writeString(home.resolve("queue.xml"), "<queue/>");
-        assertFalse(ClusterPlugins.isFreshHome(home.toFile()), "a saved queue, which restarting before loading it would empty");
+        assertFalse(
+                ClusterPlugins.isFreshHome(home.toFile()),
+                "a saved queue, which restarting before loading it would empty");
     }
 
     private static void plugin(File file, String name, String version) throws Exception {
@@ -212,7 +259,8 @@ class ClusterPluginsTest {
         m.getMainAttributes().put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
         m.getMainAttributes().putValue("Short-Name", name);
         m.getMainAttributes().putValue("Plugin-Version", version);
-        try (java.util.jar.JarOutputStream out = new java.util.jar.JarOutputStream(Files.newOutputStream(file.toPath()), m)) {
+        try (java.util.jar.JarOutputStream out =
+                new java.util.jar.JarOutputStream(Files.newOutputStream(file.toPath()), m)) {
             // a manifest is all it takes
         }
     }
@@ -229,7 +277,9 @@ class ClusterPluginsTest {
         assertEquals("5.1", ClusterPlugins.newestKnown("git", older, plugins));
         Entry uninstalled = new Entry(State.uninstalled, null, null, null, "c1", 0);
         Files.delete(plugins.toPath().resolve("git.jpi"));
-        assertNull(ClusterPlugins.newestKnown("git", uninstalled, plugins), "uninstalled first: an older version may be installed");
+        assertNull(
+                ClusterPlugins.newestKnown("git", uninstalled, plugins),
+                "uninstalled first: an older version may be installed");
         plugin(new File(plugins, "legacy.hpi"), "legacy", "1.2");
         assertEquals("1.2", ClusterPlugins.newestKnown("legacy", null, plugins));
     }

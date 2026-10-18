@@ -41,6 +41,7 @@ public interface BuildLeases {
      * @throws LeaseLostException if the lease is not (or no longer) held with this epoch
      * @throws jenkins.persistence.ConflictException if {@code expectedVersion} does not match
      */
-    long writeIfHeld(@NonNull String leaseKey, long epoch, @NonNull String key, @NonNull byte[] content, long expectedVersion)
+    long writeIfHeld(
+            @NonNull String leaseKey, long epoch, @NonNull String key, @NonNull byte[] content, long expectedVersion)
             throws IOException;
 }

@@ -1,6 +1,5 @@
 package io.jenkins.plugins.cluster.spi;
 
-
 import io.jenkins.plugins.cluster.ClusterPlugins;
 import io.jenkins.plugins.cluster.MemberStatus;
 
@@ -25,11 +24,13 @@ public final class ClusterMember {
     public static final int PROTOCOL = 2; // 2 (Target 15): writes jenkins_store.size (SchemaMigrations.STORE_SIZE)
 
     /** What this controller runs: core and plugin versions, shown in the cluster view. */
-    public static final String VERSION = jenkins.model.Jenkins.VERSION + " / " + java.util.Objects.requireNonNullElse(
-            ClusterMember.class.getPackage().getImplementationVersion(), "dev");
+    public static final String VERSION = jenkins.model.Jenkins.VERSION + " / "
+            + java.util.Objects.requireNonNullElse(
+                    ClusterMember.class.getPackage().getImplementationVersion(), "dev");
 
     /** Peers older than this protocol must not be alive when this controller starts (Target 10). */
-    public static final int MINIMUM_PEER_PROTOCOL = Integer.getInteger("io.jenkins.plugins.cluster.minimumPeerProtocol", 0);
+    public static final int MINIMUM_PEER_PROTOCOL =
+            Integer.getInteger("io.jenkins.plugins.cluster.minimumPeerProtocol", 0);
 
     /** How long a starting controller waits for its persistence store (and blob store) before failing to start. */
     public static final long STARTUP_WAIT_SECONDS = Long.getLong("io.jenkins.plugins.cluster.startupWaitSeconds", 600);

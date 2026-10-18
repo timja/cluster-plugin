@@ -79,7 +79,10 @@ class ChunkedLogBlobsTest extends ClusterBlobStoreContract {
         assertFalse(a.appendAt(log, b("STALE OUTPUT"), 0, 12, 4), "fenced off still");
         // as if it had been written anyway
         blobs.put(log + ".d/" + String.format("%016d", 4) + ".e1.aaa", new ByteArrayInputStream(b("STALE OUTPUT")), 12);
-        assertEquals("one two three", new String(b.readFrom(log, 0), StandardCharsets.UTF_8), "a chunk across the end is not read");
+        assertEquals(
+                "one two three",
+                new String(b.readFrom(log, 0), StandardCharsets.UTF_8),
+                "a chunk across the end is not read");
         assertEquals(13, b.size(log));
         assertTrue(b.appendAt(log, b("!"), 0, 1, 13), "late output at the end still is");
         assertEquals("one two three!", new String(b.readFrom(log, 0), StandardCharsets.UTF_8));

@@ -1,7 +1,7 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
 import edu.umd.cs.findbugs.annotations.NonNull;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.ByteArrayOutputStream;
@@ -102,13 +102,15 @@ final class Forwarding {
     }
 
     @NonNull
-    static String forwardedHeader(@NonNull String name, long now, @NonNull java.util.function.UnaryOperator<String> mac) {
+    static String forwardedHeader(
+            @NonNull String name, long now, @NonNull java.util.function.UnaryOperator<String> mac) {
         String signed = name.replace(";", "_") + ";" + now;
         return signed + ";" + mac.apply(signed);
     }
 
     /** Whether a {@link #FORWARDED} header was set by a controller of this cluster, recently. */
-    static boolean isAuthentic(@NonNull String header, long now, @NonNull java.util.function.BiPredicate<String, String> checkMac) {
+    static boolean isAuthentic(
+            @NonNull String header, long now, @NonNull java.util.function.BiPredicate<String, String> checkMac) {
         int last = header.lastIndexOf(';');
         int first = header.indexOf(';');
         if (first <= 0 || last <= first) {
@@ -120,7 +122,8 @@ final class Forwarding {
         } catch (NumberFormatException e) {
             return false;
         }
-        return Math.abs(now - at) <= MAX_AGE_MILLIS && checkMac.test(header.substring(0, last), header.substring(last + 1));
+        return Math.abs(now - at) <= MAX_AGE_MILLIS
+                && checkMac.test(header.substring(0, last), header.substring(last + 1));
     }
 
     /**
@@ -129,13 +132,22 @@ final class Forwarding {
      * @return false if the owner could not be connected to (or, for a GET or HEAD, did not answer) and nothing was
      *     written, so the caller may serve it locally
      */
-    static boolean forward(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url)
+    static boolean forward(
+            @NonNull HttpServletRequest req,
+            @NonNull HttpServletResponse rsp,
+            @NonNull String owner,
+            @NonNull String url)
             throws IOException {
         return forward(req, rsp, owner, url, Duration.ofSeconds(TIMEOUT_SECONDS));
     }
 
-    static boolean forward(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url,
-            @NonNull Duration timeout) throws IOException {
+    static boolean forward(
+            @NonNull HttpServletRequest req,
+            @NonNull HttpServletResponse rsp,
+            @NonNull String owner,
+            @NonNull String url,
+            @NonNull Duration timeout)
+            throws IOException {
         String path = req.getRequestURI().substring(req.getContextPath().length());
         String target = url.replaceAll("/+$", "")
                 + req.getContextPath()
@@ -151,7 +163,9 @@ final class Forwarding {
         }
         b.header(FORWARDED, forwardedHeader());
         byte[] body = body(req);
-        b.method(req.getMethod(), body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+        b.method(
+                req.getMethod(),
+                body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
         HttpResponse<InputStream> r;
         try {
             r = HTTP.send(b.build(), HttpResponse.BodyHandlers.ofInputStream());
@@ -159,23 +173,30 @@ final class Forwarding {
             Thread.currentThread().interrupt();
             throw new IOException(e);
         } catch (IOException e) {
-            if (e instanceof ConnectException || e instanceof HttpConnectTimeoutException || SAFE.contains(req.getMethod())) {
+            if (e instanceof ConnectException
+                    || e instanceof HttpConnectTimeoutException
+                    || SAFE.contains(req.getMethod())) {
                 LOGGER.log(Level.FINE, e, () -> "Could not reach " + owner + " for " + path);
                 return false;
             }
-            // sent, but no answer: the owner may have acted on it (a replay, an input), so running it here could do it twice
+            // sent, but no answer: the owner may have acted on it (a replay, an input), so running it here could do it
+            // twice
             LOGGER.log(Level.WARNING, e, () -> "No answer from " + owner + " for " + req.getMethod() + " " + path);
-            rsp.sendError(HttpServletResponse.SC_GATEWAY_TIMEOUT, "The controller running this (" + owner
-                    + ") did not answer in time. It may have acted on the request: check before retrying.");
+            rsp.sendError(
+                    HttpServletResponse.SC_GATEWAY_TIMEOUT,
+                    "The controller running this (" + owner
+                            + ") did not answer in time. It may have acted on the request: check before retrying.");
             return true;
         }
         rsp.setStatus(r.statusCode());
         for (Map.Entry<String, List<String>> h : r.headers().map().entrySet()) {
-            if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT)) && !h.getKey().startsWith(":")) {
+            if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))
+                    && !h.getKey().startsWith(":")) {
                 boolean first = true;
                 for (String value : h.getValue()) {
                     if (first) {
-                        rsp.setHeader(h.getKey(), value); // the owner's answer replaces any set here (e.g. X-CNJ-Controller)
+                        rsp.setHeader(
+                                h.getKey(), value); // the owner's answer replaces any set here (e.g. X-CNJ-Controller)
                         first = false;
                     } else {
                         rsp.addHeader(h.getKey(), value);
@@ -207,7 +228,9 @@ final class Forwarding {
             raw = in.readAllBytes();
         }
         String type = req.getContentType();
-        if (raw.length > 0 || type == null || !type.toLowerCase(Locale.ROOT).startsWith("application/x-www-form-urlencoded")) {
+        if (raw.length > 0
+                || type == null
+                || !type.toLowerCase(Locale.ROOT).startsWith("application/x-www-form-urlencoded")) {
             return raw;
         }
         Map<String, Integer> inQuery = new HashMap<>();
@@ -230,7 +253,8 @@ final class Forwarding {
                 if (out.size() > 0) {
                     out.write('&');
                 }
-                out.writeBytes((URLEncoder.encode(p.getKey(), StandardCharsets.UTF_8) + "=" + URLEncoder.encode(value, StandardCharsets.UTF_8))
+                out.writeBytes((URLEncoder.encode(p.getKey(), StandardCharsets.UTF_8) + "="
+                                + URLEncoder.encode(value, StandardCharsets.UTF_8))
                         .getBytes(StandardCharsets.US_ASCII));
             }
         }

@@ -85,10 +85,12 @@ public final class ItemCatchUpFilter implements Filter {
     }
 
     @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
         if (request instanceof HttpServletRequest req && PersistenceStores.get() != null) {
             // outermost first: a folder and a job in it made together are applied in that order
-            for (String name : itemNames(req.getRequestURI().substring(req.getContextPath().length()))) {
+            for (String name :
+                    itemNames(req.getRequestURI().substring(req.getContextPath().length()))) {
                 if (!existsHere(name) && !awaitApplied(name)) {
                     break;
                 }
