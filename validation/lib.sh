@@ -20,7 +20,9 @@ OUT_DIR="$VALIDATION_DIR/out"
 # agent secrets), sharing the built war and plugins. Slot 0 is the default: project et1, ports 8081, 8082, 8083, 8089
 # (the seed controller) and 8090 (the round-robin load balancer). Slot N > 0: project et1sN, ports 20N81, 20N82, ….
 export SLOT=${SLOT:-0}
-if [[ $SLOT == 0 ]]; then PROJ=et1; PORT_BASE=8000; else PROJ=et1s$SLOT; PORT_BASE=$((20000 + 100 * SLOT)); fi
+# PROJECT_PREFIX names the Compose projects (et1, et1s1, …), e.g. for a second user of the same Docker host
+PROJECT_PREFIX=${PROJECT_PREFIX:-et1}
+if [[ $SLOT == 0 ]]; then PROJ=$PROJECT_PREFIX; PORT_BASE=8000; else PROJ=${PROJECT_PREFIX}s$SLOT; PORT_BASE=$((20000 + 100 * SLOT)); fi
 export COMPOSE_PROJECT_NAME=$PROJ PROJ
 P="$PROJ-" # container names: ${P}jenkins-a-1, ${P}seed, …
 export PORT_A=$((PORT_BASE + 81)) PORT_B=$((PORT_BASE + 82)) PORT_C=$((PORT_BASE + 83)) PORT_SEED=$((PORT_BASE + 89)) PORT_RR=$((PORT_BASE + 90))
