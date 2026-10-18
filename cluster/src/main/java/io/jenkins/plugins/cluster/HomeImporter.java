@@ -1,5 +1,6 @@
 package io.jenkins.plugins.cluster;
 
+import hudson.ExtensionList;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.model.Job;
@@ -7,14 +8,17 @@ import hudson.model.Run;
 import io.jenkins.plugins.cluster.builds.BuildRecords;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -25,8 +29,10 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import jenkins.model.Jenkins;
 import jenkins.persistence.ConflictException;
+import jenkins.persistence.LocalFiles;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
+import jenkins.persistence.SharedFiles;
 
 /**
  * Imports an existing, file-based Jenkins home into the store (Target 10): start one controller on the old home with
@@ -41,7 +47,8 @@ import jenkins.persistence.PersistenceStores;
 public final class HomeImporter {
 
     private static final Logger LOGGER = Logger.getLogger(HomeImporter.class.getName());
-    static final boolean IMPORT = Boolean.getBoolean(HomeImporter.class.getPackageName() + ".importHome");
+    static /* non-final for tests */ boolean IMPORT =
+            Boolean.getBoolean(HomeImporter.class.getPackageName() + ".importHome");
     /** Never imported: caches, workspaces, the plugins and war, logs, build directories (imported as builds). */
     private static final Pattern SKIP = Pattern.compile(
             "(plugins|war|workspace|caches|logs|updates|userContent|fingerprints|secrets|\\.cache|\\.groovy|\\.java|\\.m2|tmp)(/.*)?"
@@ -55,6 +62,50 @@ public final class HomeImporter {
     private static int kept;
 
     private HomeImporter() {}
+
+    /** The {@link LocalFiles} and {@link SharedFiles} patterns, looked up before the store is created. */
+    private static volatile List<PathMatcher> local;
+
+    private static volatile List<PathMatcher> shared;
+
+    /**
+     * Looks up what files plugins keep local or share, for {@link #importFiles}: that runs as the store is created, with
+     * the store's resolution under way, where looking up extensions could wait for a thread that waits for the store.
+     */
+    @Initializer(after = InitMilestone.PLUGINS_STARTED, before = InitMilestone.EXTENSIONS_AUGMENTED)
+    public static void lookUpPatterns() {
+        if (IMPORT) {
+            local = matchers(ExtensionList.lookup(LocalFiles.class).stream()
+                    .flatMap(l -> l.patterns().stream())
+                    .toList());
+            shared = matchers(ExtensionList.lookup(SharedFiles.class).stream()
+                    .flatMap(l -> l.patterns().stream())
+                    .toList());
+        }
+    }
+
+    private static List<PathMatcher> matchers(List<String> patterns) {
+        return patterns.stream()
+                .map(p -> FileSystems.getDefault().getPathMatcher("glob:" + p))
+                .toList();
+    }
+
+    /**
+     * Whether the store serves a file of the home, as core's routing decides once a store is active (which it is not
+     * yet: {@link PersistenceStores#get} answers null until {@link #importFiles} returns).
+     */
+    static boolean isRouted(String key, PersistenceStore store) {
+        if (key.startsWith("_") || !Keys.isSafeKey(key)) {
+            return false;
+        }
+        Path path = Path.of(key);
+        List<PathMatcher> l = local;
+        List<PathMatcher> s = shared;
+        if (l == null || s == null || l.stream().anyMatch(m -> m.matches(path))) {
+            return false;
+        }
+        return ClusterRouting.inDefaultSet(key, store) || s.stream().anyMatch(m -> m.matches(path));
+    }
 
     /**
      * Configuration and fingerprints: as the store is created, before anything can read from it, so that Jenkins loads
@@ -78,7 +129,7 @@ public final class HomeImporter {
                         + key.substring("fingerprints/xx/".length(), "fingerprints/xx/".length() + 2)
                         + fp.group(1);
                 put(store, ClusterFingerprintStorage.key(md5), f);
-            } else if (!SKIP.matcher(key).matches() && ClusterRouting.isShared(key)) {
+            } else if (!SKIP.matcher(key).matches() && isRouted(key, store)) {
                 put(store, key, f);
             }
         }

@@ -59,6 +59,12 @@ public final class KeyCheck {
                     // best effort: failing to start is what matters
                 }
             }
+            if (HomeImporter.IMPORT) {
+                throw new IllegalStateException("Not importing this home: its key material (secret.key, secrets/) is"
+                        + " not that of the cluster whose store it was asked to import into. The secrets it holds would"
+                        + " be encrypted with keys the cluster's controllers do not have. Import it into an empty store, or"
+                        + " start it with the cluster's seeded keys.");
+            }
             throw new IllegalStateException(
                     "This controller does not have the key material of the cluster it shares a store with:"
                             + " it cannot decrypt the cluster's secrets, and would write secrets the others cannot read. Start it with"

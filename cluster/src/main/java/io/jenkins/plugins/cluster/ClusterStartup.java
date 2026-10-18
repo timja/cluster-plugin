@@ -21,12 +21,11 @@ public final class ClusterStartup {
 
     /**
      * Before the store's controller takes part in membership: refuses a controller without the cluster's key material
-     * ({@link KeyCheck}), unless a file-based home is being imported.
+     * ({@link KeyCheck}). That includes a file-based home being imported: into an empty store, its keys become the
+     * cluster's; into a store with other keys, the secrets it imported could not be read by the cluster's controllers.
      */
     public static void beforeJoining(@NonNull PersistenceStore store) throws IOException {
-        if (!HomeImporter.IMPORT) {
-            KeyCheck.verify(store);
-        }
+        KeyCheck.verify(store);
     }
 
     /** Once the store's controller takes part in membership: imports a file-based home, if asked to. */
