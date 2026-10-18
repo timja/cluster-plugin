@@ -134,7 +134,11 @@ graph $B pl 1 > "$OUT/pl-graph-B.txt"
 info "2 flow nodes on B: $(grep -vc '  log:' "$OUT/pl-graph-B.txt"), step logs: $(grep -c '  log:' "$OUT/pl-graph-B.txt")"
 PL=$(item_blobs $A pl)
 info "2 blobs of pl #1: $(blob_names $A $PL/builds/1)"
-check "2 the log is in log storage (append blobs), next to the snapshot, under the job's identity" same "$(blob_names $A $PL/builds/1)" "$PL/builds/1/files.tgz $PL/builds/1/log $PL/builds/1/log-index"
+# S3 cannot append: the log was shipped in chunks, fenced per writer, and compacted once the build completed (the fences
+# stay, so that a writer from before cannot append after a later one)
+want_blobs="$PL/builds/1/files.tgz $PL/builds/1/log $PL/builds/1/log-index"
+[[ $BLOB_CLASS == S3BlobStore ]] && want_blobs="$want_blobs $PL/builds/1/log-index.fence $PL/builds/1/log.fence"
+check "2 the log is in log storage, next to the snapshot, under the job's identity" same "$(blob_names $A $PL/builds/1)" "$want_blobs"
 
 # ------------------------------------------------------------------ 3. interleaved history
 log "scenario 3: 10 builds on A and 10 on B of one job"
