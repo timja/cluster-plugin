@@ -435,6 +435,20 @@ class RunningBuildsTest {
     }
 
     @Test
+    void aBuildIsNotHandedOverOnceItCompleted() throws Exception {
+        Semaphore release = new Semaphore(0);
+        FreeStyleProject p = waiting(r, "completing", release);
+        FreeStyleBuild b = p.scheduleBuild2(0).waitForStart();
+        ClusterFixture.await("owned", () -> RunningBuilds.ownedPlaceholder(b) != null);
+        RunningBuilds.update(b, Map.of(RunningBuilds.RESULT, "SUCCESS")); // as its completion records
+        assertThrows(java.io.IOException.class, () -> RunningBuilds.handOver(b));
+        assertNotNull(RunningBuilds.ownedPlaceholder(b), "still this controller's");
+        assertFalse(RunningBuilds.wasLost(b));
+        release.release();
+        r.assertBuildStatusSuccess(r.waitForCompletion(b));
+    }
+
+    @Test
     void theArtifactsOfACopyTakenOverByAnotherControllerAreKept() throws Exception {
         Semaphore release = new Semaphore(0);
         FreeStyleProject p = r.createFreeStyleProject("artifacts");

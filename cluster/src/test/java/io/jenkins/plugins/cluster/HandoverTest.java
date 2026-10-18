@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import edu.umd.cs.findbugs.annotations.NonNull;
+import hudson.model.FreeStyleProject;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.model.listeners.RunListener;
@@ -18,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import jenkins.persistence.PersistenceStore;
 import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition;
 import org.jenkinsci.plugins.workflow.cps.CpsFlowExecution;
 import org.jenkinsci.plugins.workflow.job.WorkflowJob;
@@ -76,6 +78,21 @@ class HandoverTest {
         TaskListener log = b.asFlowExecutionOwner().getListener();
         log.getLogger().println("after it was let go of");
         assertTrue(log.getLogger().checkError(), "its log is closed");
+    }
+
+    @Test
+    void theTargetOfAHandoverWaitingForTheLeaseDoesNotHoldATimerThread(JenkinsRule r) throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("held");
+        String prefix = Keys.item(p);
+        InMemoryClusterStore other = store().as("other");
+        assertTrue(other.leases().acquire(Keys.buildLease(prefix, 1)) > 0, "not released by its owner yet");
+        String key = Keys.running(prefix) + "/1" + Handover.SUFFIX;
+        other.write(key, store().getOrigin().getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
+        long start = System.nanoTime();
+        Handover.takeOver(store(), key);
+        assertTrue(
+                System.nanoTime() - start < 5_000_000_000L,
+                "returned after one attempt, the next one scheduled rather than waited for");
     }
 
     /** What listeners were told of completed builds, by job. */

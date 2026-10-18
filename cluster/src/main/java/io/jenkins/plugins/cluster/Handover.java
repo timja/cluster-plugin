@@ -93,7 +93,7 @@ public final class Handover {
                 return;
             }
             String base = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber();
-            if (!countHop(store, base + HOPS)) {
+            if (hops(store, base + HOPS) >= MAX_HOPS) {
                 LOGGER.warning(() -> run + " waits for '" + label
                         + "', which only another controller has, but it was handed over " + MAX_HOPS
                         + " times already (node blocks needing agents of different controllers); it waits here");
@@ -105,6 +105,8 @@ public final class Handover {
             SavePoints.flush(run);
             store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
             RunningBuilds.handOver(run);
+            // once handed over: an attempt that failed (a save point committed meanwhile, say) is not counted
+            countHop(store, base + HOPS);
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.WARNING, "Could not hand " + run + " over", e);
         }
@@ -172,25 +174,27 @@ public final class Handover {
         return null;
     }
 
-    /** Counts a handover of a build; false if it was handed over {@link #MAX_HOPS} times already. */
-    private static boolean countHop(ClusterStore store, String key) throws IOException {
+    /** How many times a build was handed over, by the key of its count. */
+    private static int hops(ClusterStore store, String key) throws IOException {
+        PersistenceStore.Entry e = store.read(key);
+        return e == null ? 0 : Integer.parseInt(new String(e.content(), StandardCharsets.UTF_8).trim());
+    }
+
+    /** Counts a handover of a build. */
+    private static void countHop(ClusterStore store, String key) throws IOException {
         for (int attempt = 0; attempt < 10; attempt++) {
             PersistenceStore.Entry e = store.read(key);
             int hops = e == null ? 0 : Integer.parseInt(new String(e.content(), StandardCharsets.UTF_8).trim());
-            if (hops >= MAX_HOPS) {
-                return false;
-            }
             try {
                 store.write(
                         key,
                         String.valueOf(hops + 1).getBytes(StandardCharsets.UTF_8),
                         e == null ? PersistenceStore.ABSENT : e.version());
-                return true;
+                return;
             } catch (jenkins.persistence.ConflictException again) {
                 // counted by another at the same moment: count again
             }
         }
-        return false;
     }
 
     /** Forgets a build's handover count once it is done. */
@@ -241,8 +245,18 @@ public final class Handover {
         return null;
     }
 
+    /** How many times the target side tries to take over a build handed over to it, a second apart. */
+    static final int TAKE_OVER_ATTEMPTS = 30;
+
     /** The target side: take over a build handed over to this controller, retrying until its lease is free. */
     static void takeOver(ClusterStore store, String key) {
+        takeOver(store, key, 0);
+    }
+
+    /**
+     * One attempt; the next is scheduled a second later, rather than waited for on this thread (a shared timer's).
+     */
+    private static void takeOver(ClusterStore store, String key, int attempt) {
         try {
             PersistenceStore.Entry e = store.read(key);
             if (e == null || !store.getOrigin().equals(new String(e.content(), StandardCharsets.UTF_8))) {
@@ -260,17 +274,15 @@ public final class Handover {
                 return;
             }
             String fullName = job.getFullName();
-            for (int attempt = 0; attempt < 30; attempt++) {
-                if (RunningBuilds.takeOver(job, number)) {
-                    LOGGER.info(() -> "Took over " + fullName + " #" + number);
-                    store.delete(key, PersistenceStore.ANY);
-                    return;
-                }
-                Thread.sleep(1000);
+            if (RunningBuilds.takeOver(job, number)) {
+                LOGGER.info(() -> "Took over " + fullName + " #" + number);
+                store.delete(key, PersistenceStore.ANY);
+            } else if (attempt + 1 < TAKE_OVER_ATTEMPTS) {
+                Timer.get().schedule(() -> takeOver(store, key, attempt + 1), 1, TimeUnit.SECONDS);
+            } else {
+                LOGGER.warning(
+                        () -> "Could not take over " + fullName + " #" + number + " handed over to this controller");
             }
-            LOGGER.warning(() -> "Could not take over " + fullName + " #" + number + " handed over to this controller");
-        } catch (InterruptedException x) {
-            Thread.currentThread().interrupt();
         } catch (IOException | RuntimeException x) {
             LOGGER.log(Level.WARNING, "Could not take over " + key, x);
         }

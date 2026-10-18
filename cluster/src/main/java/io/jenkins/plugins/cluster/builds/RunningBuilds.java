@@ -1577,23 +1577,34 @@ public final class RunningBuilds {
      * {@link #HANDOVER_GRACE_MILLIS} leaves it to any controller's sweep, which adopts it as if its owner were gone.
      */
     public static void handOver(@NonNull Run<?, ?> run) throws IOException {
-        Placeholder p = owned(run);
         ClusterStore store = ClusterStore.get();
-        if (p == null || store == null) {
-            throw new IOException(run + " is not owned here");
+        Object lock;
+        synchronized (updating) {
+            lock = updating.computeIfAbsent(run, k -> new Object());
         }
-        // marked as handed over first (fenced: still this controller's), so that if nobody takes it, a sweep adopts it
-        // after a while rather than it showing as running here for good
-        Map<String, String> properties = new TreeMap<>(p.properties);
-        properties.put(HANDED_OVER, String.valueOf(System.currentTimeMillis()));
-        Placeholder released = p.withOwner(p.origin, p.controller, p.epoch, properties, p.version);
-        try {
-            store.leases().writeIfHeld(p.getLeaseKey(), p.epoch, p.getKey(), released.toBytes(), p.version);
-        } catch (LeaseLostException e) {
-            lost(run);
-            throw e;
+        // under the lock updates take: a save point committed meanwhile is written before this, not over it
+        synchronized (lock) {
+            Placeholder p = owned(run);
+            if (p == null || store == null) {
+                throw new IOException(run + " is not owned here");
+            }
+            if (!run.isLogUpdated() || p.properties.containsKey(RESULT)) {
+                // completed meanwhile: its result is this controller's to publish, not to be run again elsewhere
+                throw new IOException(run + " completed; not handing it over");
+            }
+            // marked as handed over first (fenced: still this controller's), so that if nobody takes it, a sweep
+            // adopts it after a while rather than it showing as running here for good
+            Map<String, String> properties = new TreeMap<>(p.properties);
+            properties.put(HANDED_OVER, String.valueOf(System.currentTimeMillis()));
+            Placeholder released = p.withOwner(p.origin, p.controller, p.epoch, properties, p.version);
+            try {
+                store.leases().writeIfHeld(p.getLeaseKey(), p.epoch, p.getKey(), released.toBytes(), p.version);
+            } catch (LeaseLostException e) {
+                lost(run);
+                throw e;
+            }
+            store.leases().release(p.getLeaseKey(), p.epoch);
         }
-        store.leases().release(p.getLeaseKey(), p.epoch);
         LOGGER.info(() -> "Handed over " + run);
         lost(run);
     }
