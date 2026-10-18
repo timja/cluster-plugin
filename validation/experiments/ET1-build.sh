@@ -55,13 +55,14 @@ at_ref "$FOLDER_WT" "$FOLDER_REF"
 (cd "$FOLDER_WT" && $MVN $ON_CORE clean package)
 cp "$FOLDER_WT/target/cloudbees-folder.hpi" "$ET1/plugins/"
 
-# Target 4: workflow-cps with ProgramSavedListener, needed by the store plugin (skipped if the worktree is absent)
+# Target 4: workflow-cps with ProgramSavedListener and CpsFlowExecution.halt, needed by the cluster plugin (skipped if the worktree is absent)
 WFCPS=${WFCPS:-/Users/timja/code/jenkins/workflow-cps-plugin-cnj}
 WFCPS_REF=${WFCPS_REF:-cnj/t4-m1-program-saved-listener}
 if [[ -d "$WFCPS" ]]; then
   echo "workflow-cps $WFCPS_REF ($(git -C "$WFCPS" rev-parse --short "$WFCPS_REF"))"
   at_ref "$WFCPS" "$WFCPS_REF"
-  (cd "$WFCPS" && $MVN -pl dgm-builder,lib,plugin clean package)
+  # installed: the cluster plugin is built against it (CpsFlowExecution.halt), as $EXT_CHANGELIST
+  (cd "$WFCPS" && $MVN -Dchangelist="$EXT_CHANGELIST" -pl dgm-builder,lib,plugin clean install)
   cp "$WFCPS/plugin/target/workflow-cps.hpi" "$ET1/plugins/"
 fi
 
