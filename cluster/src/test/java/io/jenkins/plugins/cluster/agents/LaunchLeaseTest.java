@@ -75,6 +75,9 @@ class LaunchLeaseTest {
         }
         assertTrue(c.isOffline());
         assertThat(c.getLog(), containsString("Not launching agent: it is connected on other"));
+        LaunchLease.ConnectedElsewhere why =
+                assertInstanceOf(LaunchLease.ConnectedElsewhere.class, c.getOfflineCause());
+        assertEquals("other", why.getController(), "shown where it is connected, not as a launch failure");
         assertEquals("other", store.launchLeases().holder("agent").origin());
 
         store.gone("other", true); // it died: the next try takes its lease over

@@ -7,6 +7,7 @@ import hudson.Extension;
 import hudson.ExtensionList;
 import hudson.model.AsyncPeriodicWork;
 import hudson.model.Computer;
+import hudson.model.Label;
 import hudson.model.Node;
 import hudson.model.TaskListener;
 import hudson.slaves.AbstractCloudSlave;
@@ -18,7 +19,11 @@ import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.LaunchLeases;
 import io.jenkins.plugins.cluster.spi.Membership;
 import java.io.IOException;
+import java.util.Collection;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -27,6 +32,7 @@ import jenkins.model.Jenkins;
 import jenkins.model.NodeListener;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
+import org.kohsuke.stapler.export.Exported;
 
 /**
  * Only one controller of the cluster connects a given agent that the controller launches itself (such as an SSH
@@ -75,13 +81,83 @@ public final class LaunchLease extends ComputerListener {
         long epoch = store.launchLeases().acquire(name);
         if (epoch == 0) {
             String holder = holderName(store, name);
+            // shown instead of a launch failure: nothing failed
+            c.setOfflineCause(new ConnectedElsewhere(holder));
             throw new AbortException("Not launching " + name + ": it is connected on " + holder);
         }
         held.put(name, epoch);
     }
 
+    /**
+     * The origin of the live controller, other than this one, holding the launch lease of a node this controller has
+     * but does not hold, or null.
+     */
+    @CheckForNull
+    public static String holderElsewhere(@NonNull ClusterStore store, @NonNull Computer c) throws IOException {
+        if (!isLeased(c) || get().holds(c.getName()) || !store.canJudgeLiveness()) {
+            return null;
+        }
+        LaunchLeases.Holder h = store.launchLeases().holder(c.getName());
+        return h == null
+                        || h.origin().equals(store.getOrigin())
+                        || !store.aliveMembers().contains(h.origin())
+                ? null
+                : h.origin();
+    }
+
+    /**
+     * The live controllers, this one included, connecting leased agents that could run work for a label (any agent
+     * taking unlabelled work, for null). Only they see whether those agents are busy: the others see them offline.
+     */
+    @NonNull
+    public static Set<String> holdersOf(@CheckForNull Label label) throws IOException {
+        ClusterStore store = store();
+        if (store == null || !store.canJudgeLiveness()) {
+            return Set.of();
+        }
+        Set<String> live = null;
+        Set<String> holders = new TreeSet<>();
+        Collection<Node> nodes = label == null ? Jenkins.get().getNodes() : label.getNodes();
+        for (Node n : nodes) {
+            Computer c = n.toComputer();
+            if (c == null || !isLeased(c) || label == null && n.getMode() != Node.Mode.NORMAL) {
+                continue;
+            }
+            LaunchLeases.Holder h = get().recentHolder(store, c.getName());
+            if (h == null) {
+                continue;
+            }
+            if (live == null) {
+                live = store.aliveMembers();
+            }
+            if (live.contains(h.origin())) {
+                holders.add(h.origin());
+            }
+        }
+        return holders;
+    }
+
+    /** Holders read recently, by node: load statistics ask for every queue item, every few seconds. */
+    private final Map<String, Map.Entry<Long, Optional<LaunchLeases.Holder>>> recent = new ConcurrentHashMap<>();
+
+    @CheckForNull
+    private LaunchLeases.Holder recentHolder(ClusterStore store, String node) throws IOException {
+        long now = System.currentTimeMillis();
+        Map.Entry<Long, Optional<LaunchLeases.Holder>> e = recent.get(node);
+        if (e != null && now - e.getKey() < 2_000) {
+            return e.getValue().orElse(null);
+        }
+        LaunchLeases.Holder h = store.launchLeases().holder(node);
+        if (recent.size() > 10_000) {
+            recent.clear();
+        }
+        recent.put(node, Map.entry(now, Optional.ofNullable(h)));
+        return h;
+    }
+
     /** The name of the controller holding a node's lease, for messages. */
-    static String holderName(ClusterStore store, String node) {
+    @NonNull
+    public static String holderName(@NonNull ClusterStore store, @NonNull String node) {
         try {
             LaunchLeases.Holder h = store.launchLeases().holder(node);
             if (h == null) {
@@ -160,6 +236,26 @@ public final class LaunchLease extends ComputerListener {
             }
         }
         return n;
+    }
+
+    /** Why an agent is offline here: another controller connects it. */
+    public static final class ConnectedElsewhere extends OfflineCause {
+        private final String controller;
+
+        ConnectedElsewhere(String controller) {
+            this.controller = controller;
+        }
+
+        /** The name of the controller connecting the agent. */
+        public String getController() {
+            return controller;
+        }
+
+        @Exported(name = "description")
+        @Override
+        public String toString() {
+            return "Connected on " + controller + ", another controller of the cluster";
+        }
     }
 
     /** Why an agent was disconnected. */
