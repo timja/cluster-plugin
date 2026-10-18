@@ -131,6 +131,8 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
 
         static final String LOCK = "lock";
         static final String RESERVATION = "reservation";
+        /** Held for a client of lockable-resources' remote lock API; {@code build} is the remote lock's id. */
+        static final String REMOTE = "remote";
 
         static Holder lock(Run<?, ?> build, String origin) {
             return new Holder(
@@ -141,8 +143,24 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
             return new Holder(RESERVATION, null, null, user, reason, stolen, origin, ClusterMember.NAME);
         }
 
+        static Holder remote(String lockId, String origin) {
+            return new Holder(REMOTE, lockId, "remote lock " + lockId, null, null, false, origin, ClusterMember.NAME);
+        }
+
         boolean isLock() {
             return LOCK.equals(kind);
+        }
+
+        boolean isReservation() {
+            return RESERVATION.equals(kind);
+        }
+
+        boolean isRemote() {
+            return REMOTE.equals(kind);
+        }
+
+        boolean isRemoteLockOf(@CheckForNull String lockId) {
+            return isRemote() && lockId != null && lockId.equals(build);
         }
 
         boolean isLockOf(@CheckForNull Run<?, ?> run) {
@@ -288,6 +306,32 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
     }
 
     @Override
+    public boolean tryLockForRemote(@NonNull List<LockableResource> resources, @NonNull String lockId) {
+        ClusterStore store = store();
+        if (store == null) {
+            return true;
+        }
+        return take(store, resources, Holder.remote(lockId, store.getOrigin()), null);
+    }
+
+    @Override
+    public void releasedForRemote(@NonNull LockableResource resource, @NonNull String lockId) {
+        ClusterStore store = store();
+        if (store == null) {
+            return;
+        }
+        known.remove(resource.getName());
+        deleteIf(store, resource.getName(), h -> h.isRemoteLockOf(lockId));
+    }
+
+    /** Names the controller holding the lock, so that its client's later calls reach it through any controller. */
+    @NonNull
+    @Override
+    public String newRemoteLockId() {
+        return io.jenkins.plugins.cluster.RemoteLockForwarder.newLockId();
+    }
+
+    @Override
     public void released(@NonNull LockableResource resource, @NonNull Run<?, ?> build) {
         ClusterStore store = store();
         if (store == null) {
@@ -317,7 +361,7 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
             return;
         }
         known.remove(resource.getName());
-        deleteIf(store, resource.getName(), h -> !h.isLock());
+        deleteIf(store, resource.getName(), Holder::isReservation);
     }
 
     /**
@@ -403,7 +447,7 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
     /** Shows how a resource is held by another controller. */
     private void show(LockableResource r, Holder h, long version) {
         known.put(r.getName(), version);
-        if (h.isLock()) {
+        if (h.isLock() || h.isRemote()) {
             r.setHeldElsewhereBy(h.describe());
         } else {
             r.setHeldElsewhereBy(null);
@@ -526,6 +570,7 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
         }
         LockableResourcesManager lrm = LockableResourcesManager.get();
         boolean freed = false;
+        String lostRemoteLock = null;
         try {
             synchronized (LockableResourcesManager.syncResources) {
                 LockableResource r = resource(lrm, name);
@@ -535,10 +580,15 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
                 PersistenceStore.Entry entry = store.read(key(name));
                 Holder h = Holder.parse(entry);
                 Run<?, ?> local = r.getBuild();
+                String remote = r.getRemoteLockedBy();
                 if (entry == null || h == null) {
                     // freed elsewhere: unlocked or reset on the resources page there, or released by its holder
                     Long had = known.remove(name);
-                    if (local != null) {
+                    if (remote != null) {
+                        LOGGER.info(() -> name + " was freed on another controller while remote lock " + remote
+                                + " held it here");
+                        lostRemoteLock = remote;
+                    } else if (local != null) {
                         LOGGER.info(() -> name + " was freed on another controller while " + local + " held it here");
                         lrm.unlockResources(new ArrayList<>(List.of(r)), local);
                     } else if (had != null && r.isReserved()) {
@@ -546,10 +596,13 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
                     }
                     r.setHeldElsewhereBy(null);
                     freed = true;
-                } else if (h.isLockOf(local)) {
+                } else if (h.isLockOf(local) || h.isRemoteLockOf(remote)) {
                     known.put(name, entry.version()); // this controller's own lock
                 } else {
-                    if (local != null) {
+                    if (remote != null) {
+                        LOGGER.info(() -> name + " was taken from remote lock " + remote + " on another controller");
+                        lostRemoteLock = remote;
+                    } else if (local != null) {
                         // stolen from the build here, or reassigned, on another controller: freed here as a steal does
                         LOGGER.info(() -> name + " was taken from " + local + " on another controller");
                         lrm.unlockResources(new ArrayList<>(List.of(r)), local);
@@ -561,6 +614,10 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
             LOGGER.log(Level.WARNING, "Cannot read the lock of " + name + "; trying again shortly", e);
             Timer.get().schedule(() -> events.submit(() -> apply(name)), 10, TimeUnit.SECONDS);
             return;
+        }
+        if (lostRemoteLock != null) {
+            // outside the manager's lock, as a release from the resources page; its client finds the lock gone
+            lrm.releaseRemoteLock(lostRemoteLock);
         }
         if (freed) {
             // a waiter here may take it now: Pipeline steps wait in the manager's queue, freestyle builds in Jenkins'

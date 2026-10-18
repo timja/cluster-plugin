@@ -39,7 +39,7 @@
       <!-- LockCoordinator (lockable-resources cnj2/lock-coordinator, installed locally) -->
       <groupId>org.6wind.jenkins</groupId>
       <artifactId>lockable-resources</artifactId>
-      <version>-cnj2-i-SNAPSHOT</version>
+      <version>-cnj2-r-SNAPSHOT</version>
       <optional>true</optional>
     </dependency>
     <dependency>

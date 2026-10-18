@@ -317,6 +317,119 @@ class ClusterLocksTest {
     }
 
     @Test
+    void aStepWaitingForALockTakenElsewhereNamesItsHolder() throws Exception {
+        // taken on another controller, and not known here yet (its change has not arrived): res looks free
+        store.write(ClusterLocks.key("res"), lockOf("uuid-x#3", "other"), PersistenceStore.ABSENT);
+        assertNull(lrm.fromName("res").getHeldElsewhereBy());
+        WorkflowJob p = j.createProject(WorkflowJob.class, "p");
+        p.setDefinition(new CpsFlowDefinition("lock('res') { echo 'inside' }", true));
+        WorkflowRun b = p.scheduleBuild2(0).waitForStart();
+        j.waitForMessage("[Resource: res] is not free, waiting for execution ...", b);
+        j.assertLogContains("The resource [res] is locked by uuid-x#3 on controller-other.", b);
+
+        other.delete(ClusterLocks.key("res"), PersistenceStore.ANY);
+        applied();
+        j.assertBuildStatusSuccess(j.waitForCompletion(b));
+    }
+
+    // ------------------------------------------------------------------ remote lock API
+
+    private static org.jenkins.plugins.lockableresources.remote.RemoteLockRecord remoteLock(boolean skipIfLocked) {
+        return org.jenkins.plugins.lockableresources.remote.RemoteLockManager.get()
+                .enqueue(
+                        new org.jenkins.plugins.lockableresources.remote.RemoteLockRequest(
+                                "res", null, 0, null, false, "SEQUENTIAL", skipIfLocked, null, 0, 0, "MINUTES", null),
+                        "client-1");
+    }
+
+    private void exposeRes() {
+        lrm.setRemoteApiEnabled(true);
+        lrm.setExposeLabel("remote-ok");
+        lrm.fromName("res").setLabelsFromString("remote-ok");
+    }
+
+    @Test
+    void remoteLockIsExclusive() throws Exception {
+        exposeRes();
+        var record = remoteLock(false);
+        assertEquals(org.jenkins.plugins.lockableresources.remote.RemoteLockState.ACQUIRED, record.getState());
+        assertTrue(
+                record.getLockId().startsWith(io.jenkins.plugins.cluster.spi.ClusterMember.NAME + "~"),
+                "names the controller holding it: " + record.getLockId());
+        ClusterLocks.Holder h = holder("res");
+        assertNotNull(h);
+        assertTrue(h.isRemoteLockOf(record.getLockId()));
+        assertThrowsConflict(
+                () -> other.write(ClusterLocks.key("res"), lockOf("uuid-y#1", "other"), PersistenceStore.ABSENT));
+        tellLate("res", false); // its own lock: kept
+        assertEquals(record.getLockId(), lrm.fromName("res").getRemoteLockedBy());
+
+        org.jenkins.plugins.lockableresources.remote.RemoteLockManager.get().release(record.getLockId());
+        assertNull(store.read(ClusterLocks.key("res")), "released");
+    }
+
+    @Test
+    void remoteLockWaitsForALockTakenElsewhere() throws Exception {
+        exposeRes();
+        // not known here yet: res looks free, the store refuses
+        store.write(ClusterLocks.key("res"), lockOf("uuid-x#3", "other"), PersistenceStore.ABSENT);
+        var record = remoteLock(false);
+        assertEquals(org.jenkins.plugins.lockableresources.remote.RemoteLockState.QUEUED, record.getState());
+        assertEquals("uuid-x#3 on controller-other", lrm.fromName("res").getHeldElsewhereBy());
+        assertEquals(
+                org.jenkins.plugins.lockableresources.remote.RemoteLockState.SKIPPED,
+                remoteLock(true).getState());
+
+        other.delete(ClusterLocks.key("res"), PersistenceStore.ANY);
+        applied();
+        ClusterFixture.await(
+                "the queued remote lock to be granted",
+                () -> record.getState() == org.jenkins.plugins.lockableresources.remote.RemoteLockState.ACQUIRED);
+        assertTrue(holder("res").isRemoteLockOf(record.getLockId()));
+    }
+
+    @Test
+    void remoteLockFreedOrTakenElsewhereEndsHere() throws Exception {
+        exposeRes();
+        var record = remoteLock(false);
+        other.delete(ClusterLocks.key("res"), PersistenceStore.ANY); // reset on the resources page there
+        applied();
+        assertEquals(org.jenkins.plugins.lockableresources.remote.RemoteLockState.FAILED, record.getState());
+        assertNull(lrm.fromName("res").getRemoteLockedBy());
+
+        var second = remoteLock(false);
+        assertEquals(org.jenkins.plugins.lockableresources.remote.RemoteLockState.ACQUIRED, second.getState());
+        other.write(ClusterLocks.key("res"), reservationOf("alice", "other"), PersistenceStore.ANY); // stolen there
+        applied();
+        assertEquals(org.jenkins.plugins.lockableresources.remote.RemoteLockState.FAILED, second.getState());
+        assertNull(lrm.fromName("res").getRemoteLockedBy());
+        assertEquals("alice", lrm.fromName("res").getReservedBy());
+        assertNotNull(holder("res"), "the reservation made there stays");
+        assertFalse(holder("res").isRemote());
+    }
+
+    @Test
+    void remoteLocksOfAControllerGoneAreReleased() throws Exception {
+        other.write(
+                ClusterLocks.key("res"),
+                ClusterLocks.Holder.remote("dead~1234", "dead").toBytes(),
+                PersistenceStore.ABSENT);
+        other.write(
+                ClusterLocks.key("res2"),
+                ClusterLocks.Holder.remote("other~5678", "other").toBytes(),
+                PersistenceStore.ABSENT);
+        applied();
+        assertEquals(
+                "remote lock dead~1234 on " + io.jenkins.plugins.cluster.spi.ClusterMember.NAME,
+                lrm.fromName("res").getHeldElsewhereBy());
+        assertEquals(1, LockOrphans.sweep(store), "res; the holder of res2 is alive");
+        locks.flush();
+        assertNull(store.read(ClusterLocks.key("res")));
+        assertNull(lrm.fromName("res").getHeldElsewhereBy());
+        assertNotNull(store.read(ClusterLocks.key("res2")));
+    }
+
+    @Test
     void aCopyOfABuildTakenOverElsewhereLeavesTheNewOwnersLock() throws Exception {
         WorkflowRun b = lockInside("p");
         // taken over by another controller, which rewrote the lock as its own (LockAdoption there)
