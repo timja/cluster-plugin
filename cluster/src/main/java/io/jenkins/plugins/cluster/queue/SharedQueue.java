@@ -18,6 +18,7 @@ import hudson.security.ACLContext;
 import hudson.util.DaemonThreadFactory;
 import hudson.util.NamingThreadFactory;
 import hudson.util.Secret;
+import io.jenkins.plugins.cluster.agents.LaunchLease;
 import io.jenkins.plugins.cluster.builds.ExclusiveLeases;
 import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterQueue;
@@ -482,10 +483,15 @@ public final class SharedQueue {
     }
 
     /**
-     * Whether this controller provisions for an item: the one that claimed it, or it is pinned to; otherwise its origin
-     * while alive (it goes first, and may hold the agents the build needs); otherwise, any.
+     * Whether this controller provisions for an item: the one that claimed it, or it is pinned to; otherwise one of the
+     * controllers connecting the leased agents with its label (see {@link LaunchLease#holdersOf}), if any; otherwise
+     * its origin while alive (it goes first, and may hold the agents the build needs); otherwise, any.
+     *
+     * @param agentHolders the live controllers connecting leased agents with the item's label: only they can tell
+     *     whether those agents are busy, as the others see them offline
      */
-    static boolean provisionsHere(@NonNull ClusterQueue.Record r, long now) throws IOException {
+    static boolean provisionsHere(@NonNull ClusterQueue.Record r, long now, @NonNull Set<String> agentHolders)
+            throws IOException {
         String me = origin();
         if (r.claimedBy() != null) {
             return me.equals(r.claimedBy());
@@ -493,6 +499,9 @@ public final class SharedQueue {
         String pinnedTo = r.pinnedTo();
         if (pinnedTo != null && pinHolds(pinnedTo)) {
             return me.equals(pinnedTo);
+        }
+        if (!agentHolders.isEmpty()) {
+            return me.equals(agentHolders.contains(r.origin()) ? r.origin() : provisioner(r.id(), agentHolders));
         }
         if (me.equals(r.origin())) {
             return true;

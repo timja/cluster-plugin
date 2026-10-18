@@ -7,6 +7,7 @@ import hudson.model.queue.SubTask;
 import hudson.slaves.Cloud;
 import hudson.slaves.CloudProvisioningListener;
 import hudson.slaves.NodeProvisioner;
+import io.jenkins.plugins.cluster.agents.LaunchLease;
 import io.jenkins.plugins.cluster.spi.ClusterQueue;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
@@ -89,7 +90,9 @@ public final class QueueReservations extends CloudProvisioningListener {
             }
             try {
                 ClusterQueue.Record r = cq.get(bi.getId());
-                if (r == null || r.claimedBy() != null || !SharedQueue.provisionsHere(r, System.currentTimeMillis())) {
+                if (r == null
+                        || r.claimedBy() != null
+                        || !SharedQueue.provisionsHere(r, System.currentTimeMillis(), LaunchLease.holdersOf(label))) {
                     continue;
                 }
                 String reservedBy = holder(bi.getId());
