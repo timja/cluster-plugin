@@ -21,6 +21,7 @@ import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import io.jenkins.plugins.cluster.spi.LeaseLostException;
+import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
@@ -334,6 +335,65 @@ public final class RunningBuilds {
     /** Forgets the cached placeholders of a job, by its item prefix. */
     static void invalidate(@NonNull String prefix) {
         cache.remove(prefix);
+    }
+
+    /**
+     * Lists again the placeholders of every job whose placeholders are cached here, and caches what differs, as if their
+     * change events had just arrived (they may have been lost).
+     */
+    static void catchUp() throws IOException {
+        ClusterStore store = ClusterStore.get();
+        if (store == null) {
+            return;
+        }
+        boolean changed = false;
+        for (String prefix : List.copyOf(cache.keySet())) {
+            long generation = generationOf(prefix);
+            List<Placeholder> before = cache.get(prefix);
+            List<Placeholder> loaded;
+            try {
+                loaded = load(store, prefix);
+            } catch (java.io.UncheckedIOException e) {
+                throw e.getCause();
+            }
+            if (before == null || sameVersions(before, loaded)) {
+                continue; // forgotten meanwhile (loaded again when needed), or up to date
+            }
+            LOGGER.info(() -> "Running builds of " + prefix + " changed without their change events reaching here");
+            // never over a change seen while listing (its event is applied, or being applied): then forgotten instead,
+            // and loaded again when needed
+            if (generationOf(prefix) == generation) {
+                cache.replace(prefix, before, loaded);
+            } else {
+                cache.remove(prefix, before);
+            }
+            changed = true;
+        }
+        if (changed) {
+            Queue.getInstance().scheduleMaintenance(); // e.g. an item blocked by a build elsewhere which completed
+        }
+    }
+
+    private static boolean sameVersions(List<Placeholder> a, List<Placeholder> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i).number != b.get(i).number || a.get(i).version != b.get(i).version) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Catches up with the store's placeholders of the jobs cached here. */
+    @Extension
+    @Restricted(NoExternalUse.class)
+    public static final class CatchUp extends Resync {
+        @Override
+        public void catchUp() throws IOException {
+            RunningBuilds.catchUp();
+        }
     }
 
     @NonNull

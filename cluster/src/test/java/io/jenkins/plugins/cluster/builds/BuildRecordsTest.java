@@ -21,6 +21,7 @@ import hudson.model.Result;
 import io.jenkins.plugins.cluster.ClusterFixture;
 import io.jenkins.plugins.cluster.spi.InMemoryClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
+import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -398,6 +399,43 @@ class BuildRecordsTest {
                 List.of(2, 1),
                 fresh.getBuilds().stream().map(FreeStyleBuild::getNumber).toList());
         assertThat(fresh.getBuildByNumber(2).getLog(), containsString("hello from #2"));
+    }
+
+    @Test
+    void buildsChangedElsewhereWhoseEventsWereLostAreCaughtUpWith() throws Exception {
+        FreeStyleProject p = project(r, "caught-up");
+        r.buildAndAssertSuccess(p);
+        r.buildAndAssertSuccess(p);
+        assertNotNull(p.getBuildByNumber(1));
+        String prefix = Keys.item(p);
+        InMemoryClusterStore other = store().as("other");
+        String edited = record(p, 1)
+                .replace(
+                        "<keepLog>false</keepLog>",
+                        "<description>from elsewhere</description><keepLog>false</keepLog>");
+        // completed (#3), edited (#1) and deleted (#2) elsewhere, none of their change events reaching here
+        store().loseEvents(true);
+        try {
+            other.write(
+                    Keys.buildRecord(prefix, 3),
+                    record(p, 2).getBytes(StandardCharsets.UTF_8),
+                    PersistenceStore.ABSENT);
+            other.write(Keys.buildRecord(prefix, 1), edited.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
+            other.delete(Keys.buildRecord(prefix, 2), PersistenceStore.ANY);
+        } finally {
+            store().loseEvents(false);
+        }
+        assertEquals(3, p.getNextBuildNumber(), "nothing of it known here yet");
+        assertNotNull(p.getBuildByNumber(2));
+        // as the store's listener asks when it cannot rule out lost events
+        Resync.request("a test lost change events");
+        ClusterFixture.await(
+                "the build completed elsewhere is listed",
+                () -> p.getNextBuildNumber() == 4 && new File(p.getBuildDir(), "3").isDirectory());
+        ClusterFixture.await("the build deleted elsewhere is forgotten", () -> p.getBuildByNumber(2) == null);
+        ClusterFixture.await(
+                "the edit made elsewhere is applied",
+                () -> "from elsewhere".equals(p.getBuildByNumber(1).getDescription()));
     }
 
     @Test

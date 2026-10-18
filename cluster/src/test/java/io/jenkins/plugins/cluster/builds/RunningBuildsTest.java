@@ -20,6 +20,7 @@ import io.jenkins.plugins.cluster.ClusterFixture;
 import io.jenkins.plugins.cluster.PipelineAdopter;
 import io.jenkins.plugins.cluster.spi.InMemoryClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
+import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -515,6 +516,34 @@ class RunningBuildsTest {
     private static void put(String key, String content) throws java.io.IOException {
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         ClusterFixture.blobs().put(key, new java.io.ByteArrayInputStream(bytes), bytes.length);
+    }
+
+    @Test
+    void runningBuildsElsewhereWhoseEventsWereLostAreCaughtUpWith() throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("caught-up");
+        assertFalse(p.isBuilding()); // cached: none
+        store().loseEvents(true);
+        try {
+            runningElsewhere(p, 1, "other"); // its change event never reaches here
+        } finally {
+            store().loseEvents(false);
+        }
+        assertTrue(ExternalBuilds.get().running(p).isEmpty(), "not seen here yet");
+        // as the store's listener asks when it cannot rule out lost events
+        Resync.request("a test lost change events");
+        ClusterFixture.await(
+                "listed once caught up", () -> ExternalBuilds.get().running(p).size() == 1);
+        assertTrue(p.isBuilding());
+        // and one completed elsewhere whose event is lost too
+        store().loseEvents(true);
+        try {
+            store().as("other").delete(Keys.placeholder(Keys.item(p), 1), PersistenceStore.ANY);
+        } finally {
+            store().loseEvents(false);
+        }
+        assertTrue(p.isBuilding(), "still cached");
+        Resync.request("a test lost change events");
+        ClusterFixture.await("gone once caught up", () -> !p.isBuilding());
     }
 
     @Test

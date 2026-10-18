@@ -27,6 +27,7 @@ import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import io.jenkins.plugins.cluster.spi.LeaseLostException;
+import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -207,6 +208,10 @@ public final class BuildRecords {
      */
     @NonNull
     static Set<Integer> storedNumbers(@NonNull Job<?, ?> job) {
+        String id = job.getItemUuid();
+        if (id != null) {
+            indexed.add(id);
+        }
         try {
             return listStoredNumbers(job);
         } catch (IOException e) {
@@ -225,6 +230,9 @@ public final class BuildRecords {
     /** Jobs whose stored builds could not be listed as their build index was loaded, by identity. */
     private static final Set<String> unlisted = ConcurrentHashMap.newKeySet();
 
+    /** Jobs whose build index was loaded with the stored builds, by identity: what {@link #catchUp} lists again. */
+    private static final Set<String> indexed = ConcurrentHashMap.newKeySet();
+
     /** Adds to the build indexes of jobs whose stored builds could not be listed the builds they lack. */
     static void listAgain() {
         for (String uuid : List.copyOf(unlisted)) {
@@ -234,30 +242,99 @@ public final class BuildRecords {
                 unlisted.remove(uuid); // gone, or no longer shared
                 continue;
             }
-            Set<Integer> numbers;
             try {
-                numbers = listStoredNumbers(job);
+                listAgain(job, runs);
             } catch (IOException e) {
                 LOGGER.log(Level.FINE, "Still cannot list stored builds of " + job.getFullName(), e);
                 continue;
             }
             unlisted.remove(uuid);
-            for (int number : numbers) {
-                File dir = new File(job.getBuildDir(), String.valueOf(number));
-                try {
-                    synchronized (runs) {
-                        if (!new File(dir, RECORD).isFile()) { // else local, and indexed
-                            Files.createDirectories(dir.toPath());
-                            runs.recognizeNumber(number); // materialized when first loaded
-                        }
-                    }
-                } catch (IOException e) {
-                    LOGGER.log(Level.WARNING, "Could not add " + job.getFullName() + " #" + number, e);
-                }
-                followNumber(job, number);
-            }
             LOGGER.info(() -> "Listed the stored builds of " + job.getFullName() + " again");
-            StoredPermalinks.changedElsewhere(job);
+        }
+    }
+
+    /**
+     * Adds to a job's build index the stored builds it lacks.
+     *
+     * @return the stored numbers
+     */
+    private static Set<Integer> listAgain(Job<?, ?> job, RunMap<?> runs) throws IOException {
+        Set<Integer> numbers = listStoredNumbers(job);
+        for (int number : numbers) {
+            File dir = new File(job.getBuildDir(), String.valueOf(number));
+            try {
+                synchronized (runs) {
+                    if (!new File(dir, RECORD).isFile()) { // else local, and indexed
+                        Files.createDirectories(dir.toPath());
+                        runs.recognizeNumber(number); // materialized when first loaded
+                    }
+                }
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Could not add " + job.getFullName() + " #" + number, e);
+            }
+            followNumber(job, number);
+        }
+        StoredPermalinks.changedElsewhere(job);
+        return numbers;
+    }
+
+    /**
+     * Lists again the stored builds of every job whose build index is loaded, and applies what differs, as if their
+     * change events had just arrived (they may have been lost): a build stored but not indexed here is added; a copy
+     * fetched or published here whose record is no longer stored is forgotten; a loaded copy whose record changed is
+     * refreshed. (A copy not loaded is compared when its record next changes, or when the job is loaded again.) Each
+     * job is caught up on the thread its changes are applied on, in order with them.
+     */
+    static void catchUp() {
+        for (String uuid : List.copyOf(indexed)) {
+            Job<?, ?> job = ItemEvents.job(uuid);
+            if (job == null || runsOf(job) == null || !isShared(job)) {
+                indexed.remove(uuid); // gone, or no longer shared; added again when its index is loaded again
+                continue;
+            }
+            ItemEvents.submit(uuid, "the stored builds of " + job.getFullName(), () -> catchUp(job));
+        }
+    }
+
+    private static void catchUp(Job<?, ?> job) throws IOException {
+        RunMap<?> runs = runsOf(job);
+        if (runs == null) {
+            return;
+        }
+        Set<Integer> stored = listAgain(job, runs);
+        unlisted.remove(job.getItemUuid());
+        File[] dirs = job.getBuildDir().listFiles();
+        for (File dir : dirs == null ? new File[0] : dirs) {
+            int number;
+            try {
+                number = Integer.parseInt(dir.getName());
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            // only a copy that was stored (published or fetched here): one completed here may not be published yet
+            if (!stored.contains(number)
+                    && new File(dir, RECORD).isFile()
+                    && RecordVersion.read(dir) != PersistenceStore.ANY) {
+                deletedElsewhere(job, number); // checks the store again
+            }
+        }
+        for (Map.Entry<Integer, ? extends Run<?, ?>> e :
+                Map.copyOf(runs.getLoadedBuilds()).entrySet()) {
+            if (stored.contains(e.getKey())
+                    && !e.getValue().isBuilding()
+                    && RecordVersion.read(e.getValue().getRootDir()) != PersistenceStore.ANY) {
+                writtenElsewhere(job, e.getKey()); // nothing if this copy has the stored version
+            }
+        }
+    }
+
+    /** Catches up with the store's build records of the jobs whose build index is loaded here. */
+    @Extension
+    @Restricted(NoExternalUse.class)
+    public static final class CatchUp extends Resync {
+        @Override
+        public void catchUp() {
+            BuildRecords.catchUp();
         }
     }
 
