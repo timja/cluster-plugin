@@ -14,6 +14,7 @@ import hudson.model.FreeStyleProject;
 import hudson.model.Queue;
 import hudson.model.Result;
 import io.jenkins.plugins.cluster.ClusterFixture;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.InMemoryClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import java.nio.charset.StandardCharsets;
@@ -132,6 +133,19 @@ class ClusterBuildTriggerRelayTest {
                 store.children(Keys.running(Keys.itemByUuid(us))).stream()
                         .noneMatch(child -> child.contains(".deliver-")),
                 "nothing delivered: the build's own placeholder only");
+    }
+
+    @Test
+    void eventOfABuildTakenOverElsewhereIsLeftToTheNewOwner() throws Exception {
+        Waiting w = waiting("build 'ds'");
+        String us = w.run().getParent().getItemUuid();
+        RunningBuilds.lost(ds1); // e.g. handed over to a controller with the agent it waits for
+        assertTrue(relay.relay(us + "#1#" + w.nodeId(), false, ds1, BuildTriggerRelay.Event.COMPLETED));
+        assertTrue(
+                store.children(Keys.running(Keys.itemByUuid(us))).stream()
+                        .noneMatch(child -> child.contains(".deliver-")),
+                "nothing delivered: the new owner relays the outcome");
+        assertTrue(w.run().isBuilding(), "the step still waits");
     }
 
     @Test
