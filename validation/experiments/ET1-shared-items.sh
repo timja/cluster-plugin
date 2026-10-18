@@ -73,10 +73,21 @@ et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
 both_up() { curl -gsf -m 5 -u "$AUTH" "http://localhost:$A/api/json" >/dev/null 2>&1 && curl -gsf -m 5 -u "$AUTH" "http://localhost:$B/api/json" >/dev/null 2>&1; }
 exited() { docker ps -a --filter "name=^${P}jenkins-" --filter status=exited --format '{{.Names}}'; }
 t0=$SECONDS; until both_up || [[ -n "$(exited)" ]] || (( SECONDS - t0 > 300 )); do sleep 2; done
+# failed: exited, or up without answering an authenticated API call
 together_failed=$(exited)
-if [[ -n "$together_failed" ]]; then # carry on with the rest: started again, one after the other
+for c in a b; do
+  port=$A; [[ $c == b ]] && port=$B
+  [[ " $together_failed " == *" ${P}jenkins-$c-1 "* ]] || curl -gsf -m 5 -u "$AUTH" "http://localhost:$port/api/json" >/dev/null 2>&1 \
+    || together_failed="$together_failed ${P}jenkins-$c-1"
+done
+together_failed=$(echo $together_failed)
+if [[ -n "$together_failed" ]]; then # carry on with the rest: those started again, one after the other
   for c in $together_failed; do docker logs "$c" > "$OUT/$c-together.log" 2>&1; done
-  et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; et1 up -d jenkins-b >/dev/null 2>&1
+  for c in a b; do
+    [[ " $together_failed " == *" ${P}jenkins-$c-1 "* ]] || continue
+    port=$A; [[ $c == b ]] && port=$B
+    et1 rm -sf jenkins-$c >/dev/null 2>&1; et1 up -d jenkins-$c >/dev/null 2>&1; wait_up $port
+  done
 fi
 wait_up $A; wait_up $B
 r "## ET1 results ($(date -u +%Y-%m-%dT%H:%MZ))"

@@ -46,7 +46,9 @@ docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
 # one after the other (ET1 checks starting controllers at once)
-for c in a b c; do et1 up -d jenkins-$c >/dev/null 2>&1; done_port=PORT_${c^^}; wait_up ${!done_port}; done
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
+et1 up -d jenkins-c >/dev/null 2>&1; wait_up $C
 psql_q "create extension if not exists pg_stat_statements" >/dev/null
 r "## ET17 results ($(date -u +%Y-%m-%dT%H:%MZ)): 3 controllers, $HJOBS jobs x $PER builds, $PROJECTS multibranch projects x $BRANCHES branches"
 r ""
