@@ -9,7 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import hudson.ExtensionList;
 import hudson.model.Computer;
+import hudson.model.TaskListener;
 import hudson.slaves.DumbSlave;
 import hudson.slaves.JNLPLauncher;
 import io.jenkins.plugins.cluster.ClusterFixture;
@@ -84,6 +86,48 @@ class LaunchLeaseTest {
         c.connect(false).get();
         awaitOnline(c);
         assertEquals(store.getOrigin(), store.launchLeases().holder("agent").origin());
+    }
+
+    private Computer refused(String name, String holder) throws Exception {
+        Computer c = j.createSlave(name, null, null).toComputer();
+        awaitRefused(c, holder);
+        return c;
+    }
+
+    private static void awaitRefused(Computer c, String holder) {
+        await().atMost(Duration.ofSeconds(60))
+                .until(() -> c.getOfflineCause() instanceof LaunchLease.ConnectedElsewhere why
+                        && why.getController().equals(holder)
+                        && !c.isConnecting());
+    }
+
+    @Test
+    void takenOverOnTheNextLeaseCheckOnceItsHolderIsGone() throws Exception {
+        assertTrue(other.launchLeases().acquire("agent") > 0);
+        Computer c = refused("agent", "other");
+        LaunchLease.Fencing check = ExtensionList.lookupSingleton(LaunchLease.Fencing.class);
+        check.execute(TaskListener.NULL);
+        assertTrue(c.isOffline(), "its holder is alive");
+
+        store.gone("other", true);
+        // not left to the retention strategy, whose retries become rare
+        check.execute(TaskListener.NULL);
+        awaitOnline(c);
+        assertEquals(store.getOrigin(), store.launchLeases().holder("agent").origin());
+    }
+
+    @Test
+    void onlyOneSurvivorTakesOverTheLease() throws Exception {
+        assertTrue(other.launchLeases().acquire("agent") > 0);
+        Computer c = refused("agent", "other");
+        store.gone("other", true);
+        InMemoryClusterStore third = store.as("third");
+        assertTrue(third.launchLeases().acquire("agent") > 0, "another survivor got there first");
+        LaunchLease.get().retakeLapsed(); // (unless the periodic check just did)
+        awaitRefused(c, "third");
+        assertEquals("third", store.launchLeases().holder("agent").origin());
+        assertEquals(0, LaunchLease.get().retakeLapsed(), "waits for the new holder: no further attempt");
+        assertTrue(c.isOffline());
     }
 
     @Test
