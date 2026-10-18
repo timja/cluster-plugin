@@ -998,10 +998,24 @@ public final class BuildRecords {
             return; // not published yet (publish will include this change), or deleted meanwhile: not brought back
         }
         long expected = RecordVersion.read(dir);
-        if (expected == PersistenceStore.ANY) {
-            expected = e.version(); // a copy from before versions were kept: as it was read now
+        RunMap<?> runs = runsOf(run.getParent());
+        Run<?, ?> current = runs == null ? null : runs.getLoadedBuilds().get(run.getNumber());
+        if (current != null && current != run) {
+            // a build object from before this copy was refreshed (after a change made elsewhere), saved over the
+            // current copy's record: not published, and the record the current copy holds is put back
+            LOGGER.warning(() -> run + " was changed on another controller meanwhile; this change of it, made to an"
+                    + " outdated copy, is not saved");
+            if (expected == e.version()) {
+                writeRecord(dir, e.content());
+            }
+            return;
         }
         try {
+            if (expected == PersistenceStore.ANY) {
+                // in sync with no stored version: a copy whose directory was refreshed since it was loaded, after a
+                // change made elsewhere (every copy written or fetched here records its version)
+                throw new ConflictException(key, expected, e.version());
+            }
             RecordVersion.write(dir, store.write(key, content, expected));
             LOGGER.fine(() -> "Republished " + run);
         } catch (ConflictException x) {

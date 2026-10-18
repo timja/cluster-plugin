@@ -255,9 +255,32 @@ class BuildRecordsTest {
                 .replace(
                         "<keepLog>false</keepLog>",
                         "<description>from elsewhere</description><keepLog>false</keepLog>");
-        other.write(key, elsewhere.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
-        // and here, by a copy which has not applied that yet: refused, and the copy refreshed
-        b.setDescription("from here");
+        // and here, by a copy which has not applied that yet (applying it waits for the job's builds): refused, and the
+        // copy refreshed
+        synchronized (BuildRecords.runsOf(p)) {
+            other.write(key, elsewhere.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
+            b.setDescription("from here");
+        }
+        assertThat(record(p, 1), containsString("from elsewhere"));
+        ClusterFixture.await(
+                "the copy here refreshed",
+                () -> "from elsewhere".equals(p.getBuildByNumber(1).getDescription()));
+    }
+
+    @Test
+    void aSaveOfACopyRefreshedSinceItWasLoadedNeverWritesOverAnEditElsewhere() throws Exception {
+        FreeStyleProject p = project(r, "stale");
+        FreeStyleBuild b = r.buildAndAssertSuccess(p);
+        String key = Keys.buildRecord(Keys.item(p), 1);
+        String elsewhere = record(p, 1)
+                .replace(
+                        "<keepLog>false</keepLog>",
+                        "<description>from elsewhere</description><keepLog>false</keepLog>");
+        store().as("other").write(key, elsewhere.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
+        ClusterFixture.await(
+                "the copy here refreshed",
+                () -> "from elsewhere".equals(p.getBuildByNumber(1).getDescription()));
+        b.setDescription("from here"); // b is a build object from before
         assertThat(record(p, 1), containsString("from elsewhere"));
         ClusterFixture.await(
                 "the copy here refreshed",
