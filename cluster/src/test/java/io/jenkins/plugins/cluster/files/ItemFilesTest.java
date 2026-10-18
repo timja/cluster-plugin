@@ -80,4 +80,29 @@ class ItemFilesTest {
         assertFalse(
                 Files.readString(p.getConfigFile().getFile().toPath()).isEmpty(), "its configuration is not replaced");
     }
+
+    @Test
+    void filesSharedElsewhereWhoseEventWasLostAreTakenOnCatchingUp(JenkinsRule r) throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("caught-up");
+        ItemFiles.Place place = ItemFiles.of(p);
+        byte[] content = "{\"v\":2}".getBytes(StandardCharsets.UTF_8);
+        String sha = java.util.HexFormat.of()
+                .formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(content));
+        ClusterFixture.blobs().put(place.blob(sha), new java.io.ByteArrayInputStream(content), content.length);
+        ClusterFixture.store().loseEvents(true);
+        try {
+            ClusterFixture.store()
+                    .as("other")
+                    .write(
+                            place.manifest(),
+                            ("{\"plugin-state.json\":\"" + sha + "\"}").getBytes(StandardCharsets.UTF_8),
+                            PersistenceStore.ANY);
+        } finally {
+            ClusterFixture.store().loseEvents(false);
+        }
+        Path state = p.getRootDir().toPath().resolve("plugin-state.json");
+        assertFalse(Files.exists(state), "its event was lost");
+        io.jenkins.plugins.cluster.spi.Resync.runAll();
+        assertEquals("{\"v\":2}", Files.readString(state));
+    }
 }

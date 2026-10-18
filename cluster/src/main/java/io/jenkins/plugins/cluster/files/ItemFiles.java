@@ -21,6 +21,7 @@ import io.jenkins.plugins.cluster.ClusterRouting;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
+import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -99,6 +100,9 @@ public final class ItemFiles {
             "lastStable",
             "lastSuccessful");
 
+    /** The version of each manifest this controller last took or shared over what it had taken, by manifest key. */
+    private static final Map<String, Long> taken = new ConcurrentHashMap<>();
+
     /** What was last shared or taken here, per manifest key: path → checksum. */
     private static final Map<String, Map<String, String>> known = new ConcurrentHashMap<>();
 
@@ -117,6 +121,7 @@ public final class ItemFiles {
     /** For tests: as a controller that never shared or took an item's files (another JVM). */
     static void forgetForTests() {
         known.clear();
+        taken.clear();
     }
 
     /** Where the files of a directory are shared: its manifest's key, and how a file's blob is named. */
@@ -277,7 +282,11 @@ public final class ItemFiles {
                 }
             }
             try {
-                store.write(place.manifest(), toBytes(shared), e == null ? PersistenceStore.ABSENT : e.version());
+                long written = store.write(
+                        place.manifest(), toBytes(shared), e == null ? PersistenceStore.ABSENT : e.version());
+                if (e == null || Long.valueOf(e.version()).equals(taken.get(place.manifest()))) {
+                    taken.put(place.manifest(), written); // else what changed elsewhere is taken by the catch-up
+                }
                 remember(place, local);
                 LOGGER.fine(() -> "Shared the files of " + place.dir());
                 return;
@@ -300,7 +309,8 @@ public final class ItemFiles {
     }
 
     private static void take(Place place, ClusterStore store, ClusterBlobStore blobs) throws IOException {
-        Map<String, String> shared = parse(store.read(place.manifest()));
+        PersistenceStore.Entry entry = store.read(place.manifest());
+        Map<String, String> shared = parse(entry);
         Map<String, String> last = last(place);
         if (shared.isEmpty() && !known.containsKey(place.manifest())) {
             return; // nothing shared, nothing taken before: leave the directory as it is (or absent)
@@ -358,6 +368,9 @@ public final class ItemFiles {
             }
         }
         remember(place, synced);
+        if (entry != null) {
+            taken.put(place.manifest(), entry.version());
+        }
     }
 
     /** What was last shared or taken of a directory: as known in memory, or as kept in it (as before a restart). */
@@ -496,6 +509,46 @@ public final class ItemFiles {
         }
     }
 
+    /**
+     * Takes the shared files of every item and user whose manifest changed since this controller last took it, as if
+     * the events had just arrived: an event may have been lost.
+     */
+    static void catchUp() throws IOException {
+        ClusterStore store = ClusterStore.get();
+        if (!enabled() || store == null) {
+            return;
+        }
+        List<Place> places = new ArrayList<>();
+        for (Item item : Jenkins.get().allItems()) {
+            if (item instanceof AbstractItem) {
+                places.add(ItemFiles.of(item));
+            }
+        }
+        for (File dir : userDirs()) {
+            places.add(ItemFiles.ofUser(dir));
+        }
+        for (Place place : places) {
+            if (place == null) {
+                continue;
+            }
+            PersistenceStore.Entry e = store.read(place.manifest());
+            if (e != null && !Long.valueOf(e.version()).equals(taken.get(place.manifest()))) {
+                takeOrLater(place);
+            }
+        }
+    }
+
+    /** Catches item and user files up with the store: events may have been lost. */
+    @Extension
+    public static final class CatchUp extends Resync {
+        @Override
+        public void catchUp() throws IOException {
+            try (ACLContext ignored = ACL.as2(ACL.SYSTEM2)) {
+                ItemFiles.catchUp();
+            }
+        }
+    }
+
     /** A fresh home takes every item's and user's shared files. */
     @Initializer(after = InitMilestone.JOB_LOADED)
     public static void takeAll() {
@@ -526,6 +579,7 @@ public final class ItemFiles {
                 return;
             }
             known.remove(place.manifest());
+            taken.remove(place.manifest());
             if (PersistenceStores.isApplyingRemoteChange()) {
                 return; // deleted elsewhere: that controller removes them
             }
@@ -579,6 +633,7 @@ public final class ItemFiles {
             Place place = item instanceof AbstractItem ? ItemFiles.of(item) : null;
             if (place != null) {
                 known.remove(place.manifest());
+                taken.remove(place.manifest());
             }
         }
     }
