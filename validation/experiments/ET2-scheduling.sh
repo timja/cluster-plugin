@@ -99,8 +99,9 @@ done
 commit() { (cd "$ET1/repo/$1" && date +%s%N > stamp && git add stamp && git commit -qm "change $(date +%s)"); }
 
 et1 up -d postgres >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 r "## ET2 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"

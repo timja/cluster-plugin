@@ -56,8 +56,9 @@ agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d lb agent1 >/dev/null 2>&1
 r "## ET8 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
@@ -208,7 +209,7 @@ check "5 after A dies, B's view shows only B alive (within the membership timeou
 # ------------------------------------------------------------------ 1b. fingerprints survive the controllers
 log "scenario 1b: destroy both controllers"
 et1 rm -sf jenkins-a jenkins-b >/dev/null 2>&1
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1; wait_up $A; wait_up $B
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 check "1 the fingerprint and its usages survive (fresh B)" eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/fingerprint/$md5/api/json?tree=usage[name]' | python3 -c 'import json,sys; print(sorted(u[\"name\"] for u in json.load(sys.stdin)[\"usage\"]))') == \"['fpa', 'fpb']\" ]]"
 
 et1 logs jenkins-a > "$OUT/jenkins-a-fresh.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b-fresh.log" 2>&1

@@ -45,8 +45,8 @@ groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.j
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b jenkins-c >/dev/null 2>&1
-wait_up $A; wait_up $B; wait_up $C
+# one after the other (ET1 checks starting controllers at once)
+for c in a b c; do et1 up -d jenkins-$c >/dev/null 2>&1; done_port=PORT_${c^^}; wait_up ${!done_port}; done
 psql_q "create extension if not exists pg_stat_statements" >/dev/null
 r "## ET17 results ($(date -u +%Y-%m-%dT%H:%MZ)): 3 controllers, $HJOBS jobs x $PER builds, $PROJECTS multibranch projects x $BRANCHES branches"
 r ""

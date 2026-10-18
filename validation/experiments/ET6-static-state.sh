@@ -42,8 +42,9 @@ docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so
 docker rm -fv ${P}seed >/dev/null
 info "seeded keys: $(ls "$ET1/seed/secrets" | tr '\n' ' ')"
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d rr >/dev/null 2>&1
 r "## ET6 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
@@ -194,7 +195,7 @@ et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
 # ------------------------------------------------------------------ 7. disposable cluster
 log "scenario 7: destroy both controllers, start fresh ones"
 et1 rm -sf jenkins-a jenkins-b >/dev/null 2>&1
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1; wait_up $A; wait_up $B
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 check "7 users and passwords survive (u2 new password on B)" status_is $B "u2:u2-password-2" 200
 check "7 global settings survive (A)" g_is $A 'println Jenkins.get().quietPeriod' "$(echo "$final" | cut -d/ -f1)"
 check "7 the descriptor setting survives (B)" g_is $B 'println jenkins.model.JenkinsLocationConfiguration.get().adminAddress' ops@example.com

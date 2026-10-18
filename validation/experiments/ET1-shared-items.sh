@@ -67,12 +67,23 @@ JF
 sed 's#file:///tmp/repo#file:///repo#' "$JOBS/multibranch.xml" > "$OUT_DIR/multibranch.xml"
 
 et1 up -d postgres >/dev/null 2>&1; wait_postgres
+# both controllers started at once on a fresh store (as a StatefulSet with parallel pod management starts them): each
+# applies the same configuration as code, the admin user included. The other experiments start A, then B.
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
+both_up() { curl -gsf -m 5 -u "$AUTH" "http://localhost:$A/api/json" >/dev/null 2>&1 && curl -gsf -m 5 -u "$AUTH" "http://localhost:$B/api/json" >/dev/null 2>&1; }
+exited() { docker ps -a --filter "name=^${P}jenkins-" --filter status=exited --format '{{.Names}}'; }
+t0=$SECONDS; until both_up || [[ -n "$(exited)" ]] || (( SECONDS - t0 > 300 )); do sleep 2; done
+together_failed=$(exited)
+if [[ -n "$together_failed" ]]; then # carry on with the rest: started again, one after the other
+  for c in $together_failed; do docker logs "$c" > "$OUT/$c-together.log" 2>&1; done
+  et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; et1 up -d jenkins-b >/dev/null 2>&1
+fi
 wait_up $A; wait_up $B
 r "## ET1 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
 r "|---|---|"
+check "two controllers started at the same time on a fresh store both boot (failed: ${together_failed:-none})" test -z "$together_failed"
 check "store plugin active on A and B" bash -c "[[ \$(source $VALIDATION_DIR/lib.sh; groovy $A 'print(jenkins.persistence.PersistenceStores.get()?.getClass()?.simpleName)') == PostgresPersistenceStore ]]"
 check "A and B decrypt each other's secrets (S0 seed)" bash -c "source $VALIDATION_DIR/lib.sh; e=\$(groovy $A 'print(hudson.util.Secret.fromString(\"et1\").getEncryptedValue())'); [[ \$(groovy $B \"print(hudson.util.Secret.decrypt('\$e')?.plainText)\") == et1 ]]"
 
