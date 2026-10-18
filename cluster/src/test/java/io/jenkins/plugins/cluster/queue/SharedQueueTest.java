@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import hudson.Launcher;
+import hudson.model.AbstractBuild;
+import hudson.model.BuildListener;
 import hudson.model.Cause;
 import hudson.model.CauseAction;
 import hudson.model.FreeStyleBuild;
@@ -15,18 +18,22 @@ import hudson.model.Queue;
 import hudson.model.queue.QueueTaskFuture;
 import io.jenkins.plugins.cluster.ClusterFixture;
 import io.jenkins.plugins.cluster.builds.BuildElsewhere;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterQueue;
 import io.jenkins.plugins.cluster.spi.InMemoryClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.TestBuilder;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 
 /**
@@ -180,6 +187,42 @@ class SharedQueueTest {
         r.assertBuildStatusSuccess(future);
         ClusterFixture.await(
                 "released again once the build is done", () -> other.leases().acquire(lease) > 0);
+    }
+
+    @Test
+    void aFutureFollowingABuildTakenOverElsewhereIsNotCompletedByItsStoppedCopy() throws Exception {
+        Semaphore release = new Semaphore(0);
+        FreeStyleProject p = r.createFreeStyleProject("moved");
+        p.getBuildersList().add(new TestBuilder() {
+            @Override
+            public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener)
+                    throws InterruptedException {
+                release.acquire();
+                return true;
+            }
+        });
+        FreeStyleBuild b = p.scheduleBuild2(0).waitForStart();
+        ClusterFixture.await("owned", () -> RunningBuilds.ownedPlaceholder(b) != null);
+        // a future following this item's build (handed off, then put back and started here after all)
+        AtomicReference<Queue.Executable> completed = new AtomicReference<>();
+        SharedQueue.HandOffs.add(b.getQueueId(), new Queue.HandOff() {
+            @Override
+            public void started(Queue.Executable view) {}
+
+            @Override
+            public void completed(Queue.Executable run) {
+                completed.set(run);
+            }
+
+            @Override
+            public void cancelled() {}
+        });
+        SharedQueue.HandOffs.startedHere(b.getQueueId(), b);
+        RunningBuilds.lost(b); // another controller took the build over: the copy here stops
+        r.waitForCompletion(b);
+        // every listener has seen it finalized once its executor is free
+        ClusterFixture.await("its executor to be free", () -> b.getExecutor() == null);
+        assertEquals(null, completed.get(), "the future follows the build elsewhere, not the copy stopped here");
     }
 
     /** A hand-off recording what it is told. */
