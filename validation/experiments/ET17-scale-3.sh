@@ -159,11 +159,12 @@ info "3 storm settled $((SECONDS - start)) s after the scans"
 # branch jobs (their configuration's path) and their entry prefixes (_items/<uuid>, from the identity in it); their build
 # records, by branch
 BRANCHES_SQL="(select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/config[.]xml\$') b,
-  '_items/' || substring(convert_from(content, 'UTF8') from '<itemUuid>([^<]+)</itemUuid>') p
+  '_items/' || substring(encode(content, 'escape') from '<itemUuid>([^<]+)</itemUuid>') p
   from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/config[.]xml\$')"
+# (records compared as escaped bytes: not every stored record decodes as UTF-8)
 RECORDS_SQL="(select br.b, s.key, s.content from $BRANCHES_SQL br join jenkins_store s on s.key like br.p || '/builds/%/build.xml')"
 branch_builds="select count(*) from (select b, count(*) n,
-  count(*) filter (where convert_from(content, 'UTF8') like '%<result>SUCCESS</result>%') ok
+  count(*) filter (where encode(content, 'escape') like '%<result>SUCCESS</result>%') ok
   from $RECORDS_SQL r group by 1) t"
 # every branch has a published build: successful, or (those C ran, killed before their first save point) closed as
 # aborted, saying why (JEP-252: what nothing can resume is closed, not lost)
@@ -195,19 +196,19 @@ if ! built_once; then
   done
   info "3 lost branches: $(lost_branches | tr '\n' ' ') (details in $f)"
 fi
-aborted=$(psql_q "select count(*) from $RECORDS_SQL r where convert_from(content, 'UTF8') like '%<result>ABORTED</result>%'")
+aborted=$(psql_q "select count(*) from $RECORDS_SQL r where encode(content, 'escape') like '%<result>ABORTED</result>%'")
 info "3 successful: $(psql_q "$branch_builds where ok >= 1"); closed as aborted (were running on C when it was killed): $aborted"
 closed_by_c() { # up to 5 of the aborted builds: their console says C was gone
   local k
-  for k in $(psql_q "select substring(b from '^jobs/(mb[0-9]+)/') || '|' || substring(b from '/branches/([^/]+)\$') || '|' || substring(key from '/builds/([0-9]+)/') from $RECORDS_SQL r where convert_from(content, 'UTF8') like '%<result>ABORTED</result>%' limit 5"); do
+  for k in $(psql_q "select substring(b from '^jobs/(mb[0-9]+)/') || '|' || substring(b from '/branches/([^/]+)\$') || '|' || substring(key from '/builds/([0-9]+)/') from $RECORDS_SQL r where encode(content, 'escape') like '%<result>ABORTED</result>%' limit 5"); do
     IFS='|' read -r mb br n <<<"$k"
     curl -gsf -u "$AUTH" "http://localhost:$A/job/$mb/job/$br/$n/consoleText" | grep -q 'running on jenkins-c, which is gone' || return 1
   done
 }
 check "3 ... each aborted one closed because C was gone (5 consoles)" closed_by_c
-info "3 records by result: $(psql_q "select r || '=' || count(*) from (select coalesce(substring(convert_from(content, 'UTF8') from '<result>([A-Z_]+)</result>'), 'none') r from $RECORDS_SQL x) t group by r order by r" | tr '\n' ' ')"
+info "3 records by result: $(psql_q "select r || '=' || count(*) from (select coalesce(substring(encode(content, 'escape') from '<result>([A-Z_]+)</result>'), 'none') r from $RECORDS_SQL x) t group by r order by r" | tr '\n' ' ')"
 info "3 branches with more than one build: $(psql_q "$branch_builds where n > 1")"
-twice=$(psql_q "select b from (select b, count(*) filter (where convert_from(content, 'UTF8') like '%<result>SUCCESS</result>%') ok from $RECORDS_SQL r group by 1) t where ok > 1")
+twice=$(psql_q "select b from (select b, count(*) filter (where encode(content, 'escape') like '%<result>SUCCESS</result>%') ok from $RECORDS_SQL r group by 1) t where ok > 1")
 [[ -n $twice ]] && info "3 built successfully more than once: $(echo $twice)"
 check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
 c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
