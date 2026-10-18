@@ -45,8 +45,17 @@ fi
 echo "core $CORE_REF ($(git -C "$CORE" rev-parse --short "$CORE_REF"))"
 [[ -d "$CORE_WT" ]] || git -C "$CORE" worktree add -q --detach "$CORE_WT" "$CORE_REF"
 at_ref "$CORE_WT" "$CORE_REF"
-(cd "$CORE_WT" && $MVN -Dchangelist="$CORE_CHANGELIST" "${CORE_STAPLER[@]}" -pl bom,war -am clean install)
-cp "$CORE_WT/war/target/jenkins.war" "$ET1/war/jenkins.war"
+# -Dstapler.version does not reach the version the war packages (the BOM's own property wins): the BOM is edited for
+# the build, then restored
+if [[ ${#CORE_STAPLER[@]} -gt 0 ]]; then
+  sed -i.orig "s#<stapler.version>[^<]*</stapler.version>#<stapler.version>$STAPLER_VERSION</stapler.version>#" "$CORE_WT/bom/pom.xml"
+fi
+(cd "$CORE_WT" && $MVN -Dchangelist="$CORE_CHANGELIST" "${CORE_STAPLER[@]}" -pl bom,war -am clean install) || rc=$?
+[[ -f "$CORE_WT/bom/pom.xml.orig" ]] && mv "$CORE_WT/bom/pom.xml.orig" "$CORE_WT/bom/pom.xml"
+(( ${rc:-0} == 0 )) || exit "$rc"
+[[ $(unzip -l "$CORE_WT/war/target/jenkins.war" | grep -c "WEB-INF/lib/stapler-${STAPLER_VERSION}.jar") -gt 0 ]] || [[ ${#CORE_STAPLER[@]} -eq 0 ]] \
+  || { echo "the war does not package Stapler $STAPLER_VERSION" >&2; exit 4; }
+cp "$CORE_WT/war/target/jenkins.war" "$ET1/war/.jenkins.war.new" && mv "$ET1/war/.jenkins.war.new" "$ET1/war/jenkins.war" # controllers running keep theirs
 
 echo "cloudbees-folder $FOLDER_REF ($(git -C "$FOLDER" rev-parse --short "$FOLDER_REF"))"
 FOLDER_WT="$FOLDER-cnj-build"
