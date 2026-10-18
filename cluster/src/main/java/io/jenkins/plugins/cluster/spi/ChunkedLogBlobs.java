@@ -5,11 +5,8 @@ import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -113,8 +110,8 @@ public final class ChunkedLogBlobs implements LogBlobs {
 
     private record Chunk(String key, long offset, long length, Epoch epoch) {}
 
-    /** What the store has of a log's chunks: the one read at each offset, and the highest epoch of any. */
-    private record Listing(Map<Long, Chunk> byOffset, Epoch highest) {
+    /** What the store has of a log's chunks: the one read at each offset, the highest epoch of any, and all of them. */
+    private record Listing(Map<Long, Chunk> byOffset, Epoch highest, List<Chunk> all) {
         /** The chain from {@code from} (where {@code <log>} ends), in order: each starting where the last ends. */
         List<Chunk> chainFrom(long from) {
             List<Chunk> result = new ArrayList<>();
@@ -130,6 +127,7 @@ public final class ChunkedLogBlobs implements LogBlobs {
 
     private Listing list(String log) throws IOException {
         Map<Long, Chunk> byOffset = new HashMap<>();
+        List<Chunk> all = new ArrayList<>();
         Epoch highest = Epoch.NONE;
         String prefix = chunks(log) + "/";
         for (Map.Entry<String, Long> e : blobs.sizes(chunks(log)).entrySet()) {
@@ -145,6 +143,7 @@ public final class ChunkedLogBlobs implements LogBlobs {
             Chunk c = m.group(2) != null
                     ? new Chunk(key, offset, e.getValue(), new Epoch(Long.parseLong(m.group(2)), m.group(3)))
                     : new Chunk(key, offset, Long.parseLong(m.group(4)), Epoch.NONE);
+            all.add(c);
             Chunk other = byOffset.get(offset);
             if (other == null || c.epoch().isAbove(other.epoch())) {
                 byOffset.put(offset, c);
@@ -153,7 +152,7 @@ public final class ChunkedLogBlobs implements LogBlobs {
                 highest = c.epoch();
             }
         }
-        return new Listing(byOffset, highest);
+        return new Listing(byOffset, highest, all);
     }
 
     private Epoch readFence(String log) throws IOException {
@@ -214,9 +213,26 @@ public final class ChunkedLogBlobs implements LogBlobs {
     @CheckForNull
     @Override
     public byte[] readFrom(@NonNull String log, long offset) throws IOException {
+        Read read = read(log);
+        if (read == null) {
+            return null;
+        }
+        byte[] all = read.bytes();
+        if (offset >= all.length) {
+            return new byte[0];
+        }
+        return java.util.Arrays.copyOfRange(all, (int) offset, all.length);
+    }
+
+    /** The log as read, and the chunks of the listing it was read with. */
+    private record Read(byte[] bytes, List<Chunk> listed) {}
+
+    @CheckForNull
+    private Read read(String log) throws IOException {
         ByteArrayOutputStream whole = new ByteArrayOutputStream();
         boolean found = blobs.download(log, whole);
-        List<Chunk> rest = list(log).chainFrom(whole.size());
+        Listing listing = list(log);
+        List<Chunk> rest = listing.chainFrom(whole.size());
         if (!found && rest.isEmpty()) {
             return null;
         }
@@ -227,11 +243,7 @@ public final class ChunkedLogBlobs implements LogBlobs {
             }
             part.writeTo(whole);
         }
-        byte[] all = whole.toByteArray();
-        if (offset >= all.length) {
-            return new byte[0];
-        }
-        return java.util.Arrays.copyOfRange(all, (int) offset, all.length);
+        return new Read(whole.toByteArray(), listing.all());
     }
 
     /** Deletes the log, but not its fence: whoever appends to it next does so above every writer it had. */
@@ -248,19 +260,20 @@ public final class ChunkedLogBlobs implements LogBlobs {
         if (blobs.list(chunks(log)).isEmpty()) {
             return;
         }
-        Path tmp = Files.createTempFile("log-compact", null);
-        try {
-            try (OutputStream out = Files.newOutputStream(tmp)) {
-                if (!download(log, out)) {
-                    return;
-                }
+        Read read = read(log);
+        if (read == null) {
+            return;
+        }
+        blobs.put(log, new ByteArrayInputStream(read.bytes()), read.bytes().length);
+        // only chunks starting within what was put together: the ones it holds, and any it superseded (a lower epoch
+        // at the same offset, or one across a chunk boundary), which no reader takes once <log> covers them. Not the
+        // rest of a chain whose read stopped short (a chunk failed to download), nor a chunk appended meanwhile: still
+        // read after <log>, so nothing of the log is lost
+        long end = read.bytes().length;
+        for (Chunk c : read.listed()) {
+            if (c.offset() < end) {
+                blobs.delete(c.key());
             }
-            try (InputStream in = Files.newInputStream(tmp)) {
-                blobs.put(log, in, Files.size(tmp));
-            }
-            blobs.delete(chunks(log));
-        } finally {
-            Files.deleteIfExists(tmp);
         }
     }
 }
