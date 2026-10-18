@@ -117,6 +117,8 @@ if ! grep -q 'recovery stopping at restore point "T"' <<<"$pglog"; then
 fi
 fresh_controllers
 check "2 doomed is back (its configuration and records, as at T)" eventually 60 exists $B /job/doomed
+info "2 /job/doomed/api/json on B answers $(curl -gs -o "$OUT/doomed-api-b.txt" -w '%{http_code}' -u "$AUTH" "http://localhost:$B/job/doomed/api/json")"
+et1 logs jenkins-a > "$OUT/jenkins-a-restored-store.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b-restored-store.log" 2>&1
 check "2 created is not there (made after T)" bash -c "! curl -gsf -u '$AUTH' http://localhost:$B/job/created/api/json -o /dev/null"
 check "2 edited has its configuration as at T" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/edited/config.xml | grep -q 'edited as built'"
 check "2 kept #1 is there, with its console" eventually 60 console_has $B /job/kept/1 kept-build-ran

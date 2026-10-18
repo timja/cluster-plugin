@@ -111,7 +111,17 @@ restart_b() { # label
   et1 rm -sf jenkins-b >/dev/null 2>&1
   local t0; t0=$(python3 -c 'import time; print(int(time.time()*1000))')
   et1 up -d --no-deps jenkins-b >/dev/null 2>&1
-  wait_up $B 180 || return 1
+  # a fresh home that fetched the cluster's plugins restarts once (Jenkins exits with 5 for its supervisor, a pod's
+  # kubelet): started again here, as the kubelet would
+  local until=$((SECONDS + 180))
+  until curl -gsf -m 5 -u "$AUTH" "http://localhost:$B/api/json" >/dev/null 2>&1; do
+    (( SECONDS > until )) && { wait_up $B 1; return 1; }
+    if [[ "$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' ${P}jenkins-b-1 2>/dev/null)" == "exited 5" ]]; then
+      log "jenkins-b exited to restart; starting it again"; docker start ${P}jenkins-b-1 >/dev/null
+    fi
+    sleep 2
+  done
+  wait_up $B 10
   local t_api; t_api=$(python3 -c 'import time; print(int(time.time()*1000))')
   local cold; cold=$(seconds $B /)
   local init up; init=$(log_time "Started initialization"); up=$(log_time "Jenkins is fully up and running")
