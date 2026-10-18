@@ -39,11 +39,10 @@ public class PostgresPersistenceStoreProvider implements PersistenceStoreProvide
                         url,
                         setting("user", "CLUSTER_POSTGRES_USER"),
                         setting("password", "CLUSTER_POSTGRES_PASSWORD"));
-                // a controller leaving: its builds are adopted (or closed) and its queue items put back now (Target 14)
+                // a controller leaving: its builds are adopted (or closed) and its queue items put back now
                 PostgresPersistenceStore created = store;
                 store.onMembersLeft(left -> ClusterStartup.membersLeft(created));
-                ClusterStartup.beforeJoining(
-                        store); // Target 15: refuses a controller without the cluster's key material
+                ClusterStartup.beforeJoining(store); // refuses a controller without the cluster's key material
                 store.startHeartbeat();
                 ClusterStartup.afterJoining(store); // only with -D…importHome=true
                 return store;

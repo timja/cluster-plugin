@@ -104,7 +104,7 @@ public final class ClusterPluginSet implements Filter {
             return null;
         }
         if (change.kind().equals("restart")) {
-            // the progress page's "restart when done": outside the cluster's one-at-a-time restarts (Target 15)
+            // the progress page's "restart when done": outside the cluster's one-at-a-time restarts
             return mode == Mode.cluster && clusterActive ? RESTART : null;
         }
         if (mode == Mode.fixed || !clusterActive) {

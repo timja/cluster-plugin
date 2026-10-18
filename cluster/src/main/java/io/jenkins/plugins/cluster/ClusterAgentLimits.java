@@ -19,7 +19,7 @@ import org.csanchez.jenkins.plugins.kubernetes.KubernetesSlave;
 import org.csanchez.jenkins.plugins.kubernetes.PodTemplate;
 
 /**
- * Kubernetes container and instance caps for the whole cluster (Target 9): each controller's share is a counter in the
+ * Kubernetes container and instance caps for the whole cluster: each controller's share is a counter in the
  * store, and an agent is admitted only if the shares of the live controllers stay within the caps. A dead controller's
  * share stops counting with its membership. A controller restarting with its home keeps its agents (pods that are
  * still running): they count again, under its new membership, as it starts ({@link #countSurvivors}).

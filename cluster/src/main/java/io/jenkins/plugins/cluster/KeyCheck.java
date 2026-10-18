@@ -9,7 +9,7 @@ import jenkins.persistence.PersistenceStore;
 import jenkins.util.SystemProperties;
 
 /**
- * Refuses to start a controller that does not have the cluster's key material (Target 15).
+ * Refuses to start a controller that does not have the cluster's key material.
  *
  * <p>Every controller of a cluster must start with the same seeded keys ({@code secret.key}, {@code secrets/}): the
  * store holds secrets encrypted with them. A controller started without them would create keys of its own, could not

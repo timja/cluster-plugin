@@ -88,7 +88,7 @@ public final class ClusterStartup {
 
     /**
      * When controllers are seen leaving the cluster: their builds are adopted (or closed) and their queue items put back
-     * now, not at the next sweep (Target 14).
+     * now, not at the next sweep.
      */
     public static void membersLeft(@NonNull QueueMaintenance queue) {
         RunningBuilds.sweepSoon();

@@ -14,7 +14,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Schema changes that must not block a running cluster (Target 15): expand, backfill, contract.
+ * Schema changes that must not block a running cluster: expand, backfill, contract.
  *
  * <ul>
  * <li><b>Expand</b>, at startup in the schema transaction: additive changes that take no time (nullable columns).
@@ -67,7 +67,7 @@ final class SchemaMigrations {
         default void contract(@NonNull Connection c) throws SQLException {}
     }
 
-    /** The prefix index of keys (Target 14), built without blocking writes on a large table. */
+    /** The prefix index of keys, built without blocking writes on a large table. */
     static final Migration KEY_INDEX = new Migration() {
         @Override
         public String id() {

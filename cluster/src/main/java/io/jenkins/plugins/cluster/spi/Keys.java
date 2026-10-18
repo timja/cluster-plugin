@@ -4,7 +4,6 @@ import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.model.Item;
 import java.util.Objects;
-import jenkins.persistence.PersistenceStores;
 
 /**
  * The one place that knows where the cluster keeps data in the {@link ClusterStore} and the {@link ClusterBlobStore}
@@ -31,24 +30,11 @@ import jenkins.persistence.PersistenceStores;
  * <tr><td>queue reservation</td><td>{@code _queue/reserved/<id>}</td></tr>
  * </table>
  *
- * <p>While the engines are ported from core (DESIGN-17 §8.3, risk 2), {@link #LAYOUT} may be {@link Layout#PATH}:
- * the item prefixes are then the item's {@code JENKINS_HOME}-relative directory, as before. Switching to
- * {@link Layout#UUID} is then one commit. Code must build every key through this class.
+ * <p>Code must build every key through this class.
  */
 public final class Keys {
 
     private Keys() {}
-
-    /** How item prefixes are formed. */
-    public enum Layout {
-        /** {@code jobs/a/jobs/b} (entries) and {@code jobs/a/jobs/b} (blobs): only while porting. */
-        PATH,
-        /** {@code _items/<uuid>} (entries) and {@code items/<uuid>} (blobs). */
-        UUID
-    }
-
-    /** The layout in use. */
-    public static final Layout LAYOUT = Layout.UUID;
 
     /** First segment of item entries. */
     public static final String ITEMS = "_items";
@@ -59,13 +45,10 @@ public final class Keys {
     /** The prefix of the store entries kept about an item. */
     @NonNull
     public static String item(@NonNull Item item) {
-        if (LAYOUT == Layout.PATH) {
-            return Objects.requireNonNull(PersistenceStores.keyFor(item.getRootDir()), item.getFullName());
-        }
         return itemByUuid(Objects.requireNonNull(item.getItemUuid(), item.getFullName()));
     }
 
-    /** The prefix of the store entries kept about the item with this identity ({@link Layout#UUID}). */
+    /** The prefix of the store entries kept about the item with this identity. */
     @NonNull
     public static String itemByUuid(@NonNull String uuid) {
         return ITEMS + "/" + uuid;
@@ -74,9 +57,6 @@ public final class Keys {
     /** The prefix of the blobs kept about an item. */
     @NonNull
     public static String blobs(@NonNull Item item) {
-        if (LAYOUT == Layout.PATH) {
-            return item(item);
-        }
         return ITEM_BLOBS + "/" + Objects.requireNonNull(item.getItemUuid(), item.getFullName());
     }
 
@@ -143,7 +123,7 @@ public final class Keys {
     /** A plugin file in an item's directory, at {@code rel} relative to it. */
     @NonNull
     public static String itemFile(@NonNull String itemPrefix, @NonNull String rel) {
-        return LAYOUT == Layout.PATH ? itemPrefix + "/" + rel : itemPrefix + "/files/" + rel;
+        return itemPrefix + "/files/" + rel;
     }
 
     @NonNull
@@ -170,7 +150,7 @@ public final class Keys {
 
     @NonNull
     public static String itemFileBlob(@NonNull String blobPrefix, @NonNull String rel) {
-        return LAYOUT == Layout.PATH ? blobPrefix + "/" + rel : blobPrefix + "/files/" + rel;
+        return blobPrefix + "/files/" + rel;
     }
 
     // not per item
@@ -197,7 +177,7 @@ public final class Keys {
     }
 
     /**
-     * Splits a key below an item prefix of the {@link Layout#UUID} layout, as for dispatching change events.
+     * Splits a key below an item prefix, as for dispatching change events.
      *
      * @return the identity and the rest of the key (such as {@code builds/7/build.xml}), or null for other keys
      */

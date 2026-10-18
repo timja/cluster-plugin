@@ -25,7 +25,7 @@ public final class ClusterUpdateCenterConfiguration extends UpdateCenter.UpdateC
     }
 
     /**
-     * Refuses a download the cluster cannot take (Target 15): a cluster plugin, which is part of the image (also as a
+     * Refuses a download the cluster cannot take: a cluster plugin, which is part of the image (also as a
      * dependency of another plugin, or an upload), or a downgrade of what the cluster has. The install job fails, saying why.
      */
     @Override

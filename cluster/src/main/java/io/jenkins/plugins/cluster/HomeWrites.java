@@ -23,7 +23,7 @@ import org.kohsuke.stapler.export.Exported;
 import org.kohsuke.stapler.export.ExportedBean;
 
 /**
- * What this controller has written under its home since it started that the cluster does not share (Target 11): files
+ * What this controller has written under its home since it started that the cluster does not share: files
  * the store does not own, outside the categories that are local by design (caches, workspaces, plugins, local copies of
  * shared state, per-controller runtime files). Each is grouped by path pattern and, where the path names a class (root
  * {@code <class>.xml}), attributed to the plugin defining it. A list of what to check before relying on HA.

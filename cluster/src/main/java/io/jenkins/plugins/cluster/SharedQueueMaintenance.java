@@ -15,7 +15,7 @@ import jenkins.persistence.PersistenceStores;
 import jenkins.util.PeriodicWorkCoordinator;
 
 /**
- * Housekeeping for the shared build queue and cluster-singleton periodic work (Target 5).
+ * Housekeeping for the shared build queue and cluster-singleton periodic work.
  */
 public final class SharedQueueMaintenance {
 

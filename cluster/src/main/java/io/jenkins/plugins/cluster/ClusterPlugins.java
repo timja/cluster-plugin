@@ -42,7 +42,7 @@ import jenkins.util.Timer;
 import net.sf.json.JSONObject;
 
 /**
- * The cluster's plugin set (Target 13): a plugin installed, upgraded, uninstalled, disabled or enabled on one controller
+ * The cluster's plugin set: a plugin installed, upgraded, uninstalled, disabled or enabled on one controller
  * is applied on every controller, and again whenever a controller starts with an empty home.
  *
  * <p>The changes made at runtime are an overlay on the image's plugins, kept in the store as {@link #KEY}: per plugin its
@@ -232,7 +232,7 @@ public final class ClusterPlugins {
     }
 
     /**
-     * The same with what is going on (Target 15): {@code applying=<plugin>} while a plugin is fetched and loaded, and
+     * The same with what is going on: {@code applying=<plugin>} while a plugin is fetched and loaded, and
      * {@code failed=<a>,<b>} for plugins that could not be applied. Older readers ignore the extra words.
      */
     static String status(
@@ -838,7 +838,7 @@ public final class ClusterPlugins {
 
     /**
      * A safe restart: waits for builds that cannot survive a restart (freestyle), while Pipelines pause at a save point
-     * and resume afterwards, from this controller's home or, if it does not come back, elsewhere (Target 4). Without an
+     * and resume afterwards, from this controller's home or, if it does not come back, elsewhere. Without an
      * in-place restart it quiets down the same way, then exits for the container to restart (the home survives that).
      */
     static void restartWhenIdle() {

@@ -21,7 +21,7 @@ import java.util.logging.Logger;
 
 /**
  * Folder computations (a multibranch project's branch indexing, an organization folder's scan) run on one controller at
- * a time, cluster-wide (Target 15, ET17).
+ * a time, cluster-wide.
  *
  * <p>A computation is not a job, so it does not go through the shared queue: every controller asked to scan a project
  * scans it. Scans running at once on several controllers each saw a new branch before any had recorded its revision,

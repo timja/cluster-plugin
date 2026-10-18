@@ -195,7 +195,7 @@ public final class BlobLogStorage {
             final Stream logStream;
             final Stream indexStream;
             long lapses;
-            /** The build completed: stop tracking once everything is shipped (Target 14). */
+            /** The build completed: stop tracking once everything is shipped. */
             volatile boolean finishing;
             /** Its record was published before the tail of its log was shipped. */
             volatile boolean publishedEarly;
@@ -238,7 +238,7 @@ public final class BlobLogStorage {
         }
 
         /**
-         * Fewer, larger appends (Target 14): a build's log is shipped once this much is pending, or
+         * Fewer, larger appends: a build's log is shipped once this much is pending, or
          * {@link #COALESCE_MILLIS} after the last shipment; save points and the end of a build ship at once.
          */
         static final int COALESCE_BYTES =
@@ -381,7 +381,7 @@ public final class BlobLogStorage {
         /**
          * Ships the rest of a build's log and stops tracking it; if that cannot be done now (the store or the blob store
          * is unreachable), it is shipped later, and the build republished then, so that no controller keeps a log
-         * without its end (Target 14).
+         * without its end.
          */
         static void finish(String key) {
             Tracked t = tracked.get(key);
@@ -413,7 +413,7 @@ public final class BlobLogStorage {
                     ? null
                     : buildKey(run);
             if (key != null) {
-                // Pipelines: the log lives in blobs. Other builds (Target 15): shipped too while they run, so that a
+                // Pipelines: the log lives in blobs. Other builds: shipped too while they run, so that a
                 // build closed as aborted after its controller died keeps what it printed (LostLogs); their log still
                 // travels in the snapshot once they complete
                 Shipper.track(blobs, key, new File(run.getRootDir(), LOG), run);
@@ -448,11 +448,11 @@ public final class BlobLogStorage {
         }
     }
 
-    /** Whether logs of builds other than Pipelines are shipped while they run (Target 15); on by default. */
+    /** Whether logs of builds other than Pipelines are shipped while they run; on by default. */
     static final boolean SHIP_OTHER_LOGS =
             !"false".equals(System.getProperty(BlobLogStorage.class.getName() + ".shipOtherLogs"));
 
-    /** What a build that cannot be resumed printed before its controller died (Target 15). */
+    /** What a build that cannot be resumed printed before its controller died. */
     @Extension
     public static final class LostLogs implements BuildRecords.LostLog {
         @Override
@@ -469,7 +469,7 @@ public final class BlobLogStorage {
         }
     }
 
-    /** The log of a build running on another controller, for the CLI (Target 15): from the blobs its owner ships it to. */
+    /** The log of a build running on another controller, for the CLI: from the blobs its owner ships it to. */
     @Extension
     public static final class RemoteLogs implements RunningBuilds.RemoteLog {
         @Override

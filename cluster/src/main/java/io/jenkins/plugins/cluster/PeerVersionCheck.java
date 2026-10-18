@@ -10,7 +10,7 @@ import java.util.logging.Logger;
 import jenkins.persistence.PersistenceStores;
 
 /**
- * Refuses to start next to peers too old to coexist with this version (Target 10, rolling upgrades): with
+ * Refuses to start next to peers too old to coexist with this version (rolling upgrades): with
  * {@code -Dio.jenkins.plugins.cluster.minimumPeerProtocol=N}, this controller does not start while a controller speaking
  * an older protocol is alive. Upgrades raising the protocol replace every controller before such a version starts.
  * The other way round, a controller older than the cluster's protocol floor (raised by a contracted schema migration,

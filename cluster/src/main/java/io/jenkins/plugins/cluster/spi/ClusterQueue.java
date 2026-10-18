@@ -19,8 +19,6 @@ import java.util.function.Consumer;
  * That retention also bounds how long a controller can be down and still recognise items of its saved queue which ran
  * elsewhere meanwhile (it publishes again an item it finds no record of): a store should keep finished records much
  * longer than the minimum, such as a day.
- *
- * @since TODO
  */
 public interface ClusterQueue {
 

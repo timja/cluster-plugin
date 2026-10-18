@@ -1864,9 +1864,6 @@ public final class BuildRecords {
      * configuration does not tell its identity, nothing is deleted.
      */
     static void sweepUnknown(ClusterStore store, long now) throws IOException {
-        if (Keys.LAYOUT != Keys.Layout.UUID) {
-            return;
-        }
         Set<String> stored = store.children(Keys.ITEMS); // listed first: an item's configuration is stored before this
         Set<String> deleting = store.children(DELETING);
         Set<String> known = new HashSet<>();

@@ -23,11 +23,11 @@ import jenkins.websocket.WebSockets;
 
 /**
  * Relays a WebSocket request for something only another controller has (a build running there, an agent connected
- * there) to that controller (Target 15), as {@link Forwarding} does for plain HTTP: the client's connection is accepted
+ * there) to that controller, as {@link Forwarding} does for plain HTTP: the client's connection is accepted
  * here, a second one is opened to the owner, and frames are copied both ways until either side closes.
  *
- * <p>Inbound agents are not relayed: an agent connects to whichever controller its URL reaches and stays there
- * (Target 7); this is for WebSocket endpoints under a build's or an agent's URL.
+ * <p>Inbound agents are not relayed: an agent connects to whichever controller its URL reaches and stays there;
+ * this is for WebSocket endpoints under a build's or an agent's URL.
  */
 final class WebSocketProxy {
 

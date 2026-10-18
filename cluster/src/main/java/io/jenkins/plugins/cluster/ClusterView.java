@@ -26,7 +26,7 @@ import org.kohsuke.stapler.export.Exported;
 import org.kohsuke.stapler.export.ExportedBean;
 
 /**
- * The cluster as the store knows it (Target 8): controllers, running builds and their owners, agent channels and their
+ * The cluster as the store knows it: controllers, running builds and their owners, agent channels and their
  * holders. Any controller answers, at {@code /manage/cluster} and {@code /manage/cluster/api/json}.
  */
 @Extension
@@ -67,7 +67,7 @@ public final class ClusterView extends ManagementLink {
         return Category.STATUS;
     }
 
-    /** What this controller writes under its home that the cluster does not share (Target 11). */
+    /** What this controller writes under its home that the cluster does not share. */
     public HomeWrites getCompatibility() {
         Jenkins.get().checkPermission(Jenkins.SYSTEM_READ);
         return new HomeWrites();
@@ -115,7 +115,7 @@ public final class ClusterView extends ManagementLink {
         return result;
     }
 
-    /** Plugins installed, upgraded, uninstalled or disabled at runtime and applied to every controller (Target 13). */
+    /** Plugins installed, upgraded, uninstalled or disabled at runtime and applied to every controller. */
     @Exported
     public List<PluginChange> getPluginChanges() throws IOException {
         List<PluginChange> result = new ArrayList<>();
@@ -243,7 +243,7 @@ public final class ClusterView extends ManagementLink {
         return result;
     }
 
-    /** Background schema migrations and how far they got (Target 15). */
+    /** Background schema migrations and how far they got. */
     public List<ClusterStore.Migration> getMigrations() {
         ClusterStore store = store();
         try {
@@ -253,7 +253,7 @@ public final class ClusterView extends ManagementLink {
         }
     }
 
-    /** Shared-queue items waiting for a controller to start them, and claimed by one (Target 15). */
+    /** Shared-queue items waiting for a controller to start them, and claimed by one. */
     @Exported
     public java.util.Map<String, Integer> getQueue() throws IOException {
         ClusterStore store = store();
@@ -316,7 +316,7 @@ public final class ClusterView extends ManagementLink {
             return m.protocol();
         }
 
-        /** What this controller has applied of the cluster's plugin set (Target 13), as published: generation and flags. */
+        /** What this controller has applied of the cluster's plugin set, as published: generation and flags. */
         @Exported
         public String getPlugins() {
             return m.plugins();

@@ -9,7 +9,7 @@ import jenkins.model.ArtifactManagerConfiguration;
 import jenkins.persistence.PersistenceStores;
 
 /**
- * A cluster needs an artifact manager keeping artifacts and stashes in shared storage (Target 15). Without one, what
+ * A cluster needs an artifact manager keeping artifacts and stashes in shared storage. Without one, what
  * builds archive or stash stays in the build directory of the controller running them: a build adopted by another
  * controller loses its stashes, and a fresh home lacks the artifacts of builds that ran before. The reference setup is
  * azure-artifact-manager or artifact-manager-s3, matching the blob store plugin. Shown, and logged at startup, while none is configured.

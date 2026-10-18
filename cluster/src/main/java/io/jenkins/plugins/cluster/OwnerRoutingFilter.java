@@ -29,7 +29,7 @@ import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStores;
 
 /**
- * Forwards requests for things another controller holds to that controller (Target 7):
+ * Forwards requests for things another controller holds to that controller:
  * <ul>
  * <li>a build running elsewhere ({@code /job/a/job/b/<N>/…}: its page, live console, {@code input}, stop, replay, REST API);
  * <li>an agent whose channel another controller holds ({@code /computer/<name>/…}: its page, log, script console).
@@ -191,7 +191,7 @@ public final class OwnerRoutingFilter implements Filter {
                         && Jenkins.get().getItemByFullName(last.job(), Job.class) instanceof Job<?, ?> job
                         && newerElsewhere(job) > 0) {
                     int n = newerElsewhere(job);
-                    // the newest build runs on another controller (Target 14): send the permalink there
+                    // the newest build runs on another controller: send the permalink there
                     String target = req.getContextPath() + last.before() + "/" + n + "/" + last.after()
                             + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
                     rsp.sendRedirect(target);
@@ -201,7 +201,7 @@ public final class OwnerRoutingFilter implements Filter {
                         && store.lastClaimant(polled, SCM_TRIGGER) instanceof String claimant
                         && !claimant.equals(store.getOrigin())
                         && store.urlOfOrigin(claimant) instanceof String pollerUrl) {
-                    // Target 15: polling runs once per tick, on whichever controller claimed it; its log is there
+                    // polling runs once per tick, on whichever controller claimed it; its log is there
                     if (relay(req, rsp, "the controller that polled", pollerUrl)) {
                         return;
                     }
@@ -220,7 +220,7 @@ public final class OwnerRoutingFilter implements Filter {
         chain.doFilter(request, response);
     }
 
-    /** Forwards a request to its owner: a WebSocket through {@link WebSocketProxy} (Target 15), anything else through {@link Forwarding}. */
+    /** Forwards a request to its owner: a WebSocket through {@link WebSocketProxy}, anything else through {@link Forwarding}. */
     private static boolean relay(HttpServletRequest req, HttpServletResponse rsp, String owner, String url)
             throws IOException, ServletException {
         return WebSocketProxy.isUpgrade(req)

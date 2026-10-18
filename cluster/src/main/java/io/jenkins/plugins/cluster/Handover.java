@@ -25,7 +25,7 @@ import jenkins.persistence.PersistenceStore;
 import jenkins.util.Timer;
 
 /**
- * Moves a Pipeline to the controller holding the agent it waits for (Target 12). A {@code node('label')} step whose label
+ * Moves a Pipeline to the controller holding the agent it waits for. A {@code node('label')} step whose label
  * no executor or cloud of this controller can serve, while an agent with that label is connected to another live
  * controller, waits forever where it is; {@link #WAIT_SECONDS} after it entered the queue (for the other {@code node}
  * blocks of a {@code parallel} to enter it too) the build is handed over: its latest save point is shipped, a request
@@ -144,11 +144,11 @@ public final class Handover {
 
     /** Stored count of a build's handovers. */
     static final String HOPS = ".hops";
-    /** How many times one build may be handed over (Target 15): bounded, so it never moves back and forth forever. */
+    /** How many times one build may be handed over: bounded, so it never moves back and forth forever. */
     static final int MAX_HOPS = Integer.getInteger(Handover.class.getName() + ".maxHops", 4);
 
     /**
-     * Why a build waiting for a label only another controller has must stay here anyway (Target 15), or null: it runs
+     * Why a build waiting for a label only another controller has must stay here anyway, or null: it runs
      * other {@code node} blocks on this controller's agents (handing it over would interrupt them), or waits for
      * another one this controller can serve (nested or parallel blocks needing agents of different controllers would
      * otherwise send it back and forth).

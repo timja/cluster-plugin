@@ -49,7 +49,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
     private static final Logger LOGGER = Logger.getLogger(PostgresPersistenceStore.class.getName());
     static final String CHANNEL = "jenkins_store";
-    /** Notified when a controller leaves the cluster cleanly (Target 15). */
+    /** Notified when a controller leaves the cluster cleanly. */
     static final String MEMBERS_CHANNEL = "jenkins_members";
     /** Advisory lock serializing schema creation between controllers. */
     private static final long SCHEMA_LOCK = 0x6a656e6b696e73L;
@@ -64,7 +64,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     private final com.zaxxer.hikari.HikariDataSource work;
     /**
      * Heartbeats, leases and membership: a pool of their own, so that a busy or slow {@link #work} pool never makes
-     * this controller look gone to the others (Target 14).
+     * this controller look gone to the others.
      */
     private final com.zaxxer.hikari.HikariDataSource control;
 
@@ -99,10 +99,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     s.execute("create table if not exists jenkins_store ("
                             + "key text primary key, content bytea not null, sha256 bytea not null, version bigint not null,"
                             + " updated_at timestamptz not null default now(), updated_by text not null)");
-                    // Target 14 (scale): prefix listings (children, moves) use an index on keys; Target 15: it is built
-                    // in the
-                    // background (SchemaMigrations.KEY_INDEX), concurrently, so that a large table is not locked
-                    // meanwhile
+                    // prefix listings (children, moves) use an index on keys; it is built in the background
+                    // (SchemaMigrations.KEY_INDEX), concurrently, so that a large table is not locked meanwhile
                     SchemaMigrations.expand(s);
                     s.execute(
                             "create table if not exists jenkins_members ("
@@ -115,14 +113,14 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                             + " acquired_at timestamptz not null default now())");
                     s.execute("alter table jenkins_members add column if not exists name text");
                     s.execute("alter table jenkins_members add column if not exists url text");
-                    // Target 10: what each member runs, for rolling upgrades with mixed versions
+                    // what each member runs, for rolling upgrades with mixed versions
                     s.execute("alter table jenkins_members add column if not exists version text");
                     s.execute("alter table jenkins_members add column if not exists protocol int");
-                    // Target 13: which generation of the cluster's plugin set each member has applied
+                    // which generation of the cluster's plugin set each member has applied
                     s.execute("alter table jenkins_members add column if not exists plugins text");
-                    // Target 15: what else each member reports (executors, update-center jobs), as JSON
+                    // what else each member reports (executors, update-center jobs), as JSON
                     s.execute("alter table jenkins_members add column if not exists info text");
-                    // Target 15: the key of the session lock each member holds while its process lives
+                    // the key of the session lock each member holds while its process lives
                     s.execute("alter table jenkins_members add column if not exists lock_key int");
                     s.execute("create sequence if not exists jenkins_queue_ids");
                     s.execute("create table if not exists jenkins_queue ("
@@ -135,11 +133,11 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     s.execute("alter table jenkins_queue add column if not exists item_uuid text not null default ''");
                     s.execute(
                             "create unique index if not exists jenkins_queue_waiting on jenkins_queue (dedup_key) where state = 'WAITING'");
-                    // Target 7: which controller holds each agent's channel
+                    // which controller holds each agent's channel
                     s.execute(
                             "create table if not exists jenkins_channels ("
                                     + "agent text primary key, origin text not null, since timestamptz not null default now())");
-                    // Target 9: cluster-wide counters (e.g. cloud agent caps), one row per scope and controller
+                    // cluster-wide counters (e.g. cloud agent caps), one row per scope and controller
                     s.execute(
                             "create table if not exists jenkins_counters ("
                                     + "scope text not null, origin text not null, count int not null, primary key (scope, origin))");
@@ -387,7 +385,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         try {
             return withTransaction(c -> {
                 Set<String> names = new TreeSet<>();
-                // a skip scan over the key index (Target 15): one probe per child, however many keys are below it
+                // a skip scan over the key index: one probe per child, however many keys are below it
                 // (listing jobs no longer reads every build record). Keys of one child are contiguous in byte order;
                 // the next child starts at or after <prefix><child>'0' ('0' sorts right after '/')
                 String upper = prefix.substring(0, prefix.length() - 1) + "0";
@@ -416,7 +414,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
-    /** Every key below a prefix in one statement, with a deletion event each (Target 15). */
+    /** Every key below a prefix in one statement, with a deletion event each. */
     @Override
     public int deleteAll(@NonNull String prefix) throws IOException {
         String lower = prefix + "/";
@@ -537,7 +535,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
             Long.getLong(PostgresPersistenceStore.class.getName() + ".memberTimeoutMillis", 15_000));
 
     /**
-     * Session locks for liveness (Target 15): each controller holds a Postgres advisory lock on a connection of its own,
+     * Session locks for liveness: each controller holds a Postgres advisory lock on a connection of its own,
      * and names it in its membership row. A controller whose process died loses its connection, so the database frees
      * the lock at once; it is then taken for gone {@link #FAST_DEAD_MILLIS} after its last heartbeat instead of after
      * the {@link #MEMBER_TIMEOUT_MILLIS}. A paused or partitioned controller keeps its connection (TCP), so its lock,
@@ -653,7 +651,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
      * Whether this controller may judge other controllers gone (and take over their builds and queue items).
      * Only after its own heartbeats have reached the database without a lapse for longer than the member timeout:
      * right after a database outage every heartbeat is stale, including the live controllers' own, and those must
-     * get the chance to heartbeat again first (Target 14).
+     * get the chance to heartbeat again first.
      */
     /**
      * For tests: stops heartbeating without leaving, as a process that died ({@code releaseLock}: its connections close)
@@ -674,7 +672,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         return lockHeld;
     }
 
-    /** Whether this controller runs schema migrations in the background (Target 15); on by default. */
+    /** Whether this controller runs schema migrations in the background; on by default. */
     static final boolean MIGRATE =
             !"false".equals(System.getProperty(PostgresPersistenceStore.class.getName() + ".migrate"));
 
@@ -907,7 +905,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         return launchLeases;
     }
 
-    // ------------------------------------------------------------------ shared build queue (Target 5)
+    // ------------------------------------------------------------------ shared build queue
 
     /** Changes of queue records are events under this prefix (reserved for direct users: core routes none of it). */
     static final String QUEUE_PREFIX = "_queue/";
@@ -1216,7 +1214,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
     /** A queue item a controller recorded as started. */
     /**
-     * Queue items recorded as started, in the last hour, by controllers which are gone (Target 15): a controller can die
+     * Queue items recorded as started, in the last hour, by controllers which are gone: a controller can die
      * between recording a start and writing the build's placeholder, which leaves the item with neither.
      */
     @Override
@@ -1368,7 +1366,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     /**
-     * Compares the live members with those at the last heartbeat (Target 14): a controller that has just left (its
+     * Compares the live members with those at the last heartbeat: a controller that has just left (its
      * heartbeat older than the timeout, or its row gone on a clean stop) has its builds adopted and its queue items put
      * back right away, instead of at the next periodic sweep.
      */
@@ -1603,7 +1601,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         });
     }
 
-    /** Running-build placeholders, by key, with their content (Target 8 cluster view). */
+    /** Running-build placeholders, by key, with their content (cluster view). */
     @NonNull
     @Override
     public Map<String, byte[]> runningPlaceholders() throws IOException {
@@ -1624,7 +1622,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         });
     }
 
-    /** Agent channels and the name of the controller holding each (Target 8 cluster view). */
+    /** Agent channels and the name of the controller holding each (cluster view). */
     @NonNull
     @Override
     public Map<String, String> channels() throws IOException {
@@ -1647,7 +1645,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
     /**
      * Atomically adds {@code delta} to this controller's share of each scope if, summed over live controllers, every scope
-     * stays within its cap (Target 9: cloud agent caps for the cluster).
+     * stays within its cap (cloud agent caps for the cluster).
      *
      * @param caps scope → cap
      * @return false, changing nothing, if a cap would be exceeded
@@ -1704,7 +1702,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
             ps.executeUpdate();
         }
         if (delta < 0) {
-            // Target 15: a row at 0 says nothing; Pipelines' own pod templates would otherwise leave one each
+            // a row at 0 says nothing; Pipelines' own pod templates would otherwise leave one each
             try (PreparedStatement ps =
                     c.prepareStatement("delete from jenkins_counters where scope = ? and origin = ? and count = 0")) {
                 ps.setString(1, scope);
@@ -1714,7 +1712,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
-    /** Forgets what controllers that left the cluster counted (their counts no longer apply; Target 15). */
+    /** Forgets what controllers that left the cluster counted (their counts no longer apply). */
     private void forgetCounters(Set<String> origins) {
         try {
             withControl(c -> {
@@ -1729,7 +1727,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
-    /** Records that this controller now holds the channel of an agent (Target 7). */
+    /** Records that this controller now holds the channel of an agent. */
     @Override
     public void channelConnected(@NonNull String agent) throws IOException {
         run("record the channel of " + agent, c -> {
@@ -1828,7 +1826,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
-    /** The origin which claimed the latest tick of a trigger of an item (Target 15: whose log of it is the latest), or null. */
+    /** The origin which claimed the latest tick of a trigger of an item (whose log of it is the latest), or null. */
     @CheckForNull
     @Override
     public String lastClaimant(@NonNull String item, @NonNull String trigger) throws IOException {
@@ -2250,7 +2248,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
 
     private final java.util.concurrent.atomic.AtomicBoolean trailingNotify =
             new java.util.concurrent.atomic.AtomicBoolean();
-    /** Notifications are at most this often per controller (Target 15); listeners also poll every second. */
+    /** Notifications are at most this often per controller; listeners also poll every second. */
     static final long NOTIFY_MILLIS = Long.getLong(PostgresPersistenceStore.class.getName() + ".notifyMillis", 100);
 
     /**
@@ -2307,7 +2305,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         long until = unreachableUntil;
         if (until != 0 && System.nanoTime() < until) {
             // fail fast while the database is unreachable, so that pages and the queue do not wait for it call after
-            // call (Target 14); the heartbeat keeps probing on its own pool and closes this as soon as it gets through
+            // call; the heartbeat keeps probing on its own pool and closes this as soon as it gets through
             throw new java.sql.SQLTransientConnectionException(
                     "The persistence store is unreachable; retrying shortly");
         }

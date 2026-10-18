@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 import jenkins.persistence.PersistenceStores;
 
 /**
- * The install progress page and its polling go to the controller running the install (Target 15).
+ * The install progress page and its polling go to the controller running the install.
  *
  * <p>Update-center jobs live in the memory of the controller that runs them, so behind a load balancer without
  * stickiness every other refresh of the progress page reached a controller without them, and showed nothing. Now

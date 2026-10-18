@@ -12,7 +12,7 @@ import jenkins.plugins.PluginArchiveListener;
 
 /**
  * Plugins installed with the CLI's {@code install-plugin} from a file, URL or standard input (which bypasses the
- * update center) are treated as the plugin manager's installs are (Target 15): refused where those are
+ * update center) are treated as the plugin manager's installs are: refused where those are
  * ({@code fixed} mode, the cluster plugins themselves, downgrades), otherwise recorded in the cluster's plugin set, so that every
  * controller gets them.
  */

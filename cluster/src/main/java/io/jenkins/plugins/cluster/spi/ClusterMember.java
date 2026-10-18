@@ -28,7 +28,7 @@ public final class ClusterMember {
             + java.util.Objects.requireNonNullElse(
                     ClusterMember.class.getPackage().getImplementationVersion(), "dev");
 
-    /** Peers older than this protocol must not be alive when this controller starts (Target 10). */
+    /** Peers older than this protocol must not be alive when this controller starts. */
     public static final int MINIMUM_PEER_PROTOCOL =
             Integer.getInteger("io.jenkins.plugins.cluster.minimumPeerProtocol", 0);
 

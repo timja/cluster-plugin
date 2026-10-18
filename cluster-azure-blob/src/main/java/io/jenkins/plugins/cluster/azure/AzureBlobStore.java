@@ -52,7 +52,7 @@ public class AzureBlobStore implements ClusterBlobStore {
         // the SDK discovers its HTTP client through the context class loader
         this.container = withPluginClassLoader(() -> new BlobServiceClientBuilder()
                 .connectionString(connectionString)
-                // bounded tries (Target 14): a stalled blob store fails calls, retried by their callers, instead of
+                // bounded tries: a stalled blob store fails calls, retried by their callers, instead of
                 // hanging the threads that ship logs and save points
                 .retryOptions(new com.azure.storage.common.policy.RequestRetryOptions(
                         com.azure.storage.common.policy.RetryPolicyType.EXPONENTIAL,
@@ -218,7 +218,7 @@ public class AzureBlobStore implements ClusterBlobStore {
         }
     }
 
-    // ------------------------------------------------------------------ segmented append blobs (Target 14)
+    // ------------------------------------------------------------------ segmented append blobs
 
     private final LogBlobs logs = new SegmentedLogs();
 

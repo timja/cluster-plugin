@@ -21,7 +21,7 @@ import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
 
 /**
- * What each controller reports to the cluster besides being alive (Target 15), published with every heartbeat as
+ * What each controller reports to the cluster besides being alive, published with every heartbeat as
  * {@link ClusterMember#memberInfo}: its executors (busy and total, per agent it holds) for the cluster view,
  * and its update-center install jobs, so that the install progress page is answered by the controller running them
  * ({@link UpdateCenterRouting}).

@@ -35,7 +35,7 @@ import jenkins.persistence.PersistenceStores;
 import jenkins.persistence.SharedFiles;
 
 /**
- * Imports an existing, file-based Jenkins home into the store (Target 10): start one controller on the old home with
+ * Imports an existing, file-based Jenkins home into the store: start one controller on the old home with
  * {@code -Dio.jenkins.plugins.cluster.importHome=true}. It uploads every file the store owns but lacks (jobs and folders,
  * users, nodes, global and descriptor configuration, credentials), the fingerprints, and, once jobs are loaded, the
  * completed builds with their logs. Keys the store already has are left alone, so running it again changes nothing.

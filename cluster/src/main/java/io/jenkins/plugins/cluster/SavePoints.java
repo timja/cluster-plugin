@@ -40,7 +40,7 @@ import org.jenkinsci.plugins.workflow.flow.FlowExecutionOwner;
  * </ul>
  * An adopter applies the nodes of every save point up to the committed one, in order, and none of later ones: an owner
  * dying after uploading a save point's nodes but before committing it leaves nodes newer than the program it would
- * resume (Target 15: the resumed program then allocated a node id the staged nodes had used for another step).
+ * resume (the resumed program then allocated a node id the staged nodes had used for another step).
  * It is then committed by recording {@code savePoint=<epoch>.<seq>} in the build's placeholder
  * ({@link RunningBuilds#update}), a compare-and-set which fails once another controller has taken the build over;
  * this controller then stops the build ({@link RunningBuilds#lost}).

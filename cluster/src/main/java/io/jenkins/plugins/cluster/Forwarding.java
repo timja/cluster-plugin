@@ -31,7 +31,7 @@ import jenkins.security.HMACConfidentialKey;
 
 /**
  * Relays a request to another controller's internal URL and its answer back, with the browser's cookies and credentials,
- * so that the other controller authenticates the user itself (Target 6 sessions and crumbs work on every controller).
+ * so that the other controller authenticates the user itself (sessions and crumbs work on every controller).
  */
 final class Forwarding {
 
