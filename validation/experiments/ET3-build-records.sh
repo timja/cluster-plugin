@@ -190,31 +190,39 @@ check "5 fresh A shows the test results" same "$(json $A '/job/fs/1/testReport/a
 check "5 fresh A shows the flow graph and step logs" same_graph $A $B pl 1
 
 # ------------------------------------------------------------------ 6. running builds
-log "scenario 6: a 60 s build on A as seen from B"
+log "scenario 6: a 60 s build of one controller as seen from the other"
+# the shared queue gives the build to whichever controller claims it first: OWN runs it, SEE watches it
+owner_of() { # <number>: sets OWN/SEE (ports), OWN_NAME and SEE_NAME once one controller lists the build running on the other
+  if has_placeholder $B /job/long "$1@jenkins-a"; then OWN=$A SEE=$B OWN_NAME=a SEE_NAME=b
+  elif has_placeholder $A /job/long "$1@jenkins-b"; then OWN=$B SEE=$A OWN_NAME=b SEE_NAME=a
+  else return 1; fi; }
 pipeline_job long 'echo "long ${params.ID} start"; for (int i = 1; i <= 12; i++) { echo "tick ${i}"; sleep 5 }; echo "long ${params.ID} end"'
 create_job $A long "$OUT_DIR/long.xml"
 eventually 15 exists $B /job/long
 post $A "/job/long/buildWithParameters?ID=1&delay=0sec" >/dev/null
 started=$SECONDS
-check "6 B shows a placeholder for #1 running on jenkins-a" eventually 20 has_placeholder $B /job/long 1@jenkins-a
-info "6 placeholder visible on B after $((SECONDS - started)) s"
-check "6 A shows no placeholder for its own build" no_placeholders $A /job/long
-check "6 B's console shows the output so far" eventually 30 console_has $B /job/long/1/consoleText "tick 2"
-check "6 placeholder replaced by the full build on B when it completes" eventually 120 result_is $B /job/long/1 SUCCESS
-# until B applies the completed record, it forwards /job/long/1 to A (the placeholder names A): the check above can pass
-# through A just before B drops the placeholder
+check "6 the other controller shows a placeholder for #1 running on its owner" eventually 20 owner_of 1
+info "6 #1 runs on jenkins-${OWN_NAME:-?}; placeholder visible on jenkins-${SEE_NAME:-?} after $((SECONDS - started)) s"
+: "${OWN:=$A}" "${SEE:=$B}" "${OWN_NAME:=a}" "${SEE_NAME:=b}"
+check "6 the owner shows no placeholder for its own build" no_placeholders $OWN /job/long
+check "6 the other's console shows the output so far" eventually 30 console_has $SEE /job/long/1/consoleText "tick 2"
+check "6 placeholder replaced by the full build on the other when it completes" eventually 120 result_is $SEE /job/long/1 SUCCESS
+# until the other applies the completed record, it forwards /job/long/1 to the owner (the placeholder names it): the check
+# above can pass through the owner just before the other drops the placeholder
 done_at=$SECONDS
-check "6 no placeholder left on B (within 15 s)" eventually 15 no_placeholders $B /job/long
-info "6 placeholder gone from B $((SECONDS - done_at)) s after the build showed as completed"
-check "6 completed console identical on B" same_text $A $B /job/long/1/consoleText
-log "scenario 6b: SIGKILL A during a running build"
+check "6 no placeholder left on the other (within 15 s)" eventually 15 no_placeholders $SEE /job/long
+info "6 placeholder gone $((SECONDS - done_at)) s after the build showed as completed"
+check "6 completed console identical on both" same_text $A $B /job/long/1/consoleText
+log "scenario 6b: SIGKILL the owner during a running build"
 post $A "/job/long/buildWithParameters?ID=2&delay=0sec" >/dev/null
-eventually 30 has_placeholder $B /job/long 2@jenkins-a
-docker kill -s KILL ${P}jenkins-a-1 >/dev/null
+OWN= SEE=; eventually 30 owner_of 2
+: "${OWN:=$A}" "${SEE:=$B}" "${OWN_NAME:=a}" "${SEE_NAME:=b}"
+info "6b #2 runs on jenkins-$OWN_NAME"
+docker kill -s KILL ${P}jenkins-$OWN_NAME-1 >/dev/null
 killed=$SECONDS
-check "6 B removes the stale placeholder within 90 s" eventually 90 no_placeholders $B /job/long
+check "6 the other removes the stale placeholder within 90 s" eventually 90 no_placeholders $SEE /job/long
 info "6 stale placeholder removed $((SECONDS - killed)) s after the kill"
-et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-$OWN_NAME >/dev/null 2>&1; wait_up $OWN
 
 # ------------------------------------------------------------------ 7. rename
 log "scenario 7: rename il to il2 on B"
