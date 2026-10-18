@@ -9,6 +9,7 @@ import hudson.model.Label;
 import hudson.model.Node;
 import hudson.model.Queue;
 import hudson.model.Run;
+import hudson.model.queue.QueueListener;
 import io.jenkins.plugins.cluster.builds.BuildRecords;
 import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
@@ -26,16 +27,19 @@ import jenkins.util.Timer;
 /**
  * Moves a Pipeline to the controller holding the agent it waits for (Target 12). A {@code node('label')} step whose label
  * no executor or cloud of this controller can serve, while an agent with that label is connected to another live
- * controller, waits forever where it is; after {@link #WAIT_SECONDS} the build is handed over: its latest save point is
- * shipped, a request {@code .../running/<N>.handover} naming the target is written, and its lease released
- * ({@link RunningBuilds#handOver}). The target takes it over ({@link RunningBuilds#takeOver}) and resumes it from that
- * save point, where the {@code node} step asks for an executor again, now one it has.
+ * controller, waits forever where it is; {@link #WAIT_SECONDS} after it entered the queue (for the other {@code node}
+ * blocks of a {@code parallel} to enter it too) the build is handed over: its latest save point is shipped, a request
+ * {@code .../running/<N>.handover} naming the target is written, and its lease released
+ * ({@link RunningBuilds#handOver}). That is looked at when the step enters the queue, and again every few seconds for
+ * steps still waiting (an agent with the label may connect to another controller later). The target takes it over
+ * ({@link RunningBuilds#takeOver}) and resumes it from that save point, where the {@code node} step asks for an executor
+ * again, now one it has.
  */
 public final class Handover {
 
     private static final Logger LOGGER = Logger.getLogger(Handover.class.getName());
     static final String SUFFIX = ".handover";
-    static final long WAIT_SECONDS = Long.getLong(Handover.class.getName() + ".waitSeconds", 15);
+    static final long WAIT_SECONDS = Long.getLong(Handover.class.getName() + ".waitSeconds", 2);
     private static final String PLACEHOLDER_TASK =
             "org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution$PlaceholderTask";
 
@@ -63,42 +67,76 @@ public final class Handover {
         if (store == null) {
             return;
         }
-        long now = System.currentTimeMillis();
         for (Queue.Item item : Queue.getInstance().getItems()) {
-            if (!item.task.getClass().getName().equals(PLACEHOLDER_TASK)
-                    || now - item.getInQueueSince() < TimeUnit.SECONDS.toMillis(WAIT_SECONDS)) {
-                continue;
+            offer(store, item);
+        }
+    }
+
+    /** Hands over the build of a {@code node} step waiting in the queue, if it waits for a label only another controller has. */
+    private static synchronized void offer(ClusterStore store, Queue.Item item) {
+        if (!isPlaceholder(item)
+                || System.currentTimeMillis() - item.getInQueueSince() < TimeUnit.SECONDS.toMillis(WAIT_SECONDS)) {
+            return;
+        }
+        Label label = item.getAssignedLabel();
+        if (label == null || servableHere(label) || !(item.task.getOwnerExecutable() instanceof Run<?, ?> run)) {
+            return;
+        }
+        try {
+            String target = holderOf(store, label);
+            if (target == null || RunningBuilds.ownedPlaceholder(run) == null) {
+                return; // nobody to hand it to, or handed over already (by the sweep or the queue listener)
             }
-            Label label = item.getAssignedLabel();
-            if (label == null || servableHere(label) || !(item.task.getOwnerExecutable() instanceof Run<?, ?> run)) {
-                continue;
+            String reason = staysHere(run, item);
+            if (reason != null) {
+                LOGGER.fine(() -> "Not handing " + run + " over for '" + label + "': " + reason);
+                return;
             }
-            try {
-                String target = holderOf(store, label);
-                if (target == null || RunningBuilds.ownedPlaceholder(run) == null) {
-                    continue;
-                }
-                String reason = staysHere(run, item);
-                if (reason != null) {
-                    LOGGER.fine(() -> "Not handing " + run + " over for '" + label + "': " + reason);
-                    continue;
-                }
-                String base = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber();
-                if (!countHop(store, base + HOPS)) {
-                    LOGGER.warning(() -> run + " waits for '" + label
-                            + "', which only another controller has, but it was handed over " + MAX_HOPS
-                            + " times already (node blocks needing agents of different controllers); it waits here");
-                    continue;
-                }
-                String key = base + SUFFIX;
-                LOGGER.info(() ->
-                        "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
-                SavePoints.flush(run);
-                store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
-                RunningBuilds.handOver(run);
-            } catch (IOException | RuntimeException e) {
-                LOGGER.log(Level.WARNING, "Could not hand " + run + " over", e);
+            String base = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber();
+            if (!countHop(store, base + HOPS)) {
+                LOGGER.warning(() -> run + " waits for '" + label
+                        + "', which only another controller has, but it was handed over " + MAX_HOPS
+                        + " times already (node blocks needing agents of different controllers); it waits here");
+                return;
             }
+            String key = base + SUFFIX;
+            LOGGER.info(
+                    () -> "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
+            SavePoints.flush(run);
+            store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
+            RunningBuilds.handOver(run);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Could not hand " + run + " over", e);
+        }
+    }
+
+    private static boolean isPlaceholder(Queue.Item item) {
+        return item.task.getClass().getName().equals(PLACEHOLDER_TASK);
+    }
+
+    /**
+     * Looks at a {@code node} step as soon as it has waited {@link #WAIT_SECONDS} in the queue, rather than at the next
+     * sweep: a build waiting for an agent of another controller is handed over at once.
+     */
+    @hudson.Extension
+    public static final class Waiting extends QueueListener {
+        @Override
+        public void onEnterWaiting(Queue.WaitingItem wi) {
+            ClusterStore store = ClusterStore.get();
+            if (store == null || !isPlaceholder(wi)) {
+                return;
+            }
+            long id = wi.getId();
+            Timer.get()
+                    .schedule(
+                            () -> {
+                                Queue.Item item = Queue.getInstance().getItem(id);
+                                if (item != null) {
+                                    offer(store, item);
+                                }
+                            },
+                            TimeUnit.SECONDS.toMillis(WAIT_SECONDS) + 1,
+                            TimeUnit.MILLISECONDS);
         }
     }
 
@@ -161,7 +199,8 @@ public final class Handover {
         @Override
         public void onFinalized(Run<?, ?> run) {
             ClusterStore store = ClusterStore.get();
-            if (store != null && BuildRecords.isShared(run.getParent())) {
+            // not for a copy stopped here because another controller took the build over: that one counts on
+            if (store != null && BuildRecords.isShared(run.getParent()) && RunningBuilds.owns(run)) {
                 String hops = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber() + HOPS;
                 {
                     try {
