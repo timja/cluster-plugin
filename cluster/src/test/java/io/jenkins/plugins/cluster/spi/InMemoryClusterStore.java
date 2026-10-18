@@ -55,6 +55,8 @@ public class InMemoryClusterStore implements ClusterStore {
         final Map<String, String> claims = new HashMap<>();
         final Map<String, String> channels = new TreeMap<>();
         final Map<String, Map<String, Integer>> counters = new TreeMap<>();
+        /** Whether change events are lost instead of delivered, as a store's listener can lose them. */
+        volatile boolean losing;
         /** Versions, epochs and ids come from one counter, so that none repeats (nor, likely, one of an earlier store). */
         long clock = (System.currentTimeMillis() % 1_000_000) * 1_000_000;
     }
@@ -275,6 +277,14 @@ public class InMemoryClusterStore implements ClusterStore {
     }
 
     /**
+     * Loses the change events of every change made until called again with false (entries and queue records), as a
+     * listener that was disconnected for longer than the store kept its events would.
+     */
+    public void loseEvents(boolean lose) {
+        shared.losing = lose;
+    }
+
+    /**
      * Delivers the changes made so far in the order they were made: two threads committing one after the other must
      * not have their changes delivered the other way round.
      */
@@ -292,6 +302,9 @@ public class InMemoryClusterStore implements ClusterStore {
                     }
                     if (e == null) {
                         return;
+                    }
+                    if (shared.losing) {
+                        continue;
                     }
                     for (Consumer<ChangeEvent> l : shared.listeners) {
                         try {
@@ -595,6 +608,9 @@ public class InMemoryClusterStore implements ClusterStore {
                     }
                     if (r == null) {
                         return;
+                    }
+                    if (shared.losing) {
+                        continue;
                     }
                     for (Consumer<ClusterQueue.Record> l : shared.queueListeners) {
                         try {
