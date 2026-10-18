@@ -4,7 +4,9 @@ import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.Util;
+import hudson.model.Executor;
 import hudson.model.Job;
+import hudson.model.Result;
 import hudson.model.Run;
 import io.jenkins.plugins.cluster.builds.BuildAdopter;
 import io.jenkins.plugins.cluster.builds.BuildRecords;
@@ -23,9 +25,13 @@ import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
+import jenkins.model.CauseOfInterruption;
 import jenkins.model.lazy.LazyBuildMixIn;
+import jenkins.model.queue.AsynchronousExecution;
+import org.jenkinsci.plugins.workflow.cps.CpsFlowExecution;
 import org.jenkinsci.plugins.workflow.flow.FlowExecutionList;
 import org.jenkinsci.plugins.workflow.flow.FlowExecutionOwner;
+import org.jenkinsci.plugins.workflow.steps.FlowInterruptedException;
 
 /**
  * Adopts a running Pipeline build whose controller is gone, from its last committed {@linkplain SavePoints save point}.
@@ -144,6 +150,67 @@ public class PipelineAdopter implements BuildAdopter {
                 }
             }
         };
+    }
+
+    /**
+     * Stops the copy of a Pipeline another controller took over where it is ({@link CpsFlowExecution#halt}): no
+     * {@code catch}, {@code finally} or {@code post} runs here, nor does it complete, so no listener is told it did; its
+     * executor is freed and the copy discarded.
+     */
+    @Override
+    public boolean stopWithoutCompleting(@NonNull Run<?, ?> run, @NonNull CauseOfInterruption cause) {
+        FlowExecutionOwner owner =
+                run instanceof FlowExecutionOwner.Executable executable ? executable.asFlowExecutionOwner() : null;
+        if (!((owner == null ? null : owner.getOrNull()) instanceof CpsFlowExecution execution)) {
+            return false;
+        }
+        LOGGER.info(() -> "Stopping " + run + " here without completing it: " + cause.getShortDescription());
+        SavePoints.forget(run);
+        String key = BlobLogStorage.buildKey(run);
+        if (key != null) {
+            BlobLogStorage.Shipper.drop(key); // its new owner ships the log from now on
+        }
+        execution
+                .halt(new FlowInterruptedException(Result.NOT_BUILT, true, cause))
+                .whenCompleteAsync(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                LOGGER.log(
+                                        Level.WARNING,
+                                        "Could not stop " + run + " without completing it; interrupting it",
+                                        failure);
+                                try {
+                                    execution.interrupt(Result.NOT_BUILT, cause); // completes here, then is discarded
+                                } catch (IOException | InterruptedException | RuntimeException e) {
+                                    LOGGER.log(Level.WARNING, "Could not stop " + run, e);
+                                }
+                                return;
+                            }
+                            FlowExecutionList.get().unregister(owner); // never resumed here
+                            Executor executor = run.getExecutor();
+                            AsynchronousExecution async = executor == null ? null : executor.getAsynchronousExecution();
+                            if (async != null) {
+                                async.completed(null); // frees the executor; the build is not finalized
+                            }
+                            closeLog(owner, run);
+                            RunningBuilds.letGo(run);
+                        },
+                        jenkins.util.Timer.get());
+        return true;
+    }
+
+    /**
+     * Closes the log of a copy stopped without completing (completing would have closed it), so that its file is not
+     * held open: nothing more of it is shipped, as its shipper was dropped first.
+     */
+    private static void closeLog(FlowExecutionOwner owner, Run<?, ?> run) {
+        try {
+            if (owner.getListener() instanceof AutoCloseable log) {
+                log.close();
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Could not close the log of " + run, e);
+        }
     }
 
     /** Downloads a flow node into the staging directory, by the last segment of its key, if that names a file. */

@@ -53,10 +53,10 @@
       <artifactId>workflow-api</artifactId>
     </dependency>
     <dependency>
-      <!-- ProgramSavedListener, from the cnj/t4-m1-program-saved-listener branch, installed locally -->
+      <!-- ProgramSavedListener and CpsFlowExecution.halt, from the cnj/t4-m1-program-saved-listener branch, installed locally -->
       <groupId>org.jenkins-ci.plugins.workflow</groupId>
       <artifactId>workflow-cps</artifactId>
-      <version>999999-SNAPSHOT</version>
+      <version>999999-cnj2-h-SNAPSHOT</version>
     </dependency>
     <dependency>
       <groupId>org.jenkins-ci.plugins.workflow</groupId>

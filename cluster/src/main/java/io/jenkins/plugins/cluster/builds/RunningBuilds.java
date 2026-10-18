@@ -723,8 +723,10 @@ public final class RunningBuilds {
      * through its execution, as it has no executor of its own), and makes sure it is neither published nor its
      * placeholder removed from here. Its local copy is discarded once it has stopped.
      *
-     * <p>The copy stops as not built, not aborted: the build carries on elsewhere, so what reacts to the result of the
-     * copy here (a {@code post} section, a notifier) does not take it for aborted.
+     * <p>The build carries on elsewhere, so its copy here does not complete if a {@link BuildAdopter} can stop it
+     * otherwise (a Pipeline stops where it is: no {@code post} section runs, and no listener is told it completed);
+     * any other copy is interrupted, and stops as not built, not aborted, so that what reacts to its result here (a
+     * notifier) does not take it for aborted. That copy still completes here: listeners see it, as not built.
      */
     public static void lost(@NonNull Run<?, ?> run) {
         if (!lost.add(run)) {
@@ -733,8 +735,28 @@ public final class RunningBuilds {
         disown(run);
         LOGGER.warning(() -> "Ownership of " + run + " was lost to another controller; stopping it here");
         if (run.isLogUpdated()) { // not once completed: only fenced then
-            interrupt(run, Result.NOT_BUILT, new OwnershipLost());
+            OwnershipLost cause = new OwnershipLost();
+            for (BuildAdopter adopter : ExtensionList.lookup(BuildAdopter.class)) {
+                try {
+                    if (adopter.stopWithoutCompleting(run, cause)) {
+                        return;
+                    }
+                } catch (RuntimeException e) {
+                    LOGGER.log(Level.WARNING, adopter + " failed to stop " + run, e);
+                }
+            }
+            interrupt(run, Result.NOT_BUILT, cause);
         }
+    }
+
+    /**
+     * Lets go of the copy of a build lost to another controller which a {@link BuildAdopter} stopped without
+     * completing it: what this controller held for it is released, and the copy discarded at once, as nothing
+     * finalizes it.
+     */
+    public static void letGo(@NonNull Run<?, ?> run) {
+        ExclusiveLeases.release(run.getParent(), ExclusiveLeases.buildHolder(run.getNumber()));
+        discard(run, true, true, 0);
     }
 
     /** Cause of interruption of a build taken over by another controller. */
@@ -795,7 +817,7 @@ public final class RunningBuilds {
      * record.
      */
     static void discard(@NonNull Run<?, ?> run) {
-        discard(run, true, 0);
+        discard(run, true, !run.isLogUpdated(), 0);
     }
 
     /**
@@ -812,10 +834,11 @@ public final class RunningBuilds {
      */
     static void discardAgain(@NonNull Run<?, ?> run) {
         LOGGER.fine(() -> "A discarded copy of " + run + " was saved; discarding the local copy again");
-        discard(run, false, 0);
+        discard(run, false, !run.isLogUpdated(), 0);
     }
 
-    private static void discard(Run<?, ?> run, boolean wasLost, int attempt) {
+    /** @param now whether the copy has stopped already (it is finalized, or stopped without completing) */
+    private static void discard(Run<?, ?> run, boolean wasLost, boolean now, int attempt) {
         Job<?, ?> job = run.getParent();
         int number = run.getNumber();
         Timer.get()
@@ -846,11 +869,11 @@ public final class RunningBuilds {
                                                 + "; retrying",
                                         e);
                                 if (attempt < MAX_DISCARD_ATTEMPTS) {
-                                    discard(run, wasLost, attempt + 1);
+                                    discard(run, wasLost, now, attempt + 1);
                                 }
                             }
                         },
-                        attempt == 0 && !run.isLogUpdated() ? 0 : DISCARD_DELAY_SECONDS * (1L << Math.min(attempt, 6)),
+                        attempt == 0 && now ? 0 : DISCARD_DELAY_SECONDS * (1L << Math.min(attempt, 6)),
                         TimeUnit.SECONDS);
     }
 

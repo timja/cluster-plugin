@@ -193,6 +193,21 @@ public final class SavePoints {
         }
     }
 
+    /**
+     * Stops shipping save points of a build whose copy here stopped without completing, as another controller took it
+     * over: what was shipped stays, for that controller.
+     */
+    static void forget(@NonNull Run<?, ?> run) {
+        String base = base(run);
+        State st = base == null ? null : states.remove(base);
+        if (st != null) {
+            st.stopped = true;
+            synchronized (st.shipping) {
+                // wait for a save point shipping meanwhile
+            }
+        }
+    }
+
     /** Ships the latest save point of a build now, if one is pending (e.g. before handing the build over). */
     static void flush(@NonNull Run<?, ?> run) throws IOException {
         String base = base(run);

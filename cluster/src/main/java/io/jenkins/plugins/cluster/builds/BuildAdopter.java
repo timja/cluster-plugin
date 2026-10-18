@@ -4,7 +4,9 @@ import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.ExtensionPoint;
 import hudson.model.Job;
+import hudson.model.Run;
 import java.io.IOException;
+import jenkins.model.CauseOfInterruption;
 
 /**
  * Takes over a build which was running on a controller that is gone, so that it continues here.
@@ -26,6 +28,18 @@ public interface BuildAdopter extends ExtensionPoint {
      */
     @CheckForNull
     Adoption prepare(@NonNull Job<?, ?> job, @NonNull RunningBuilds.Placeholder placeholder) throws IOException;
+
+    /**
+     * Stops this controller's copy of a build which another controller took over, without completing it here: nothing
+     * more of it runs (no {@code finally} block or {@code post} section), and no listener is told that it completed, as
+     * it carries on there. Once it has stopped, the adopter calls {@link RunningBuilds#letGo}.
+     *
+     * @param cause why it stops, for what it was doing
+     * @return whether this adopter stops it; if none does, it is interrupted, and completes here as not built
+     */
+    default boolean stopWithoutCompleting(@NonNull Run<?, ?> run, @NonNull CauseOfInterruption cause) {
+        return false;
+    }
 
     /**
      * A prepared adoption.
