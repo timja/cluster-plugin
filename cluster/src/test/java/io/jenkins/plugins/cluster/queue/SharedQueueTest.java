@@ -266,4 +266,45 @@ class SharedQueueTest {
         assertNotNull(again.started.get(), "and so does the one it was handed off as again");
         SharedQueue.HandOffs.cancelled(id);
     }
+
+    @Test
+    void theMirrorCatchesUpWithChangesWhoseEventsWereLost() throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("caught-up");
+        List<hudson.model.Action> actions = List.of(new CauseAction(new Cause.UserIdCause()));
+        InMemoryClusterStore other = store().as("other");
+        long waiting = other.queue().nextId();
+        store().loseEvents(true);
+        try {
+            other.queue()
+                    .publish(new ClusterQueue.Record(
+                            waiting,
+                            p.getItemUuid(),
+                            p.getFullName(),
+                            SharedQueue.dedupKey(p, actions),
+                            SharedQueue.toXml(actions),
+                            System.currentTimeMillis() + 600_000,
+                            ClusterQueue.State.WAITING,
+                            "other",
+                            null,
+                            null,
+                            0));
+        } finally {
+            store().loseEvents(false);
+        }
+        assertEquals(null, r.jenkins.getQueue().getItem(waiting), "its event was lost");
+        io.jenkins.plugins.cluster.spi.Resync.runAll();
+        ClusterFixture.await(
+                "mirrored after all", () -> r.jenkins.getQueue().getItem(waiting) instanceof Queue.WaitingItem);
+        // and an item taken elsewhere whose event is lost leaves the queue here once caught up
+        store().loseEvents(true);
+        try {
+            assertTrue(other.queue().claim(waiting, null));
+        } finally {
+            store().loseEvents(false);
+        }
+        io.jenkins.plugins.cluster.spi.Resync.runAll();
+        ClusterFixture.await(
+                "handed off",
+                () -> r.jenkins.getQueue().getItem(waiting) instanceof Queue.LeftItem li && li.isTakenElsewhere());
+    }
 }
