@@ -13,6 +13,7 @@ import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
+import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
@@ -622,6 +623,43 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
         if (freed) {
             // a waiter here may take it now: Pipeline steps wait in the manager's queue, freestyle builds in Jenkins'
             lrm.refreshQueue();
+        }
+    }
+
+    /**
+     * Brings the resources this controller knows to be locked, here or elsewhere, up to date with their keys, as if
+     * their events had just arrived: a lost deletion would otherwise leave a resource held elsewhere here for good, and
+     * the builds waiting for it here waiting.
+     */
+    void catchUp() throws IOException {
+        ClusterStore store = store();
+        if (store == null) {
+            return;
+        }
+        java.util.Set<String> names = new java.util.TreeSet<>();
+        for (String name : store.children(LOCKS)) {
+            names.add(decode(name));
+        }
+        names.addAll(known.keySet());
+        synchronized (LockableResourcesManager.syncResources) {
+            for (LockableResource r : LockableResourcesManager.get().getResources()) {
+                if (r.getHeldElsewhereBy() != null || r.getBuild() != null || r.getRemoteLockedBy() != null) {
+                    names.add(r.getName());
+                }
+            }
+        }
+        for (String name : names) {
+            events.submit(() -> apply(name));
+        }
+    }
+
+    /** Catches the locks up with the store: events may have been lost. */
+    @Extension(optional = true)
+    @Restricted(NoExternalUse.class)
+    public static final class CatchUp extends Resync {
+        @Override
+        public void catchUp() throws IOException {
+            get().catchUp();
         }
     }
 
