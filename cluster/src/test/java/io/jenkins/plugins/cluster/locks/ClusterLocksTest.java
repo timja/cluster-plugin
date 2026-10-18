@@ -112,6 +112,28 @@ class ClusterLocksTest {
     }
 
     @Test
+    void aLockWhoseReleaseWasNotHeardOfIsCaughtUpWith() throws Exception {
+        other.write(ClusterLocks.key("res"), lockOf("uuid-x#3", "other"), PersistenceStore.ABSENT);
+        applied();
+        assertEquals("uuid-x#3 on controller-other", lrm.fromName("res").getHeldElsewhereBy());
+        WorkflowJob p = j.createProject(WorkflowJob.class, "waits");
+        p.setDefinition(new CpsFlowDefinition("lock('res') { echo 'inside' }", true));
+        WorkflowRun b = p.scheduleBuild2(0).waitForStart();
+        j.waitForMessage("is not free, waiting for execution", b);
+        // released there, its event lost here
+        store.loseEvents(true);
+        try {
+            other.delete(ClusterLocks.key("res"), PersistenceStore.ANY);
+        } finally {
+            store.loseEvents(false);
+        }
+        assertEquals("uuid-x#3 on controller-other", lrm.fromName("res").getHeldElsewhereBy(), "not heard of");
+        io.jenkins.plugins.cluster.spi.Resync.runAll();
+        locks.flush();
+        j.assertBuildStatusSuccess(j.waitForCompletion(b));
+    }
+
+    @Test
     void resourcesAreTakenInTheOrderOfTheirNames() {
         List<LockableResource> asked =
                 List.of(new LockableResource("b"), new LockableResource("c"), new LockableResource("a"));
