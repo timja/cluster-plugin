@@ -14,6 +14,7 @@ import hudson.security.ACL;
 import hudson.security.ACLContext;
 import hudson.util.DaemonThreadFactory;
 import hudson.util.NamingThreadFactory;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.IOException;
@@ -124,6 +125,11 @@ public final class ClusterBuildTriggerRelay implements BuildTriggerRelay, Remote
     public boolean relay(
             @NonNull String returnAddress, boolean waitForStart, @NonNull Run<?, ?> downstream, @NonNull Event event) {
         ClusterStore store = store();
+        if (store != null && !RunningBuilds.owns(downstream)) {
+            // a copy stopped here because another controller took the build over: that one relays its events
+            LOGGER.fine(() -> "Not relaying " + event + " of " + downstream + ": another controller took it over");
+            return true;
+        }
         Address a = Address.parse(returnAddress);
         if (store == null || a == null || runningHere(a.uuid(), a.number()) != null) {
             return false; // here: as on a single controller
