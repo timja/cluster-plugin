@@ -294,6 +294,43 @@ public final class RunningBuilds {
         }
     }
 
+    /** Puts the placeholder of one build, as stored now, in the cached placeholders of its job, if they are cached. */
+    private static void refresh(@NonNull String prefix, int number) {
+        ClusterStore store = ClusterStore.get();
+        if (store == null || !cache.containsKey(prefix)) {
+            return;
+        }
+        Placeholder p;
+        try {
+            PersistenceStore.Entry entry = store.read(Keys.placeholder(prefix, number));
+            p = entry == null ? null : Placeholder.fromBytes(prefix, number, entry.content(), entry.version());
+        } catch (IOException e) {
+            LOGGER.log(
+                    Level.FINE,
+                    "Could not read " + Keys.placeholder(prefix, number) + "; reading them all when needed",
+                    e);
+            invalidate(prefix);
+            return;
+        }
+        cache.computeIfPresent(prefix, (k, all) -> {
+            List<Placeholder> updated = new ArrayList<>(all);
+            updated.removeIf(q -> q.number == number);
+            if (p != null) {
+                updated.add(p);
+            }
+            updated.sort(Comparator.comparingInt(Placeholder::getNumber).reversed());
+            return List.copyOf(updated);
+        });
+        Queue.getInstance().scheduleMaintenance(); // e.g. an item blocked by a build elsewhere which completed
+    }
+
+    /** How many changes made elsewhere to each job's placeholders were seen, by item prefix. */
+    private static final Map<String, Long> generations = new ConcurrentHashMap<>();
+
+    private static long generationOf(String prefix) {
+        return generations.getOrDefault(prefix, 0L);
+    }
+
     /** Forgets the cached placeholders of a job, by its item prefix. */
     static void invalidate(@NonNull String prefix) {
         cache.remove(prefix);
@@ -332,7 +369,24 @@ public final class RunningBuilds {
             return List.of();
         }
         try {
-            return cache.computeIfAbsent(prefix, k -> load(store, k));
+            for (int attempt = 0; ; attempt++) {
+                List<Placeholder> cached = cache.get(prefix);
+                if (cached != null) {
+                    return cached;
+                }
+                // a change of one of them arriving while they are loaded is not applied to the cache (nothing is
+                // cached yet), and may be missing from what is loaded: loaded again then
+                long generation = generationOf(prefix);
+                List<Placeholder> loaded = load(store, prefix);
+                cache.putIfAbsent(prefix, loaded);
+                if (generationOf(prefix) == generation) {
+                    return cache.getOrDefault(prefix, loaded); // a change from now on refreshes the cache
+                }
+                cache.remove(prefix, loaded);
+                if (attempt == 4) {
+                    return loaded; // changing all the time: not cached, asked again next time
+                }
+            }
         } catch (java.io.UncheckedIOException e) {
             LOGGER.log(Level.FINE, "Could not list running builds of " + job.getFullName(), e.getCause());
             return List.of();
@@ -341,7 +395,9 @@ public final class RunningBuilds {
 
     /**
      * Builds of a job running on other controllers, newest first, excluding any whose completed record this controller
-     * already knows. May ask the store: not for callers under locks or rendering pages ({@link #elsewhereCached}).
+     * already knows. Asks the store if they are not cached (once: they are kept up to date from then on), so that a
+     * caller deciding something (whether the job is building, for a rename, the queue, or where its newest build is)
+     * is never told "none" because nothing was cached yet. Pages listing them use {@link #elsewhereCached}.
      */
     @NonNull
     public static List<Placeholder> elsewhere(@NonNull Job<?, ?> job) {
@@ -1134,10 +1190,9 @@ public final class RunningBuilds {
                 throws IOException;
     }
 
-    /** Whether a build of a job is running on another controller (from the cache). */
+    /** Whether a build of a job is running on another controller. */
     public static boolean isRunningElsewhere(@NonNull Job<?, ?> job, int number) {
-        List<Placeholder> elsewhere = elsewhereCached(job);
-        return elsewhere != null && elsewhere.stream().anyMatch(p -> p.getNumber() == number);
+        return elsewhere(job).stream().anyMatch(p -> p.getNumber() == number);
     }
 
     /**
@@ -1592,8 +1647,14 @@ public final class RunningBuilds {
      * @param name the name below {@code running/}
      */
     static void changedElsewhere(@NonNull String uuid, @NonNull String prefix, @NonNull String name, boolean deleted) {
-        if (placeholderNumber(name) >= 0) {
-            invalidate(prefix); // no I/O: read again when next needed
+        int number = placeholderNumber(name);
+        if (number >= 0) {
+            generations.merge(prefix, 1L, Long::sum); // a load in progress loads again
+            if (cache.containsKey(prefix)) {
+                // kept warm: read again off this thread, in the order the changes came (dropped, it would be read on
+                // the caller's thread by the next one which must know, e.g. under the queue lock)
+                ItemEvents.submit(uuid, prefix + " running build #" + number, () -> refresh(prefix, number));
+            }
             return;
         }
         if (deleted) {
@@ -1601,8 +1662,8 @@ public final class RunningBuilds {
         }
         if (name.endsWith(STOP_SUFFIX)) {
             try {
-                int number = Integer.parseInt(name.substring(0, name.length() - STOP_SUFFIX.length()));
-                ItemEvents.submit(uuid, prefix + " stop", () -> stopRequested(prefix, number));
+                int stopped = Integer.parseInt(name.substring(0, name.length() - STOP_SUFFIX.length()));
+                ItemEvents.submit(uuid, prefix + " stop", () -> stopRequested(prefix, stopped));
             } catch (NumberFormatException e) {
                 // not a stop request
             }
@@ -1737,9 +1798,9 @@ public final class RunningBuilds {
 
     /** The number of the newest build of a job running on another controller, if newer than this controller's newest. */
     public static int newerElsewhere(@NonNull Job<?, ?> job) {
-        List<Placeholder> remote = elsewhereCached(job);
+        List<Placeholder> remote = elsewhere(job);
         Run<?, ?> local = job.getLastBuild();
-        return remote != null && !remote.isEmpty() && (local == null || remote.get(0).number > local.getNumber())
+        return !remote.isEmpty() && (local == null || remote.get(0).number > local.getNumber())
                 ? remote.get(0).number
                 : 0;
     }

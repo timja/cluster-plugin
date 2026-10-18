@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import jenkins.model.ExternalBuild;
 import jenkins.model.ExternalBuilds;
 import jenkins.model.experimentalflags.UserExperimentalFlagsProperty;
@@ -279,6 +280,68 @@ class RunningBuildsTest {
                 store().leases().holds(Keys.buildLease(prefix, 1), Adopter.resumedWith),
                 "this controller holds its lease now");
         assertNull(store().read(Keys.buildRecord(prefix, 1)), "resumed, not closed");
+    }
+
+    @Test
+    void aJobWhoseBuildRunsElsewhereIsBuildingEvenBeforeAnythingOfItIsCached() throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("cold");
+        runningElsewhere(p, 1, "other");
+        ClusterFixture.awaitApplied();
+        RunningBuilds.invalidate(Keys.item(p)); // nothing cached here, as after a restart
+        // a rename, the queue or the CLI asks once: the answer is from the store, not "nothing cached, so not building"
+        assertTrue(p.isBuilding(), "a rename is refused while it builds elsewhere");
+        RunningBuilds.invalidate(Keys.item(p));
+        assertNotNull(ExternalBuilds.get().get(p, 1), "its build by number");
+        RunningBuilds.invalidate(Keys.item(p));
+        assertEquals(1, RunningBuilds.newerElsewhere(p), "its newest build");
+    }
+
+    @Test
+    void theLastBuildPermalinkOfAJobWhoseNewestBuildRunsElsewhereLeadsToThatBuild() throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("newest");
+        runningElsewhere(p, 1, "other");
+        ClusterFixture.awaitApplied();
+        RunningBuilds.invalidate(Keys.item(p)); // nothing cached here yet
+        JenkinsRule.WebClient wc = r.createWebClient();
+        HtmlPage page = wc.getPage(p, "lastBuild/");
+        assertThat(page.getUrl().toString(), containsString("/job/newest/1/"));
+        assertThat(page.asNormalizedText(), containsString("Running on controller controller-other"));
+    }
+
+    @Test
+    void aBuildStartedElsewhereWhileTheJobsRunningBuildsAreLoadedIsNotMissed() throws Exception {
+        FreeStyleProject p = r.createFreeStyleProject("loading");
+        String prefix = Keys.item(p);
+        runningElsewhere(p, 1, "other");
+        ClusterFixture.awaitApplied();
+        RunningBuilds.invalidate(prefix); // nothing cached
+        AtomicBoolean once = new AtomicBoolean();
+        // #2 starts elsewhere once #1 is listed, and its change is applied here before the listing is cached
+        InMemoryClusterStore.hook = (operation, key) -> {
+            if (operation.equals("children") && key.equals(Keys.running(prefix)) && once.compareAndSet(false, true)) {
+                try {
+                    runningElsewhere(p, 2, "other");
+                    ClusterFixture.awaitApplied();
+                } catch (Exception e) {
+                    throw new AssertionError(e);
+                }
+            }
+        };
+        try {
+            assertEquals(
+                    List.of(2, 1),
+                    RunningBuilds.elsewhere(p).stream()
+                            .map(RunningBuilds.Placeholder::getNumber)
+                            .toList());
+        } finally {
+            InMemoryClusterStore.hook = null;
+        }
+        assertEquals(
+                List.of(2, 1),
+                RunningBuilds.elsewhere(p).stream()
+                        .map(RunningBuilds.Placeholder::getNumber)
+                        .toList(),
+                "and cached so");
     }
 
     @Test
