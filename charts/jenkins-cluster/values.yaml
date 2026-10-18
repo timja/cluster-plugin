@@ -54,6 +54,12 @@ store:
   # Session-lock liveness (a dead controller's builds are adopted ~6 s after its death): needs a direct connection to
   # Postgres; turn off behind a pooler in transaction mode (PgBouncer), which does not keep sessions.
   sessionLocks: true
+  # How long a controller may go without a heartbeat before the others take it for gone: they then adopt its Pipelines,
+  # close its other builds as aborted (a freestyle build cannot be resumed elsewhere), take over its leases and put its
+  # queue items back. A controller that is only paused for longer (a long garbage collection, CPU throttling) loses
+  # those builds. Raise it where such pauses are expected; failover is then that much slower. A controller whose
+  # process died (its session lock freed) is taken for gone after ~6 s whatever this says.
+  memberTimeoutSeconds: 15
   # Share the files plugins write with their own file APIs in item and user directories (e.g. the avatar plugin's
   # image), every minute (Target 15). Off by default: it scans every item and user directory.
   sharePluginFiles: false

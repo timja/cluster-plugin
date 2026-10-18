@@ -29,6 +29,13 @@ An installation takes `cluster`, one store plugin and one blob store plugin, plu
 
 - S3 credentials come from the AWS default chain.
 - Each setting is also a system property, for example `io.jenkins.plugins.cluster.postgresql.url`.
+- A controller is taken for gone by the others after 15 s without a heartbeat (about 6 s once its process died):
+  its Pipelines are adopted, its other builds closed as aborted, its leases taken over and its queue items put back.
+  `-Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.memberTimeoutMillis` (the chart's
+  `store.memberTimeoutSeconds`) sets it, the same on every controller: raise it where controllers may pause for
+  longer (long garbage collections, CPU throttling), at the cost of slower failover.
+- After the database is restored to an earlier point in time, every controller restarts: one that notices the store
+  went back (its change events go back) restarts itself, safely if it can.
 
 ## Building
 ```

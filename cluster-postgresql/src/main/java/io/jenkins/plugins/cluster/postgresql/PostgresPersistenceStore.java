@@ -526,9 +526,15 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     /** How often a controller records that it is alive. */
     static final long HEARTBEAT_MILLIS =
             Long.getLong(PostgresPersistenceStore.class.getName() + ".heartbeatMillis", 2_000);
-    /** How long after its last heartbeat a controller is considered gone. */
-    static final long MEMBER_TIMEOUT_MILLIS =
-            Long.getLong(PostgresPersistenceStore.class.getName() + ".memberTimeoutMillis", 15_000);
+    /**
+     * How long after its last heartbeat a controller is considered gone: by {@link #aliveMembers} and every other
+     * judgement of the store's (the builds swept and adopted, the leases taken over, the queue items put back), unless
+     * its session lock says its process died. The same on every controller (the chart's
+     * {@code store.memberTimeoutSeconds}); at least a few heartbeats.
+     */
+    static final long MEMBER_TIMEOUT_MILLIS = Math.max(
+            3 * HEARTBEAT_MILLIS,
+            Long.getLong(PostgresPersistenceStore.class.getName() + ".memberTimeoutMillis", 15_000));
 
     /**
      * Session locks for liveness (Target 15): each controller holds a Postgres advisory lock on a connection of its own,
