@@ -20,7 +20,11 @@ g() { groovy "$1" "$2" | tr -d '\r' | sed -e 's/[[:space:]]*$//'; }
 g_is() { [[ "$(g "$1" "$2")" == "$3" ]]; }
 exists() { [[ "$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$1$2/api/json")" == 200 ]]; }
 both_are() { g_is $A "$1" "$2" && g_is $B "$1" "$2"; }
-counter() { g "$1" "println jenkins.persistence.PersistenceStores.$2()"; }
+# conflicting saves: merged (counted by the cluster plugin's reconciler) or refused (by core)
+counter() { case $2 in
+  merged) g "$1" "println io.jenkins.plugins.cluster.config.ConflictCounts.merged()" ;;
+  conflicts) g "$1" "println io.jenkins.plugins.cluster.config.ConflictCounts.merged() + jenkins.persistence.PersistenceStores.getRefusedCount()" ;;
+esac; }
 findings() { json "$1" '/manage/cluster/compatibility/api/json?depth=1' | jq_ '"; ".join("%s (%d, e.g. %s)" % (f["pattern"], f["count"], f["example"]) for f in d["findings"])'; }
 
 [[ -f "$ET1/war/jenkins.war" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
@@ -47,25 +51,25 @@ r "|---|---|"
 
 # ------------------------------------------------------------------ 1. concurrent edits of different settings, 10 rounds
 log "scenario 1: A and B save different global settings at the same moment, 10 times"
-merges_before=$(( $(counter $A getMergeCount) + $(counter $B getMergeCount) ))
+merges_before=$(( $(counter $A merged) + $(counter $B merged) ))
 ok=0
 for round in $(seq 1 10); do
   g $A "Jenkins.get().setQuietPeriod($round)" >/dev/null & g $B "Jenkins.get().setScmCheckoutRetryCount($round)" >/dev/null & wait
   if eventually 10 both_are 'println Jenkins.get().quietPeriod + "/" + Jenkins.get().scmCheckoutRetryCount' "$round/$round"; then ok=$((ok+1)); else
     info "1 round $round: A $(g $A 'println Jenkins.get().quietPeriod + "/" + Jenkins.get().scmCheckoutRetryCount'), B $(g $B 'println Jenkins.get().quietPeriod + "/" + Jenkins.get().scmCheckoutRetryCount')"; fi
 done
-merges=$(( $(counter $A getMergeCount) + $(counter $B getMergeCount) - merges_before ))
+merges=$(( $(counter $A merged) + $(counter $B merged) - merges_before ))
 info "1 rounds where both changes survived on both controllers: $ok/10; writes merged: $merges"
 check "1 both changes survive every round, on both controllers ($ok/10)" test "$ok" = 10
 check "1 stored config.xml has both (round 10)" bash -c "cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select convert_from(content, 'UTF8') from jenkins_store where key = 'config.xml'\" | grep -q '<quietPeriod>10</quietPeriod>' && cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select convert_from(content, 'UTF8') from jenkins_store where key = 'config.xml'\" | grep -q '<scmCheckoutRetryCount>10</scmCheckoutRetryCount>'"
 
 # ------------------------------------------------------------------ 2. the same setting on both sides
 log "scenario 2: A and B set the system message at the same moment"
-conflicts_before=$(( $(counter $A getConflictCount) + $(counter $B getConflictCount) ))
+conflicts_before=$(( $(counter $A conflicts) + $(counter $B conflicts) ))
 g $A 'Jenkins.get().setSystemMessage("from A")' >/dev/null & g $B 'Jenkins.get().setSystemMessage("from B")' >/dev/null & wait
 sleep 3
 ma=$(g $A 'println Jenkins.get().systemMessage'); mb=$(g $B 'println Jenkins.get().systemMessage')
-conflicts=$(( $(counter $A getConflictCount) + $(counter $B getConflictCount) - conflicts_before ))
+conflicts=$(( $(counter $A conflicts) + $(counter $B conflicts) - conflicts_before ))
 info "2 A says '$ma', B says '$mb'; conflicting writes: $conflicts"
 check "2 A and B agree on one of the two values" bash -c "[[ '$ma' == '$mb' && ( '$ma' == 'from A' || '$ma' == 'from B' ) ]]"
 

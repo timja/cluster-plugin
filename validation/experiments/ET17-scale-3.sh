@@ -143,7 +143,7 @@ for (int i = 1; i <= $PROJECTS; i++) {
   p.save()
 }" >/dev/null
 sleep 10
-c0=$(for p in $A $B $C; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
+c0=$(for p in $A $B $C; do groovy $p 'def m = io.jenkins.plugins.cluster.config.ConflictCounts.merged(); println "${m + jenkins.persistence.PersistenceStores.getRefusedCount()} ${m}"'; done | tr '\n' ';')
 start=$SECONDS
 for i in $(seq 1 $PROJECTS); do for p in $A $B $C; do curl -gs -u "$AUTH" -X POST "http://localhost:$p/job/mb$i/build?delay=0" -o /dev/null & done; done; wait
 sleep "${KILL_AFTER:-20}" # later kills catch more builds in flight
@@ -212,7 +212,7 @@ info "3 branches with more than one build: $(psql_q "$branch_builds where n > 1"
 twice=$(psql_q "select b from (select b, count(*) filter (where encode(content, 'escape') like '%<result>SUCCESS</result>%') ok from $RECORDS_SQL r group by 1) t where ok > 1")
 [[ -n $twice ]] && info "3 built successfully more than once: $(echo $twice)"
 check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
-c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
+c1=$(for p in $A $B; do groovy $p 'def m = io.jenkins.plugins.cluster.config.ConflictCounts.merged(); println "${m + jenkins.persistence.PersistenceStores.getRefusedCount()} ${m}"'; done | tr '\n' ';')
 info "3 conflicts and merges (A;B;C) before: $c0 after (A;B): $c1"
 info "3 heap: A $(heap ${P}jenkins-a-1), B $(heap ${P}jenkins-b-1); VM swap used $(vmswap)"
 psql_q "select round(total_exec_time) || ' ms, ' || calls || ' calls: ' || left(regexp_replace(query, '\s+', ' ', 'g'), 120) from pg_stat_statements order by total_exec_time desc limit 8" > "$OUT/top-statements.txt" 2>&1 || true

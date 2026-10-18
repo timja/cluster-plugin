@@ -30,7 +30,7 @@ idle() { [[ "$(json "$1" "/computer/api/json?tree=busyExecutors" | python3 -c 'i
 wait_idle() { sleep 3; eventually 300 idle "$1"; }
 branches() { json "$1" "/job/mb/api/json?tree=jobs[name]" | python3 -c 'import json,sys; print(" ".join(sorted(j["name"] for j in json.load(sys.stdin)["jobs"])))'; }
 has_branches() { [[ "$(branches "$1")" == "$2" ]]; }
-conflicts() { groovy "$1" 'print(jenkins.persistence.PersistenceStores.getConflictCount())'; }
+conflicts() { groovy "$1" 'print((io.jenkins.plugins.cluster.config.ConflictCounts.merged() + jenkins.persistence.PersistenceStores.getRefusedCount()))'; }
 store_versions() { et1 exec -T postgres psql -U jenkins -At -c "select key, version from jenkins_store order by key"; }
 psql_q() { et1 exec -T postgres psql -U jenkins -At -c "$1"; }
 

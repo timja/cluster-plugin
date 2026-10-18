@@ -150,7 +150,7 @@ log "scenario 10: A and B save different settings at once"
 g $A 'Jenkins.get().setQuietPeriod(9)' >/dev/null & g $B 'Jenkins.get().setScmCheckoutRetryCount(4)' >/dev/null & wait
 sleep 3
 final=$(g $A 'println Jenkins.get().quietPeriod + "/" + Jenkins.get().scmCheckoutRetryCount')
-conflicts=$(( $(g $A 'println jenkins.persistence.PersistenceStores.getConflictCount()') + $(g $B 'println jenkins.persistence.PersistenceStores.getConflictCount()') ))
+conflicts=$(( $(g $A 'println (io.jenkins.plugins.cluster.config.ConflictCounts.merged() + jenkins.persistence.PersistenceStores.getRefusedCount())') + $(g $B 'println (io.jenkins.plugins.cluster.config.ConflictCounts.merged() + jenkins.persistence.PersistenceStores.getRefusedCount())') ))
 info "10 result $final, conflicting writes detected: $conflicts"
 check "10 both changes survive, or the overwrite was detected" bash -c "[[ '$final' == 9/4 || $conflicts -gt 0 ]]"
 check "10 A and B agree on the result" eventually 5 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && groovy $B 'println Jenkins.get().quietPeriod + \"/\" + Jenkins.get().scmCheckoutRetryCount' | tr -d '\r' | sed 's/[[:space:]]*\$//') == \$(cd $VALIDATION_DIR && source lib.sh && groovy $A 'println Jenkins.get().quietPeriod + \"/\" + Jenkins.get().scmCheckoutRetryCount' | tr -d '\r' | sed 's/[[:space:]]*\$//') ]]"
