@@ -80,9 +80,10 @@ public final class LaunchLease extends ComputerListener {
         String name = c.getName();
         long epoch = store.launchLeases().acquire(name);
         if (epoch == 0) {
-            String holder = holderName(store, name);
-            // shown instead of a launch failure: nothing failed
-            c.setOfflineCause(new ConnectedElsewhere(holder));
+            LaunchLeases.Holder h = store.launchLeases().holder(name);
+            String holder = nameOf(store, h);
+            // shown instead of a launch failure (nothing failed); also tells retakeLapsed whom to wait for
+            c.setOfflineCause(new ConnectedElsewhere(holder, h == null ? null : h.origin()));
             throw new AbortException("Not launching " + name + ": it is connected on " + holder);
         }
         held.put(name, epoch);
@@ -159,10 +160,18 @@ public final class LaunchLease extends ComputerListener {
     @NonNull
     public static String holderName(@NonNull ClusterStore store, @NonNull String node) {
         try {
-            LaunchLeases.Holder h = store.launchLeases().holder(node);
-            if (h == null) {
-                return "another controller";
-            }
+            return nameOf(store, store.launchLeases().holder(node));
+        } catch (IOException e) {
+            return "another controller";
+        }
+    }
+
+    @NonNull
+    private static String nameOf(@NonNull ClusterStore store, @CheckForNull LaunchLeases.Holder h) {
+        if (h == null) {
+            return "another controller";
+        }
+        try {
             for (Membership.Member m : store.members()) {
                 if (h.origin().equals(m.origin())) {
                     return m.name();
@@ -238,12 +247,50 @@ public final class LaunchLease extends ComputerListener {
         return n;
     }
 
+    /**
+     * Launches again, at once, the agents refused here because a controller held their lease that is now gone, rather
+     * than leaving that to their retention strategy (which retries less and less often). Asks who is alive once; each
+     * such agent then makes one attempt to acquire the lease. Exactly one surviving controller gets it; the launch is
+     * refused on the others, which then wait for that one.
+     *
+     * @return how many agents were launched again
+     */
+    int retakeLapsed() throws IOException {
+        ClusterStore store = store();
+        if (store == null || !store.canJudgeLiveness()) {
+            return 0;
+        }
+        Set<String> live = null;
+        int n = 0;
+        for (Computer c : Jenkins.get().getComputers()) {
+            if (!(c.getOfflineCause() instanceof ConnectedElsewhere why)
+                    || why.origin == null
+                    || c.isConnecting()
+                    || !isLeased(c)) {
+                continue;
+            }
+            if (live == null) {
+                live = store.aliveMembers();
+            }
+            if (!live.contains(why.origin)) {
+                LOGGER.info(() -> "Launching " + c.getName() + ": " + why.controller + ", which connected it, is gone");
+                c.connect(false);
+                n++;
+            }
+        }
+        return n;
+    }
+
     /** Why an agent is offline here: another controller connects it. */
     public static final class ConnectedElsewhere extends OfflineCause {
         private final String controller;
 
-        ConnectedElsewhere(String controller) {
+        @CheckForNull
+        private final transient String origin;
+
+        ConnectedElsewhere(String controller, @CheckForNull String origin) {
             this.controller = controller;
+            this.origin = origin;
         }
 
         /** The name of the controller connecting the agent. */
@@ -282,6 +329,7 @@ public final class LaunchLease extends ComputerListener {
         @Override
         protected void execute(TaskListener listener) throws IOException {
             get().fence();
+            get().retakeLapsed();
         }
     }
 
