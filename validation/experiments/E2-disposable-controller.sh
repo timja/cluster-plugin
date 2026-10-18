@@ -18,7 +18,7 @@ echo "### Azurite blobs"; blobs || echo "(container listing needs auth; see belo
 
 log "destroy jenkins-a and its home"
 dc stop agent jenkins-a >/dev/null 2>&1; dc rm -f agent jenkins-a >/dev/null 2>&1
-docker volume rm validation_home-a >/dev/null
+docker volume rm ${PROJ}_home-a >/dev/null
 dc up -d jenkins-a >/dev/null 2>&1
 wait_up $J
 

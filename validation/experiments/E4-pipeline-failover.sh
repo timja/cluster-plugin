@@ -13,8 +13,8 @@ dc up -d postgres azurite jenkins-a >/dev/null 2>&1; wait_up $A
 SECRET=$(agent_secret $A agent1)
 # Agents address the controller via a stable alias "jenkins" (a k8s Service in real life),
 # which we move from A to B at failover.
-docker network disconnect validation_default validation-jenkins-a-1
-docker network connect --alias jenkins-a --alias jenkins validation_default validation-jenkins-a-1
+docker network disconnect ${PROJ}_default ${P}jenkins-a-1
+docker network connect --alias jenkins-a --alias jenkins ${PROJ}_default ${P}jenkins-a-1
 AGENT_SECRET=$SECRET AGENT_JENKINS_URL=http://jenkins:8080/ dc --profile agent up -d agent >/dev/null 2>&1
 until [[ "$(groovy $A 'print(jenkins.model.Jenkins.get().getComputer("agent1").isOnline())')" == true ]]; do sleep 2; done
 create_job $A sleep "$JOBS/sleep.xml"; create_job $A input "$JOBS/input.xml"
@@ -26,13 +26,13 @@ r "- sleep #1 at: $(curl -gsf -u "$AUTH" "http://localhost:$A/job/sleep/1/consol
 r "- program.dat present: $(dc exec -T jenkins-a sh -c 'ls /var/jenkins_home/jobs/*/builds/1/program.dat' | tr '\n' ' ')"
 
 log "SIGKILL A"
-docker kill -s KILL validation-jenkins-a-1 >/dev/null
+docker kill -s KILL ${P}jenkins-a-1 >/dev/null
 t0=$SECONDS
 dc --profile multi up -d --no-deps jenkins-b >/dev/null 2>&1; wait_up $B
 r "- B up $((SECONDS - t0))s after A was killed"
-docker network disconnect -f validation_default validation-jenkins-a-1 2>/dev/null || true
-docker network disconnect validation_default validation-jenkins-b-1
-docker network connect --alias jenkins-b --alias jenkins validation_default validation-jenkins-b-1
+docker network disconnect -f ${PROJ}_default ${P}jenkins-a-1 2>/dev/null || true
+docker network disconnect ${PROJ}_default ${P}jenkins-b-1
+docker network connect --alias jenkins-b --alias jenkins ${PROJ}_default ${P}jenkins-b-1
 for i in $(seq 1 60); do [[ "$(groovy $B 'print(jenkins.model.Jenkins.get().getComputer("agent1").isOnline())')" == true ]] && break; sleep 2; done
 r "- agent online on B (same secret, derived from shared master.key): $(groovy $B 'print(jenkins.model.Jenkins.get().getComputer("agent1").isOnline())')"
 r "- B sees running builds: $(curl -gsf -u "$AUTH" "http://localhost:$B/computer/api/json?tree=busyExecutors")"
