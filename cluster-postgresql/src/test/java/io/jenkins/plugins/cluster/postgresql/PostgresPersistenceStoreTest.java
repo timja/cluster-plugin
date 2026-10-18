@@ -555,8 +555,16 @@ class PostgresPersistenceStoreTest {
         List<String> catchUps = new CopyOnWriteArrayList<>();
         b.resyncNeeded = catchUps::add;
         List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
+        List<String> restarts = new CopyOnWriteArrayList<>();
+        b.storeWentBack = restarts::add;
         try (AutoCloseable sub = b.subscribe(seen::add)) {
-            a.write("jobs/one/config.xml", bytes("one"), PersistenceStore.ANY);
+            try (var c = POSTGRES.createConnection("");
+                    var s = c.createStatement()) {
+                // made long ago (as the last change of a quiet cluster would be), so prunable by now
+                s.execute(
+                        "insert into jenkins_store_events (kind, key, old_key, version, origin, at)"
+                                + " values ('WRITTEN', 'jobs/one/config.xml', null, 1, 'elsewhere', now() - interval '2 days')");
+            }
             await("the first event", () -> seenKey(seen, "jobs/one/config.xml"));
             // pruned while the listener was away: the events until now are gone
             try (var c = POSTGRES.createConnection("");
@@ -568,6 +576,7 @@ class PostgresPersistenceStoreTest {
             await("a catch-up to be asked for", () -> !catchUps.isEmpty());
             await("the events still there to be delivered", () -> seenKey(seen, "jobs/two/config.xml"));
             assertTrue(catchUps.get(0).contains("no longer has the last change event"), catchUps::toString);
+            assertEquals(List.of(), restarts, "pruned, not gone back: no restart");
         }
     }
 
@@ -575,6 +584,8 @@ class PostgresPersistenceStoreTest {
     void aListenerAsksForACatchUpWhenTheStoreWasRestoredToAnEarlierPoint() throws Exception {
         List<String> catchUps = new CopyOnWriteArrayList<>();
         b.resyncNeeded = catchUps::add;
+        List<String> restarts = new CopyOnWriteArrayList<>();
+        b.storeWentBack = restarts::add;
         List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
         a.write("jobs/before/config.xml", bytes("before"), PersistenceStore.ANY);
         try (AutoCloseable sub = b.subscribe(seen::add)) {
@@ -589,11 +600,50 @@ class PostgresPersistenceStoreTest {
                 s.execute("select setval('jenkins_store_events_seq_seq', (select max(seq) from jenkins_store_events))");
             }
             killListeners();
-            await("a catch-up to be asked for", () -> !catchUps.isEmpty());
+            await("a restart to be asked for", () -> !restarts.isEmpty());
+            assertTrue(restarts.get(0).contains("went back"), restarts::toString);
+            assertTrue(!catchUps.isEmpty(), "and a catch-up meanwhile");
             seen.clear();
             a.write("jobs/restored/config.xml", bytes("restored"), PersistenceStore.ANY);
             await("events to be delivered again", () -> seenKey(seen, "jobs/restored/config.xml"));
         }
+    }
+
+    @Test
+    void aStoreRestoredAndChangedSinceBeyondWhereItWasIsSeenToHaveGoneBack() throws Exception {
+        List<String> restarts = new CopyOnWriteArrayList<>();
+        b.storeWentBack = restarts::add;
+        b.resyncNeeded = x -> {};
+        List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
+        a.write("jobs/before/config.xml", bytes("before"), PersistenceStore.ANY);
+        try (AutoCloseable sub = b.subscribe(seen::add)) {
+            for (int i = 0; i < 3; i++) {
+                a.write("jobs/after" + i + "/config.xml", bytes("after"), PersistenceStore.ANY);
+            }
+            await("the events", () -> seenKey(seen, "jobs/after2/config.xml"));
+            try (var c = POSTGRES.createConnection("");
+                    var s = c.createStatement()) {
+                s.execute("delete from jenkins_store_events where key like 'jobs/after%'");
+                s.execute("select setval('jenkins_store_events_seq_seq', (select max(seq) from jenkins_store_events))");
+                // the restored database is written to before this listener reconnects: its numbers pass where they were
+                for (int i = 0; i < 6; i++) {
+                    s.execute("insert into jenkins_store_events (kind, key, old_key, version, origin)"
+                            + " values ('WRITTEN', 'jobs/new" + i + "/config.xml', null, 1, 'elsewhere')");
+                }
+            }
+            killListeners();
+            await("a restart to be asked for", () -> !restarts.isEmpty());
+        }
+    }
+
+    @Test
+    void wentBackOrPruned() {
+        long day = TimeUnit.DAYS.toMillis(1);
+        String recent = "jobs/p/config.xml@7@" + (10 * day);
+        assertTrue(PostgresPersistenceStore.wentBack(recent, "jobs/q/config.xml@3@1", 5, 9, 10 * day), "renumbered");
+        assertTrue(PostgresPersistenceStore.wentBack(recent, null, 5, 4, 10 * day), "numbers lower");
+        assertTrue(PostgresPersistenceStore.wentBack(recent, null, 5, 9, 10 * day + 1000), "too recent to be pruned");
+        assertFalse(PostgresPersistenceStore.wentBack(recent, null, 5, 9, 12 * day), "pruned");
     }
 
     @Test

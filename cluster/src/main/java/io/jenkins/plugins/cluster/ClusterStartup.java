@@ -3,6 +3,9 @@ package io.jenkins.plugins.cluster;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
+import hudson.lifecycle.RestartNotSupportedException;
+import hudson.security.ACL;
+import hudson.security.ACLContext;
 import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
@@ -10,6 +13,7 @@ import io.jenkins.plugins.cluster.spi.QueueMaintenance;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStore;
 
 /**
@@ -42,6 +46,44 @@ public final class ClusterStartup {
     /** Once the store's controller takes part in membership: imports a file-based home, if asked to. */
     public static void afterJoining(@NonNull ClusterStore store) throws IOException {
         HomeImporter.importFiles(store);
+    }
+
+    private static final java.util.concurrent.atomic.AtomicBoolean restarting =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    /** How the process ends when Jenkins cannot restart itself: the container is then restarted. */
+    static /* non-final for tests */ java.util.function.IntConsumer exit = System::exit;
+
+    /**
+     * What a store calls when it went back, restored to an earlier point in time while this controller kept running:
+     * what this controller holds (the versions it read, its caches, builds it made since) may be newer than the store,
+     * so it restarts, from the store as it is now, rather than going on or repairing itself in place. A safe restart if
+     * Jenkins can restart itself (running builds finish first), else the process exits for its container to be
+     * restarted. Once.
+     *
+     * @param why what the store saw, for the log
+     */
+    public static void storeWentBack(@NonNull String why) {
+        Jenkins j = Jenkins.getInstanceOrNull();
+        LOGGER.severe(() -> "Restarting this controller: " + why + ". It may hold state newer than the store's;"
+                + " every controller of the cluster must restart after the store is restored.");
+        if (j == null || !restarting.compareAndSet(false, true)) {
+            return;
+        }
+        try (ACLContext ignored = ACL.as2(ACL.SYSTEM2)) {
+            j.safeRestart("The cluster's store was restored to an earlier point in time");
+        } catch (RestartNotSupportedException | RuntimeException e) {
+            LOGGER.log(Level.SEVERE, "Cannot restart Jenkins itself; exiting, for the container to be restarted", e);
+            exit.accept(STORE_WENT_BACK_EXIT);
+        }
+    }
+
+    /** The exit status when the store went back and Jenkins could not restart itself. */
+    static final int STORE_WENT_BACK_EXIT = 75;
+
+    /** For tests: as before the store went back. */
+    static void restartedForTests() {
+        restarting.set(false);
     }
 
     /**

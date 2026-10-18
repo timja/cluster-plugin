@@ -1944,16 +1944,54 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         return new Baseline(max, identity(c, max), holes);
     }
 
-    /** What the event numbered {@code seq} is, to tell it from another of that number later; null if none. */
+    /**
+     * What the event numbered {@code seq} is, to tell it from another of that number later, and when it was made (by
+     * the database's clock): {@code <key>@<version>@<epoch millis>}; null if there is none.
+     */
     @CheckForNull
     private static String identity(Connection c, long seq) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("select key, version from jenkins_store_events where seq = ?")) {
+        try (PreparedStatement ps = c.prepareStatement("select key, version, (extract(epoch from at) * 1000)::bigint"
+                + " from jenkins_store_events where seq = ?")) {
             ps.setLong(1, seq);
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getString(1) + "@" + rs.getLong(2) : null;
+                return rs.next() ? rs.getString(1) + "@" + rs.getLong(2) + "@" + rs.getLong(3) : null;
             }
         }
     }
+
+    /** Events are pruned a day after they were made: one made more recently than this is never pruned. */
+    static final long NEVER_PRUNED_MILLIS = TimeUnit.HOURS.toMillis(23);
+
+    /**
+     * Whether the store went back, rather than pruned events, given that the event last delivered ({@code last}) is
+     * not the one of its number now ({@code now}): another event has its number, or the numbers are lower now, or it was
+     * too recent to be pruned (by the database's clock, {@code dbNow}).
+     */
+    static boolean wentBack(@CheckForNull String last, @CheckForNull String now, long lastSeq, long max, long dbNow) {
+        if (now != null || max < lastSeq) {
+            return true;
+        }
+        if (last == null) {
+            return false;
+        }
+        long at = Long.parseLong(last.substring(last.lastIndexOf('@') + 1));
+        return dbNow - at < NEVER_PRUNED_MILLIS;
+    }
+
+    private static long[] maxSeqAndNow(Connection c) throws SQLException {
+        try (Statement s = c.createStatement();
+                ResultSet rs = s.executeQuery("select coalesce(max(seq), 0), (extract(epoch from now()) * 1000)::bigint"
+                        + " from jenkins_store_events")) {
+            rs.next();
+            return new long[] {rs.getLong(1), rs.getLong(2)};
+        }
+    }
+
+    /**
+     * Told when the store went back: the database was restored to an earlier point in time. What this controller holds
+     * (versions read, builds made since) may be newer than the store, so it restarts rather than going on.
+     */
+    volatile Consumer<String> storeWentBack = io.jenkins.plugins.cluster.ClusterStartup::storeWentBack;
 
     /**
      * Told when change events may have been lost, so that whatever mirrors the store catches up with it: the listener
@@ -1984,17 +2022,25 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     s.execute("listen " + MEMBERS_CHANNEL);
                 }
                 String lost = null;
+                boolean wentBack = false;
                 if (lastSeq < 0) {
                     lost = "the store's change listener started after its subscribers had read from the store";
-                } else if (lastSeq > 0 && !java.util.Objects.equals(identity(c, lastSeq), lastDelivered)) {
-                    lost = "the store no longer has the last change event delivered (number " + lastSeq
-                            + "): its events were pruned while this controller was disconnected, or the database was"
-                            + " restored to an earlier point";
+                } else if (lastSeq > 0) {
+                    String now = identity(c, lastSeq);
+                    if (!java.util.Objects.equals(now, lastDelivered)) {
+                        long[] maxAndNow = maxSeqAndNow(c);
+                        wentBack = wentBack(lastDelivered, now, lastSeq, maxAndNow[0], maxAndNow[1]);
+                        lost = wentBack
+                                ? "the store went back: its change events no longer go on from the last one delivered"
+                                        + " (number " + lastSeq + "), the database was restored to an earlier point"
+                                : "the store no longer has the last change event delivered (number " + lastSeq
+                                        + "): its events were pruned while this controller was disconnected";
+                    }
                 }
                 if (lost != null) {
                     Baseline b = baseline(c);
-                    if (lastSeq < 0 || b.lastSeq() < lastSeq) {
-                        // never started, or the numbers went back: from the end as it is now
+                    if (lastSeq < 0 || wentBack) {
+                        // never started, or the store went back: from the end as it is now
                         holes.clear();
                         seedHoles(b);
                         lastSeq = b.lastSeq();
@@ -2004,6 +2050,9 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                         lastDelivered = identity(c, lastSeq);
                     }
                     resyncNeeded.accept(lost);
+                    if (wentBack) {
+                        storeWentBack.accept(lost);
+                    }
                 }
                 PGConnection pg = c.unwrap(PGConnection.class);
                 while (!closed) {
@@ -2097,7 +2146,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         long now = System.currentTimeMillis();
         List<Long> forget = forgettable(c, now);
         StringBuilder sql = new StringBuilder(
-                "select seq, kind, key, old_key, version, origin from jenkins_store_events where seq > ?");
+                "select seq, kind, key, old_key, version, origin, (extract(epoch from at) * 1000)::bigint"
+                        + " from jenkins_store_events where seq > ?");
         List<Long> waiting = List.copyOf(holes.keySet());
         if (!waiting.isEmpty()) {
             sql.append(" or seq = any (?)");
@@ -2118,7 +2168,7 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                             }
                         }
                         lastSeq = seq;
-                        lastDelivered = rs.getString(3) + "@" + rs.getLong(5);
+                        lastDelivered = rs.getString(3) + "@" + rs.getLong(5) + "@" + rs.getLong(7);
                     } else if (holes.remove(seq) == null) {
                         continue; // delivered already
                     }
