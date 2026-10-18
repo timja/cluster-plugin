@@ -54,6 +54,9 @@ public class InMemoryClusterStore implements ClusterStore {
 
         final Map<String, String> claims = new HashMap<>();
         final Map<String, String> channels = new TreeMap<>();
+        /** Internal URLs, by origin (also the member's name): none unless a test gives one. */
+        final Map<String, String> urls = new TreeMap<>();
+
         final Map<String, Map<String, Integer>> counters = new TreeMap<>();
         /** Whether change events are lost instead of delivered, as a store's listener can lose them. */
         volatile boolean losing;
@@ -123,6 +126,17 @@ public class InMemoryClusterStore implements ClusterStore {
                 }
             } else {
                 shared.gone.remove(origin);
+            }
+        }
+    }
+
+    /** Gives an origin an internal URL, at which requests forwarded to it are sent. */
+    public void url(@NonNull String origin, @CheckForNull String url) {
+        synchronized (shared) {
+            if (url == null) {
+                shared.urls.remove(origin);
+            } else {
+                shared.urls.put(origin, url);
             }
         }
     }
@@ -775,13 +789,15 @@ public class InMemoryClusterStore implements ClusterStore {
     @CheckForNull
     @Override
     public String urlOf(@NonNull String name) {
-        return null;
+        return urlOfOrigin(name);
     }
 
     @CheckForNull
     @Override
     public String urlOfOrigin(@NonNull String origin) {
-        return null;
+        synchronized (shared) {
+            return alive(origin) ? shared.urls.get(origin) : null;
+        }
     }
 
     @NonNull
@@ -869,7 +885,7 @@ public class InMemoryClusterStore implements ClusterStore {
     public String[] channelHolder(@NonNull String agent) {
         synchronized (shared) {
             String o = shared.channels.get(agent);
-            return o == null || o.equals(origin) || !alive(o) ? null : new String[] {o, null, o};
+            return o == null || o.equals(origin) || !alive(o) ? null : new String[] {o, shared.urls.get(o), o};
         }
     }
 
