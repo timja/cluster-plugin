@@ -3,7 +3,7 @@
 # ET setup (two tmpfs controllers, S0, Postgres, Azurite, token auth) plus agent1 through the failover URL (on A).
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t6-m6-stateless-sessions experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET8" ET1="$ET1_DIR"
@@ -49,7 +49,7 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
@@ -194,9 +194,10 @@ import json
 a, b = (json.load(open(\"$OUT/cluster-%s.json\" % p)) for p in ($A, $B))
 strip = lambda d: {\"members\": sorted(m[\"name\"] for m in d[\"members\"]), \"runningBuilds\": d[\"runningBuilds\"], \"channels\": d[\"channels\"]}
 exit(0 if strip(a) == strip(b) else 1)'"
+DK=$(item_key $A dk)
 # A's own discarder deletes #1 as soon as it completes (the oldest of three), and a record deleted while being published
 # is not written; either way A, not an adopter, closes it and removes its placeholder
-check "4b dk #1, running on A while B discarded, completed on A: its record published, or its placeholder removed by A" eventually 90 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store_events where (key = 'jobs/dk/builds/1/build.xml' and kind = 'WRITTEN') or (key = 'jobs/dk/running/1.xml' and kind = 'DELETED' and origin in (select origin from jenkins_members where name = 'jenkins-a'))\") -ge 1 ]]"
+check "4b dk #1, running on A while B discarded, completed on A: its record published, or its placeholder removed by A" eventually 90 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store_events where (key = '$DK/builds/1/build.xml' and kind = 'WRITTEN') or (key = '$DK/running/1.xml' and kind = 'DELETED' and origin in (select origin from jenkins_members where name = 'jenkins-a'))\") -ge 1 ]]"
 check "4b then, the oldest of three, it was discarded: both keep [2 3]" eventually 30 bash -c "[[ \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$A/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' && \$(cd $VALIDATION_DIR && source lib.sh && curl -gsf -u \"\$AUTH\" 'http://localhost:$B/job/dk/api/json?tree=builds[number]' | python3 -c 'import json,sys; print(sorted(b[\"number\"] for b in json.load(sys.stdin)[\"builds\"]))') == '[2, 3]' ]]"
 sleep 5; info "4b dk builds after: A [$(builds_of $A dk)] B [$(builds_of $B dk)]"
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1  # before they are replaced

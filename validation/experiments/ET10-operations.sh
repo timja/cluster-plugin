@@ -3,7 +3,7 @@
 # Uses the cluster and images of ET9 (cnj/jenkins:k8s; cnj/jenkins:k8s-next is the same with a rebuilt plugin).
 # Exits non-zero if any check fails.
 #
-# Prerequisites: CORE_REF=cnj/t10-m1-import-api experiments/ET1-build.sh; experiments/ET9-build-image.sh
+# Prerequisites: experiments/ET1-build.sh; experiments/ET9-build-image.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj-ops REL=ops OUT="$RAW_DIR/ET10" CHART="$ROOT_DIR/charts/jenkins-cluster"

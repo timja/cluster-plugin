@@ -4,7 +4,7 @@
 # 2 controllers, in-chart Postgres and Azurite, and the kubernetes cloud with a container cap of 4.
 # The Service is a NodePort mapped to localhost:8095. Exits non-zero if any check fails.
 #
-# Prerequisites: CORE_REF=cnj/t10-m1-import-api experiments/ET1-build.sh (the top of the core stack, with the T11 merge:
+# Prerequisites: experiments/ET1-build.sh (the top of the core stack, with the T11 merge:
 # controllers booting at once all write the shared admin user); experiments/ET9-build-image.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
@@ -163,8 +163,9 @@ stage("use") { podTemplate { retry(count: 2, conditions: [kubernetesAgent(), non
 on "$REL-0" "/job/carry/build?delay=0sec" -X POST >/dev/null
 eventually 180 bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText 2>/dev/null | grep -q attempt-on" || true
 # while the build runs (stashes are deleted when it completes): the artifact manager put the stash in blob storage
-stash_keys=$(g_on "$REL-1" 'println jenkins.persistence.PersistenceStores.getBlobStore().list("artifacts/carry/1/stashes").join(" ")' | tr -d '\r')
-owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = 'jobs/carry/running/1.xml'" | sed -n 's/^controller=//p')
+stash_keys=$(g_on "$REL-1" "println(($BLOBS_GROOVY).list('artifacts/carry/1/stashes').join(' '))" | tr -d '\r')
+carry=$(g_on "$REL-1" "print(Jenkins.get().getItemByFullName('carry').getItemUuid())")
+owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = '_items/$carry/running/1.xml'" | sed -n 's/^controller=//p')
 info "4b carry #1 running on $owner_before"
 k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4b the build completes after its controller's pod was deleted" eventually 600 result_is carry 1 SUCCESS

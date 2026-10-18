@@ -4,7 +4,7 @@
 # running builds at once; checks each against a bar.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t14-m1-resilience experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET16" ET1="$ET1_DIR"
@@ -31,7 +31,7 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
@@ -78,8 +78,8 @@ for (int i = 1; i <= $BUILT; i++) {
   }
 }
 println 'ok'" >/dev/null
-eventually 1800 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like 'jobs/%/builds/%/build.xml'\") -ge $((BUILT * BUILDS)) ]]" || true
-info "2 the builds took $((SECONDS - start)) s (published: $(psql_q "select count(*) from jenkins_store where key like 'jobs/%/builds/%/build.xml'"))"
+eventually 1800 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key ~ '^_items/[^/]+/builds/[0-9]+/build[.]xml\$'\") -ge $((BUILT * BUILDS)) ]]" || true
+info "2 the builds took $((SECONDS - start)) s (published: $(psql_q "select count(*) from jenkins_store where key ~ '^_items/[^/]+/builds/[0-9]+/build[.]xml$'"))"
 
 # ------------------------------------------------------------------ 3. pages, heap and the store
 log "scenario 3: page loads"
@@ -93,7 +93,9 @@ info "3 pages (port, page, cold s, warm s): $(tr '\n' ';' < "$OUT/pages.txt")"
 check "3 every page answers warm within 5 s on both controllers" bash -c "awk '\$4 > 5 { bad = 1 } END { exit bad }' '$OUT/pages.txt'"
 info "3 heap: A $(heap ${P}jenkins-a-1), B $(heap ${P}jenkins-b-1)"
 info "3 store: $(psql_q "select count(*) || ' keys, ' || pg_size_pretty(sum(length(content))) from jenkins_store"), $(psql_q "select count(*) from jenkins_store_events") events"
-psql_q "explain analyze select distinct split_part(substr(key, 20), '/', 1) from jenkins_store where key like 'jobs/job-1999/builds/%' escape '\\'" > "$OUT/explain-children.txt" 2>&1
+# as the store lists children: a range of the key index (text_pattern_ops) below the job's prefix
+builds_prefix="$(item_key $A job-1999)/builds/"
+psql_q "explain analyze select distinct split_part(substr(key, $(( ${#builds_prefix} + 1 ))), '/', 1) from jenkins_store where key ~>=~ '$builds_prefix' and key ~<~ '${builds_prefix%/}0'" > "$OUT/explain-children.txt" 2>&1
 check "3 listing a job's builds uses the key index" grep -q "Index" "$OUT/explain-children.txt"
 info "3 a job's builds listed in $(grep -o 'Execution Time: [0-9.]* ms' "$OUT/explain-children.txt")"
 
@@ -142,7 +144,7 @@ for (int i = 1; i <= $RUNNING; i++) {
   p.scheduleBuild2(0)
 }
 println 'ok'" >/dev/null
-eventually 120 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like 'jobs/long-%/running/%'\") -ge $RUNNING ]]" || true
+eventually 120 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key ~ '^_items/[^/]+/running/[0-9]+[.]xml\$'\") -ge $RUNNING ]]" || true
 sleep 10
 info "5 B's / with $RUNNING builds running on A: $(seconds $B /) s"
 kill_start=$SECONDS

@@ -21,10 +21,10 @@ eventually() { # eventually <seconds> <command...>
   local t=$1 start=$SECONDS; shift
   until "$@"; do (( SECONDS - start > t )) && return 1; sleep 1; done
 }
-http() { curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$1$2"; }
+http() { curl -gs -m 60 -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$1$2"; }
 exists() { [[ "$(http "$1" "$2/api/json")" == 200 ]]; }
 absent() { [[ "$(http "$1" "$2/api/json")" == 404 ]]; }
-json() { curl -gsf -u "$AUTH" "http://localhost:$1$2"; }
+json() { curl -gsf -m 60 -u "$AUTH" "http://localhost:$1$2"; }
 idle() { [[ "$(json "$1" "/computer/api/json?tree=busyExecutors" | python3 -c 'import json,sys; print(json.load(sys.stdin)["busyExecutors"])')" == 0 && \
           "$(json "$1" "/queue/api/json?tree=items[id]" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')" == 0 ]]; }
 wait_idle() { sleep 3; eventually 300 idle "$1"; }
@@ -44,7 +44,7 @@ log "S0: seeding key material from a throwaway controller"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get(); jenkins.model.Jenkins.get().getCrumbIssuer()' >/dev/null
 # docker cp cannot read tmpfs mounts
@@ -142,7 +142,7 @@ while (( SECONDS < end )); do
 done
 wait_idle $A; wait_idle $B; sleep 5
 ca=$(( $(conflicts $A) - ca0 )); cb=$(( $(conflicts $B) - cb0 ))
-r "| ℹ️ | conflicts detected during scenario 4: A=$ca B=$cb (warn policy: logged, last writer wins) |"
+r "| ℹ️ | conflicts detected during scenario 4: A=$ca B=$cb (each merged by the reconciler, or refused and reloaded) |"
 for br in main feature2; do
   check "4 mb/$br keeps its properties() parameter in the store" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select convert_from(content,'UTF8') from jenkins_store where key='jobs/mb/branches/$br/config.xml'\" | grep -c ParametersDefinitionProperty) -ge 1 ]]"
   check "4 mb/$br shows the parameter on A and B" bash -c "curl -gsf -u $AUTH 'http://localhost:$A/job/mb/job/$br/api/json?tree=property[parameterDefinitions[name]]' | grep -q GREETING && curl -gsf -u $AUTH 'http://localhost:$B/job/mb/job/$br/api/json?tree=property[parameterDefinitions[name]]' | grep -q GREETING"

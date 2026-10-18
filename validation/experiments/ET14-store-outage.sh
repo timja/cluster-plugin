@@ -4,7 +4,7 @@
 # and while Azurite is stopped; a controller boots while Postgres is down.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t14-m1-resilience experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET14" ET1="$ET1_DIR"
@@ -24,7 +24,7 @@ result_anywhere() { local r; for p in $A $B; do r=$(result_on $p "$1"); [[ -n "$
 is_result() { [[ "$(result_anywhere "$1")" == "$2" ]]; }
 console_anywhere() { for p in $A $B; do json $p "$1/consoleText" 2>/dev/null && return; done; }
 psql_q() { et1 exec -T postgres psql -U jenkins -At -c "$1"; }
-writers_of() { psql_q "select count(distinct origin) from jenkins_store_events where key = 'jobs/$1/builds/$2/build.xml' and kind = 'WRITTEN'"; }
+writers_of() { psql_q "select count(distinct origin) from jenkins_store_events where key = '$(item_key $A "$1")/builds/$2/build.xml' and kind = 'WRITTEN'"; }
 ticks_once() { # job number count: the console has "tick 1".."tick N" once each, in order, and the end line
   console_anywhere "/job/$1/$2" > "$OUT/console-$1-$2.txt" 2>/dev/null
   [[ "$(grep -o '^tick [0-9]*' "$OUT/console-$1-$2.txt" | tr '\n' ' ')" == "$(seq -f 'tick %g' 1 "$3" | tr '\n' ' ')" ]] \
@@ -88,7 +88,7 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
