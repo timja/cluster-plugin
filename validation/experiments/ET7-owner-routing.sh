@@ -232,8 +232,10 @@ check "10 requests for a completed build are not forwarded ($fwd_before -> $fwd_
 pipeline_job loop 'echo "loop started"; sleep 60'
 create_both loop
 start_on_a loop
-code=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -H 'X-Jenkins-Cluster-Forwarded-From: jenkins-a' "http://localhost:$B/job/loop/1/api/json")
-check "10 an already forwarded request is not forwarded again (answered by B itself: $code)" test "$code" = 404
+# B answers it itself, from what it knows of the build running elsewhere: no forwarding header in the answer
+fwd=$(curl -gs -o /dev/null -D - -u "$AUTH" -H 'X-Jenkins-Cluster-Forwarded-From: jenkins-a' "http://localhost:$B/job/loop/1/api/json" | tr -d '\r')
+code=$(awk 'NR == 1 {print $2}' <<<"$fwd")
+check "10 an already forwarded request is not forwarded again (answered by B itself: $code)" bash -c "[[ '$code' == 200 || '$code' == 404 ]] && ! grep -qi '^X-Jenkins-Cluster-Forwarded-From:' <<<'$fwd'"
 post $B "/job/loop/1/stop" >/dev/null
 info "forwarded build requests: A=$(counter $A getForwardedBuildRequests) B=$(counter $B getForwardedBuildRequests); computer requests: A=$(counter $A getForwardedComputerRequests) B=$(counter $B getForwardedComputerRequests)"
 check "10 no routing warnings in the logs" bash -c "! (cd $VALIDATION_DIR && docker compose -f compose.et1.yaml --profile agents logs jenkins-a jenkins-b 2>&1 | grep -q 'Could not route')"

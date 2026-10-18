@@ -85,7 +85,7 @@ log "scenario 1: a chatty Pipeline (300 lines, ~1 minute)"
 pipeline $A chatty "${CHATTY//COUNT/300}"
 post $A "/job/chatty/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/chatty/1 "line 100"
-check "1 while it runs, B's API lists it among the builds running elsewhere (buildsElsewhere)" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=buildsElsewhere[number]') == *'\"buildsElsewhere\":[{'*'\"number\":1}'* ]]"
+check "1 while it runs, B's API lists it among the builds running elsewhere (the job's action, buildsElsewhere)" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=actions[buildsElsewhere[number]]') == *'\"buildsElsewhere\":[{'*'\"number\":1}'* ]]"
 check "1 ... and not among B's own runs (builds and lastBuild keep their types: Run)" bash -c "j=\$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=lastBuild[number],builds[number]'); [[ \$j == *'\"builds\":[]'* && \$j == *'\"lastBuild\":null'* ]]"
 check "1 ... and B's /lastBuild/api/json is the running build (redirected and forwarded to A)" bash -c "[[ \$(curl -gsfL -u '$AUTH' 'http://localhost:$B/job/chatty/lastBuild/api/json?tree=number,building') == *'\"building\":true'*'\"number\":1'* ]]"
 check "1 completes" eventually 180 is_result $A /job/chatty/1 SUCCESS

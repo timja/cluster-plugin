@@ -153,8 +153,10 @@ pipeline_job longrun 'echo "running"; sleep 120'
 create_both longrun
 schedule $A "/job/longrun/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/longrun/1 "running"
-sleep 2
-post $B "/job/longrun/running-elsewhere/stop?number=1" >/dev/null
+# B offers to stop it once it knows the build runs elsewhere
+elsewhere_on_b() { json $B "/job/longrun/api/json?tree=actions[buildsElsewhere[number]]" | grep -q '"buildsElsewhere":\[{'; }
+check "5 B lists #1 as running elsewhere" eventually 30 elsewhere_on_b
+post $B "/job/longrun/running-elsewhere/stop?number=1" >/dev/null || true
 check "5 aborted on A" eventually 60 result_is $A /job/longrun/1 ABORTED
 check "5 the log says who stopped it" console_has $A /job/longrun/1 "Stopped from jenkins-b"
 
