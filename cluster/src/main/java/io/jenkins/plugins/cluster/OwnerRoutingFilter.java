@@ -7,6 +7,7 @@ import hudson.init.Initializer;
 import hudson.model.Computer;
 import hudson.model.Job;
 import hudson.util.PluginServletFilter;
+import io.jenkins.plugins.cluster.agents.LaunchLease;
 import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
@@ -32,14 +33,16 @@ import jenkins.persistence.PersistenceStores;
  * <li>a bound object of another controller ({@link BoundRequestForwarder});
  * <li>a remote lock of another controller ({@link RemoteLockForwarder});
  * <li>the install progress pages ({@link UpdateCenterRouting});
- * <li>an agent whose channel another controller holds ({@code /computer/<name>/…}: its page, log, script console);
+ * <li>an agent another controller connects ({@code /computer/<name>/…}: its page, log, script console), for users who
+ * may read this controller;
  * <li>a job's {@code lastBuild} while its newest build runs elsewhere (redirected to that build), and its SCM polling log
  * (on the controller which polled).
  * </ul>
- * Each rule names the controller by what it holds (a build's running placeholder, an id, the channel table), and the
- * request is always sent to that controller's internal URL from the membership table. A request is answered locally
- * when nothing of it is elsewhere, when the controller holding it is not alive, when the request was itself forwarded
- * ({@link Forwarding#wasForwarded}), or when its path does not read as it is written ({@link JobPath#segments}).
+ * Each rule names the controller by what it holds (a build's running placeholder, an id, the channel table, a launch
+ * lease), and the request is always sent to that controller's internal URL from the membership table. A request is
+ * answered locally when nothing of it is elsewhere, when the controller holding it is not alive, when the request was
+ * itself forwarded ({@link Forwarding#wasForwarded}), or when its path does not read as it is written
+ * ({@link JobPath#segments}).
  */
 public final class OwnerRoutingFilter implements Filter {
 
@@ -252,18 +255,35 @@ public final class OwnerRoutingFilter implements Filter {
         return null;
     }
 
-    /** An agent offline here whose channel another controller holds: to that controller. */
+    /** An agent offline here which another controller connects: to that controller. */
     @CheckForNull
     private static Route computer(HttpServletRequest req, String path, ClusterStore store) throws IOException {
         String agent = computerPath(path);
-        if (agent == null) {
+        String[] holder = agent == null ? null : computerHolder(store, agent);
+        return holder == null ? null : new Forward(holder[0], holder[1], false, computers);
+    }
+
+    /**
+     * The name and internal URL of the live controller connecting an agent that is offline here: the one holding its
+     * channel, or else (while it launches it, before the channel is up) its launch lease. Null for an agent online
+     * here, or that this controller does not have (nothing to route to).
+     */
+    @CheckForNull
+    static String[] computerHolder(@NonNull ClusterStore store, @NonNull String agent) throws IOException {
+        Jenkins jenkins = Jenkins.get();
+        if (!jenkins.hasPermission(Jenkins.READ)) {
+            return null; // answered here (with a login prompt): which agents exist, and where, is not told
+        }
+        Computer c = jenkins.getComputer(agent);
+        if (c == null || c.isOnline()) {
             return null;
         }
-        Computer c = Jenkins.get().getComputer(agent);
-        if (c == null || c.isOnline()) {
-            return null; // unknown here: nothing to route to; online here: ours
-        }
         String[] holder = store.channelHolder(agent);
-        return holder == null || holder[1] == null ? null : new Forward(holder[0], holder[1], false, computers);
+        if (holder != null) {
+            return holder[1] == null ? null : holder;
+        }
+        String origin = LaunchLease.holderElsewhere(store, c);
+        String url = origin == null ? null : store.urlOfOrigin(origin);
+        return url == null ? null : new String[] {LaunchLease.holderName(store, agent), url};
     }
 }

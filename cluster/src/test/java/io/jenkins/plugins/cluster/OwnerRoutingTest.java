@@ -36,4 +36,15 @@ class OwnerRoutingTest {
         assertNull(OwnerRoutingFilter.computerPath("/computer/"));
         assertNull(OwnerRoutingFilter.computerPath("/job/p/1/"));
     }
+
+    @Test
+    void computerPathsThatDoNotStayBelowTheAgentAreNotRouted() {
+        assertNull(OwnerRoutingFilter.computerPath("/computer/agent1/../../script"));
+        assertNull(OwnerRoutingFilter.computerPath("/computer/agent1/./log"));
+        assertNull(OwnerRoutingFilter.computerPath("/computer/agent1/%2e%2e/script"));
+        assertNull(OwnerRoutingFilter.computerPath("/computer/..%2Fscript"));
+        assertNull(OwnerRoutingFilter.computerPath("/computer/agent1%2F..%2F..%2Fscript"));
+        assertNull(OwnerRoutingFilter.computerPath("/computer/agent1/a%5Cb"));
+        assertNull(OwnerRoutingFilter.computerPath("/computer/agent1/%zz"));
+    }
 }
