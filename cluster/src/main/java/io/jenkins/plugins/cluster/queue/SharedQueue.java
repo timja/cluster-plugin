@@ -1128,7 +1128,9 @@ public final class SharedQueue {
         @Override
         public void onFinalized(Run<?, ?> run) {
             long id = run.getQueueId();
-            if (id > 0 && queue() != null) {
+            // not with a copy stopped here because another controller took the build over: the future follows the
+            // build there, and completes with the record it publishes
+            if (id > 0 && queue() != null && RunningBuilds.owns(run)) {
                 HandOffs.completedHere(id, run);
             }
         }
