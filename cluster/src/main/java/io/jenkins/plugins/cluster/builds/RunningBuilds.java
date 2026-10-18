@@ -626,6 +626,7 @@ public final class RunningBuilds {
 
     /** A build was loaded ({@link ClusterBuildRecordSource#retrieve}): one reclaimed or adopted here is owned by its object. */
     static void loaded(@NonNull Run<?, ?> run) {
+        BuildRecords.followNumber(run.getParent(), run.getNumber()); // one numbered elsewhere, adopted or not
         if (!reclaimed.isEmpty()) {
             loadedReclaimed(run);
         }

@@ -1346,7 +1346,20 @@ public final class BuildRecords {
             republishFiles(toPublish);
             runs.unload(number); // loaded again with the record as written elsewhere
         }
+        followNumber(job, number);
         StoredPermalinks.changedElsewhere(job);
+    }
+
+    /**
+     * Moves the job's next build number past a build numbered elsewhere (completed, or adopted here), as the controller
+     * which numbered it reports it. Numbers are drawn from the sequence in the store either way.
+     */
+    static void followNumber(@NonNull Job<?, ?> job, int number) {
+        synchronized (job) {
+            if (job.getNextBuildNumber() <= number) {
+                job.fastUpdateNextBuildNumber(number + 1);
+            }
+        }
     }
 
     /** Whether a record of the build is stored. */

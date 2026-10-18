@@ -197,6 +197,7 @@ class RunningBuildsTest {
         FreeStyleBuild b = p.getBuildByNumber(1);
         assertNotNull(b);
         assertThat(b.getLog(), containsString("could not be resumed elsewhere"));
+        assertEquals(2, p.getNextBuildNumber(), "past the build numbered elsewhere");
         assertFalse(ExternalBuilds.get().isBuilding(p));
     }
 

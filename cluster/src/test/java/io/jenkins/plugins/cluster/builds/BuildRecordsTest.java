@@ -265,6 +265,19 @@ class BuildRecordsTest {
     }
 
     @Test
+    void aBuildRecordedElsewhereRaisesTheNextBuildNumberShownHere() throws Exception {
+        FreeStyleProject p = project(r, "numbered");
+        r.buildAndAssertSuccess(p);
+        // build #2 ran and completed on another controller
+        store().as("other")
+                .write(
+                        Keys.buildRecord(Keys.item(p), 2),
+                        record(p, 1).getBytes(StandardCharsets.UTF_8),
+                        PersistenceStore.ABSENT);
+        ClusterFixture.await("the next build number follows", () -> p.getNextBuildNumber() == 3);
+    }
+
+    @Test
     void aJobDeletedHereLeavesNothingStored() throws Exception {
         FreeStyleProject p = project(r, "gone");
         r.buildAndAssertSuccess(p);
