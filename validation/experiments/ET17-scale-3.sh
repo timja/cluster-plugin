@@ -162,7 +162,8 @@ BRANCHES_SQL="(select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/config
   '_items/' || substring(encode(content, 'escape') from '<itemUuid>([^<]+)</itemUuid>') p
   from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/config[.]xml\$')"
 # (records compared as escaped bytes: not every stored record decodes as UTF-8)
-RECORDS_SQL="(select br.b, s.key, s.content from $BRANCHES_SQL br join jenkins_store s on s.key like br.p || '/builds/%/build.xml')"
+RECORDS_SQL="(select br.b, s.key, s.content from $BRANCHES_SQL br join jenkins_store s
+  on substring(s.key from '^(_items/[^/]+)/builds/[0-9]+/build[.]xml\$') = br.p)"
 branch_builds="select count(*) from (select b, count(*) n,
   count(*) filter (where encode(content, 'escape') like '%<result>SUCCESS</result>%') ok
   from $RECORDS_SQL r group by 1) t"
