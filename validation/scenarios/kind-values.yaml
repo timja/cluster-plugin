@@ -1,0 +1,28 @@
+# Values for the hand-testing release on kind (seed-kind.sh seeds it):
+#   helm install cnj charts/jenkins-cluster -n cnj -f validation/scenarios/kind-values.yaml --set image=<image>
+controllers: 3
+service:
+  type: NodePort
+  nodePort: 30080
+# the chart's default, plus the lockable resource the seeded jobs take: each controller declares the resources from
+# configuration (only those made on the resources page are shared through the store)
+casc: |
+  jenkins:
+    systemMessage: "Jenkins cluster on Kubernetes"
+    numExecutors: 0
+    securityRealm:
+      local:
+        allowsSignup: false
+        users:
+          - id: admin
+            password: admin
+    authorizationStrategy: loggedInUsersCanDoAnything
+    crumbIssuer: cluster
+  unclassified:
+    globalDefaultFlowDurabilityLevel:
+      durabilityHint: MAX_SURVIVABILITY
+    lockableResourcesManager:
+      declaredResources:
+        - name: staging-env
+          description: "The staging environment"
+          labels: env
