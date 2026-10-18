@@ -69,8 +69,9 @@ docker rm -fv ${P}seed >/dev/null
 [[ -s "$ET1/agent1.secret" ]] || { echo "no agent secret" >&2; exit 2; }
 
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d lb agent1 >/dev/null 2>&1
 r "## ET4 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""

@@ -49,8 +49,9 @@ groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.j
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 r "## ET12 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -129,7 +130,7 @@ sleep 5 # a save point
 docker kill -s KILL ${P}jenkins-a-1 ${P}jenkins-b-1 >/dev/null
 et1 rm -sf jenkins-a jenkins-b >/dev/null 2>&1
 sleep 25 # past the membership timeout
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1; wait_up $A; wait_up $B
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 code=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$B/job/sleeper/1/api/json")
 check "4 a request for a build of the old controller is answered (not forwarded to its namesake: $code)" bash -c "[[ '$code' != 000 && '$code' != 502 ]]"
 check "3 the Pipeline is resumed and completes" eventually 240 bash -c "for p in $A $B; do curl -gsf -u '$AUTH' http://localhost:\$p/job/sleeper/1/api/json?tree=result | grep -q SUCCESS && curl -gsf -u '$AUTH' http://localhost:\$p/job/sleeper/1/consoleText | grep -q 'after its controller was gone' && exit 0; done; exit 1"

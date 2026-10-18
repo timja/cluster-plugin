@@ -35,8 +35,9 @@ groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.j
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d rr >/dev/null 2>&1
 r "## ET19 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
