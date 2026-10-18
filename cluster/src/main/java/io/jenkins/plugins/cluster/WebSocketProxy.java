@@ -67,6 +67,7 @@ final class WebSocketProxy {
         if (!WebSockets.isSupported()) {
             return false;
         }
+        Forwarding.warnIfExposed(url);
         String path = req.getRequestURI().substring(req.getContextPath().length());
         String target = url.replaceAll("/+$", "").replaceFirst("^http", "ws")
                 + req.getContextPath()
@@ -85,7 +86,9 @@ final class WebSocketProxy {
                 }
             }
         }
-        b.header(Forwarding.FORWARDED, Forwarding.forwardedHeader());
+        b.header(
+                Forwarding.FORWARDED,
+                Forwarding.forwardedHeader(Forwarding.requestOf("GET", path, req.getQueryString())));
         String protocols = req.getHeader("Sec-WebSocket-Protocol");
         if (protocols != null && !protocols.isBlank()) {
             String[] p = protocols.split("\\s*,\\s*");

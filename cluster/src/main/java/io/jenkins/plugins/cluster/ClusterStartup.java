@@ -1,7 +1,10 @@
 package io.jenkins.plugins.cluster;
 
 import edu.umd.cs.findbugs.annotations.NonNull;
+import hudson.init.InitMilestone;
+import hudson.init.Initializer;
 import io.jenkins.plugins.cluster.builds.RunningBuilds;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.QueueMaintenance;
 import java.io.IOException;
@@ -26,6 +29,14 @@ public final class ClusterStartup {
      */
     public static void beforeJoining(@NonNull PersistenceStore store) throws IOException {
         KeyCheck.verify(store);
+    }
+
+    /** Says once, at startup, if other controllers reach this one in the clear outside the cluster's own network. */
+    @Initializer(after = InitMilestone.EXTENSIONS_AUGMENTED)
+    public static void checkInternalUrl() {
+        if (ClusterStore.get() != null) {
+            Forwarding.warnIfExposed(ClusterMember.INTERNAL_URL);
+        }
     }
 
     /** Once the store's controller takes part in membership: imports a file-based home, if asked to. */

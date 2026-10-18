@@ -132,8 +132,18 @@ class ForwardingTest {
         verify(rsp, never()).sendError(eq(HttpServletResponse.SC_GATEWAY_TIMEOUT), anyString());
     }
 
+    private static final String REQUEST = "POST /job/p/1/replay/run?x=1";
+
     private static HttpServletRequest withForwarded(String... values) {
+        return forwardedOn("POST", "/job/p/1/replay/run", "x=1", values);
+    }
+
+    private static HttpServletRequest forwardedOn(String method, String path, String query, String... values) {
         HttpServletRequest req = mock(HttpServletRequest.class);
+        when(req.getMethod()).thenReturn(method);
+        when(req.getContextPath()).thenReturn("/jenkins");
+        when(req.getRequestURI()).thenReturn("/jenkins" + path);
+        when(req.getQueryString()).thenReturn(query);
         when(req.getHeaders(Forwarding.FORWARDED)).thenReturn(Collections.enumeration(List.of(values)));
         when(req.getHeader(Forwarding.FORWARDED)).thenReturn(values.length == 0 ? null : values[0]);
         return req;
@@ -141,29 +151,62 @@ class ForwardingTest {
 
     @Test
     void onlyAControllerCanSayARequestWasForwarded() {
-        assertTrue(Forwarding.wasForwarded(withForwarded(Forwarding.forwardedHeader())));
+        assertTrue(Forwarding.wasForwarded(withForwarded(Forwarding.forwardedHeader(REQUEST))));
         assertFalse(Forwarding.wasForwarded(withForwarded()), "not forwarded");
         assertFalse(
                 Forwarding.wasForwarded(withForwarded("cnj-1")),
                 "a client's, to stop its request from reaching the owner");
         assertTrue(
-                Forwarding.wasForwarded(withForwarded("cnj-1", Forwarding.forwardedHeader())),
+                Forwarding.wasForwarded(withForwarded("cnj-1", Forwarding.forwardedHeader(REQUEST))),
                 "whatever else the client sent");
-        String real = Forwarding.forwardedHeader();
+        String real = Forwarding.forwardedHeader(REQUEST);
         assertFalse(
                 Forwarding.wasForwarded(withForwarded(real.substring(0, real.length() - 2) + "00")), "a forged MAC");
         assertFalse(
                 Forwarding.wasForwarded(withForwarded(real.replaceFirst("^[^;]*", "other"))),
                 "another name with the MAC of this one");
         java.util.function.UnaryOperator<String> mac = m -> Integer.toHexString(m.hashCode());
-        String old = Forwarding.forwardedHeader("cnj-2", 1_000, mac);
-        assertEquals("cnj-2;1000;" + Integer.toHexString("cnj-2;1000".hashCode()), old);
-        assertTrue(Forwarding.isAuthentic(old, 1_000 + Forwarding.MAX_AGE_MILLIS, (m, x) -> x.equals(mac.apply(m))));
+        String old = Forwarding.forwardedHeader("cnj-2", 1_000, REQUEST, mac);
+        assertEquals("cnj-2;1000;" + Integer.toHexString(("cnj-2;1000;" + REQUEST).hashCode()), old);
+        assertTrue(Forwarding.isAuthentic(
+                old, REQUEST, 1_000 + Forwarding.MAX_AGE_MILLIS, (m, x) -> x.equals(mac.apply(m))));
         assertFalse(
-                Forwarding.isAuthentic(old, 1_001 + Forwarding.MAX_AGE_MILLIS, (m, x) -> x.equals(mac.apply(m))),
+                Forwarding.isAuthentic(
+                        old, REQUEST, 1_001 + Forwarding.MAX_AGE_MILLIS, (m, x) -> x.equals(mac.apply(m))),
                 "too old: a replay");
-        assertFalse(Forwarding.isAuthentic("a;b;c", 0, (m, x) -> true));
-        assertFalse(Forwarding.isAuthentic("abc", 0, (m, x) -> true));
+        assertEquals(30_000, Forwarding.MAX_AGE_MILLIS, "a hop takes milliseconds, clocks differ by little");
+        assertFalse(Forwarding.isAuthentic("a;b;c", REQUEST, 0, (m, x) -> true));
+        assertFalse(Forwarding.isAuthentic("abc", REQUEST, 0, (m, x) -> true));
+    }
+
+    @Test
+    void plainHttpOutsideTheClustersNetworkIsSaidToBeExposed() {
+        assertTrue(Forwarding.isExposed("http://jenkins.example.com:8080/"));
+        assertTrue(Forwarding.isExposed("http://203.0.113.7:8080/"), "a public address");
+        assertTrue(Forwarding.isExposed("http://[2001:db8::1]:8080/"), "a public address");
+        assertFalse(Forwarding.isExposed("http://10.1.2.3:8080/"), "RFC 1918");
+        assertFalse(Forwarding.isExposed("http://172.20.0.5:8080/"), "RFC 1918");
+        assertFalse(Forwarding.isExposed("http://192.168.4.91:8080/"), "RFC 1918");
+        assertFalse(Forwarding.isExposed("http://169.254.1.1:8080/"), "link-local");
+        assertFalse(Forwarding.isExposed("http://[fd00::1]:8080/"), "unique local");
+        assertFalse(Forwarding.isExposed("https://jenkins.example.com/"), "encrypted");
+        assertFalse(Forwarding.isExposed("http://cnj-0:8080/"), "a short host name (the default)");
+        assertFalse(Forwarding.isExposed("http://cnj-0.cnj.ns.svc.cluster.local:8080/"), "a Kubernetes service");
+        assertFalse(Forwarding.isExposed("http://cnj-0.cnj.ns.svc:8080/"), "a Kubernetes service");
+        assertFalse(Forwarding.isExposed("http://localhost:8080/"));
+        assertFalse(Forwarding.isExposed("http://127.0.0.1:8080/"));
+    }
+
+    @Test
+    void aForwardedHeaderIsValidOnlyForTheRequestItWasSetOn() {
+        String header = Forwarding.forwardedHeader(REQUEST);
+        assertTrue(Forwarding.wasForwarded(forwardedOn("POST", "/job/p/1/replay/run", "x=1", header)));
+        assertFalse(
+                Forwarding.wasForwarded(forwardedOn("GET", "/job/p/1/replay/run", "x=1", header)), "another method");
+        assertFalse(Forwarding.wasForwarded(forwardedOn("POST", "/job/q/1/replay/run", "x=1", header)), "another path");
+        assertFalse(
+                Forwarding.wasForwarded(forwardedOn("POST", "/job/p/1/replay/run", "x=2", header)), "another query");
+        assertFalse(Forwarding.wasForwarded(forwardedOn("POST", "/job/p/1/replay/run", null, header)), "no query");
     }
 
     @Test
@@ -203,7 +246,9 @@ class ForwardingTest {
                 .map(h -> h.substring(h.indexOf(':') + 1).trim())
                 .toList();
         assertEquals(1, forwarded.size(), received::toString);
-        assertTrue(Forwarding.wasForwarded(withForwarded(forwarded.get(0))), forwarded::toString);
+        assertTrue(
+                Forwarding.wasForwarded(forwardedOn("GET", "/job/p/1/replay/run", null, forwarded.get(0))),
+                forwarded::toString);
         assertTrue(
                 received.contains("Accept: text/html") || received.contains("accept: text/html"), received::toString);
     }
