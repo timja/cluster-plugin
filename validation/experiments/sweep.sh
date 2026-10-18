@@ -15,7 +15,8 @@
 #   SWEEP_LANES=2 SKIP_KIND=1 SKIP_S3=1 experiments/sweep.sh
 #   SWEEP_ONLY="ET6-static-state s3-ET3-build-records" experiments/sweep.sh   # only these Compose experiments
 #
-# The kind experiments use the namespace "cnj" of the kind cluster "cnj": a release there is deleted first.
+# The kind experiments use namespaces of the kind cluster "cnj" ("cnj" for ET9): each experiment deletes and makes again
+# only a namespace an experiment made (lib.sh claim_ns), so ET9 stops if someone else's release is in "cnj".
 cd "$(dirname "$0")/.." || exit 2
 source ./lib.sh
 set +euo pipefail # lib.sh is strict for experiments; the sweep carries on past failures
@@ -93,14 +94,12 @@ kind_lane() {
   source ./lib.sh
   set +euo pipefail
   run_job ET9-build-image
-  kubectl --context kind-cnj delete ns cnj --wait=true >/dev/null 2>&1
   for e in ET9-kubernetes ET10-operations ET13-cluster-plugins; do run_job "$e"; done
 }
 
 echo "sweep: $lanes Compose lane(s), ${#jobs[@]} experiments$([[ -z "${SKIP_KIND:-}" ]] && echo ", and the kind experiments")"
 # ET6 and ET9 both compile the browser journey: compiled once here, so they do not race on its target/
-(cd journey && mvn -B -ntp -q compile) > "$SWEEP_OUT/journey-compile.log" 2>&1 || echo "journey compile failed (see $SWEEP_OUT/journey-compile.log)"
-kubectl --context kind-cnj delete ns cnj --wait=true >/dev/null 2>&1
+(cd journey && ${MVN_BIN:-mvn} -B -ntp -q compile) > "$SWEEP_OUT/journey-compile.log" 2>&1 || echo "journey compile failed (see $SWEEP_OUT/journey-compile.log)"
 pids=()
 [[ -z "${SKIP_KIND:-}" ]] && { kind_lane & pids+=($!); }
 for s in $(seq 1 "$lanes"); do

@@ -12,7 +12,7 @@
 
 x-jenkins: &jenkins
   build: ./jenkins
-  image: cnj/jenkins:dev
+  image: ${DEV_IMAGE:-cnj/jenkins:dev}
   depends_on: [postgres, azurite]
   environment: &jenkins-env
     CASC_JENKINS_CONFIG: /casc

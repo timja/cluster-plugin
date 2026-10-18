@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds what ET1 runs, from local branches (nothing is fetched or pushed), into validation/.et1/:
 #   war/jenkins.war                    core at $CORE_REF            (default: cnj2/all), as 2.586$CORE_CHANGELIST
-#   plugins/cloudbees-folder.hpi       folder plugin at $FOLDER_REF (default: cnj/t15-remote-child)
+#   plugins/cloudbees-folder.hpi       folder plugin at $FOLDER_REF (default: cnj2/remote-child)
 #   plugins/cluster*.hpi               the Cluster plugins, from this checkout (Postgres + Azure Blob Storage)
 #   plugins-s3/                        the same plugin set with cluster-s3 instead of cluster-azure-blob (compose.s3.yaml)
 # Core is built in a separate worktree so the main checkout can keep working. A checkout already at the wanted commit is
@@ -17,7 +17,7 @@ CORE_WT=${CORE_WT:-$CORE}
 FOLDER=${FOLDER:-/Users/timja/code/jenkins/cloudbees-folder-plugin}
 CORE_REF=${CORE_REF:-cnj2/all}
 CORE_CHANGELIST=${CORE_CHANGELIST:--cnj2-all-SNAPSHOT}
-FOLDER_REF=${FOLDER_REF:-cnj/t15-remote-child}
+FOLDER_REF=${FOLDER_REF:-cnj2/remote-child}
 # the version lockable-resources and pipeline-build-step are packaged as: at least the one the cluster plugin is built
 # against (cluster/pom.xml), and newer than the released versions other plugins need
 EXT_CHANGELIST=${EXT_CHANGELIST:-999999-cnj2-SNAPSHOT}

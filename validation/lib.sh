@@ -50,6 +50,9 @@ AUTH="admin:$CNJ_ADMIN_TOKEN"
 # password auth, only for experiments about sessions and crumbs (E5)
 PASSWORD_AUTH="admin:admin"
 
+# the harness image (experiments/ET1-build.sh builds it under this tag)
+export DEV_IMAGE=${DEV_IMAGE:-cnj/jenkins:dev}
+
 dc() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.yaml" "$@"; }
 
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
@@ -58,7 +61,7 @@ log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 reset_env() {
   dc --profile multi --profile agent down -v --remove-orphans >/dev/null 2>&1 || true
   # down -v only removes volumes attached to services in the current interpolation
-  docker volume rm -f validation_home-a validation_home-b validation_home-shared >/dev/null 2>&1 || true
+  docker volume rm -f ${PROJ}_home-a ${PROJ}_home-b ${PROJ}_home-shared >/dev/null 2>&1 || true
   rm -rf "$OUT_DIR"; mkdir -p "$OUT_DIR"
 }
 
@@ -123,6 +126,23 @@ groovy() {
   local port=$1 script=$2
   post "$port" /scriptText --data-urlencode "script=$script"
 }
+
+# The cluster keeps what belongs to an item (build records, running placeholders, next build number) under
+# _items/<uuid> in the store, and its blobs (snapshots, logs, save points) under items/<uuid>; the identity does not
+# change when the item is renamed or moved. Item configuration stays at its path (jobs/<name>/config.xml).
+# item_uuid <port> <full name>: the item's identity, as that controller knows it (empty if it has no such item)
+item_uuid() {
+  { groovy "$1" "print(jenkins.model.Jenkins.get().getItemByFullName('$2')?.getItemUuid() ?: '')" || true; } | tr -d '\r\n'
+}
+# item_key <port> <full name>: the prefix of the item's store entries (_items/<uuid>)
+item_key() { local u; u=$(item_uuid "$@"); [[ -n "$u" ]] && echo "_items/$u"; }
+# item_blobs <port> <full name>: the prefix of the item's blobs (items/<uuid>)
+item_blobs() { local u; u=$(item_uuid "$@"); [[ -n "$u" ]] && echo "items/$u"; }
+# The script console's Groovy cannot call static interface methods directly (ClusterBlobStore.get()): through reflection.
+BLOBS_GROOVY='io.jenkins.plugins.cluster.spi.ClusterBlobStore.getMethod("get").invoke(null)'
+CLUSTER_STORE_GROOVY='io.jenkins.plugins.cluster.spi.ClusterStore.getMethod("get").invoke(null)'
+# blob_list <port> <prefix>: the names of the blobs below a prefix, one per line, sorted
+blob_list() { { groovy "$1" "println(($BLOBS_GROOVY).list('$2').sort().join('\\n'))" || true; } | tr -d '\r' | sed '/^$/d'; }
 
 # create_job <port> <name> <config.xml path>
 create_job() {
