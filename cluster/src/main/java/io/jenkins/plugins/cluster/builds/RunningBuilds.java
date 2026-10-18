@@ -722,6 +722,9 @@ public final class RunningBuilds {
      * Stops this controller working on a build which another controller has taken over: interrupts it (a Pipeline
      * through its execution, as it has no executor of its own), and makes sure it is neither published nor its
      * placeholder removed from here. Its local copy is discarded once it has stopped.
+     *
+     * <p>The copy stops as not built, not aborted: the build carries on elsewhere, so what reacts to the result of the
+     * copy here (a {@code post} section, a notifier) does not take it for aborted.
      */
     public static void lost(@NonNull Run<?, ?> run) {
         if (!lost.add(run)) {
@@ -730,7 +733,7 @@ public final class RunningBuilds {
         disown(run);
         LOGGER.warning(() -> "Ownership of " + run + " was lost to another controller; stopping it here");
         if (run.isLogUpdated()) { // not once completed: only fenced then
-            interrupt(run, new OwnershipLost());
+            interrupt(run, Result.NOT_BUILT, new OwnershipLost());
         }
     }
 
@@ -786,8 +789,10 @@ public final class RunningBuilds {
     }
 
     /**
-     * Discards the local copy of a build lost to another controller, once it has stopped here.
-     * The other controller publishes it when it completes, and this controller then picks up that record.
+     * Discards the local copy of a build lost to another controller, once it has stopped here: at once if it has (it
+     * is finalized), so that it is not shown here as the stopped copy but as running elsewhere, or with the record its
+     * new owner published. The other controller publishes it when it completes, and this controller then picks up that
+     * record.
      */
     static void discard(@NonNull Run<?, ?> run) {
         discard(run, true, 0);
@@ -845,13 +850,13 @@ public final class RunningBuilds {
                                 }
                             }
                         },
-                        DISCARD_DELAY_SECONDS * (1L << Math.min(attempt, 6)),
+                        attempt == 0 && !run.isLogUpdated() ? 0 : DISCARD_DELAY_SECONDS * (1L << Math.min(attempt, 6)),
                         TimeUnit.SECONDS);
     }
 
     private static final int MAX_DISCARD_ATTEMPTS = 10;
 
-    /** Lets a stopped build finish writing locally before its copy is discarded. */
+    /** Lets a build still stopping finish writing locally before its copy is discarded (its finalization discards it too). */
     private static final int DISCARD_DELAY_SECONDS = 5;
 
     /** Builds started here whose placeholder and lease could not be recorded (the store was unreachable): retried. */
@@ -1243,10 +1248,14 @@ public final class RunningBuilds {
      * @return false if it has neither (yet) to interrupt
      */
     static boolean interrupt(Run<?, ?> run, CauseOfInterruption cause) {
+        return interrupt(run, Result.ABORTED, cause);
+    }
+
+    private static boolean interrupt(Run<?, ?> run, Result result, CauseOfInterruption cause) {
         Executor executor = run.getExecutor();
         if (executor != null) {
             LOGGER.info(() -> "Stopping " + run + ": " + cause.getShortDescription());
-            executor.interrupt(Result.ABORTED, cause);
+            executor.interrupt(result, cause);
             return true;
         }
         if (run instanceof FlowExecutionOwner.Executable pipeline) {
@@ -1255,7 +1264,7 @@ public final class RunningBuilds {
                 FlowExecution execution = owner == null ? null : owner.getOrNull();
                 if (execution != null) {
                     LOGGER.info(() -> "Stopping " + run + ": " + cause.getShortDescription());
-                    execution.interrupt(Result.ABORTED, cause);
+                    execution.interrupt(result, cause);
                     return true;
                 }
             } catch (IOException | InterruptedException | RuntimeException e) {

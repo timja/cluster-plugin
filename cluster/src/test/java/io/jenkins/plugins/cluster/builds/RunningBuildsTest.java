@@ -178,9 +178,53 @@ class RunningBuildsTest {
         assertTrue(store().as("other").leases().acquire(owned.getLeaseKey()) > owned.getEpoch());
         store().gone(store().getOrigin(), false);
         RunningBuilds.checkOwnership();
-        r.assertBuildStatus(Result.ABORTED, r.waitForCompletion(b));
+        // the copy here stops, but the build carries on elsewhere: it is not aborted
+        r.assertBuildStatus(Result.NOT_BUILT, r.waitForCompletion(b));
         assertNull(store().read(Keys.buildRecord(Keys.item(p), 1)), "the new owner publishes it, not this controller");
         assertNotNull(store().read(owned.getKey()), "nor is its placeholder removed from here");
+    }
+
+    @Test
+    void aBuildTakenOverByAnotherControllerIsShownRunningThereOnceItsCopyHereStopped() throws Exception {
+        Semaphore release = new Semaphore(0);
+        FreeStyleProject p = waiting(r, "moved", release);
+        FreeStyleBuild b = p.scheduleBuild2(0).waitForStart();
+        ClusterFixture.await("owned", () -> RunningBuilds.ownedPlaceholder(b) != null);
+        RunningBuilds.Placeholder owned = RunningBuilds.ownedPlaceholder(b);
+        // taken over by another controller, which names itself in the placeholder (as an adoption does)
+        store().gone(store().getOrigin(), true);
+        InMemoryClusterStore other = store().as("other");
+        long epoch = other.leases().acquire(owned.getLeaseKey());
+        assertTrue(epoch > owned.getEpoch());
+        store().gone(store().getOrigin(), false);
+        long version = store().read(owned.getKey()).version();
+        RunningBuilds.Placeholder theirs = new RunningBuilds.Placeholder(
+                owned.getPrefix(),
+                1,
+                "other",
+                "controller-other",
+                "#1",
+                System.currentTimeMillis(),
+                epoch,
+                Map.of(),
+                version);
+        other.leases().writeIfHeld(owned.getLeaseKey(), epoch, theirs.getKey(), theirs.toBytes(), version);
+        ClusterFixture.awaitApplied();
+        RunningBuilds.checkOwnership();
+        r.waitForCompletion(b);
+        assertEquals(Result.NOT_BUILT, b.getResult(), "never shown as aborted");
+        // the stopped copy is dropped as soon as it is finalized, rather than shown here for a while
+        long deadline = System.nanoTime() + 3_000_000_000L;
+        while (p.getBuildByNumber(1) != null) {
+            assertTrue(System.nanoTime() < deadline, "the stopped copy is still shown: " + p.getBuildByNumber(1));
+            Thread.sleep(20);
+        }
+        // shown as running on the controller which took it over (read in the background, not while rendering)
+        ClusterFixture.await(
+                "shown as running elsewhere", () -> ExternalBuilds.get().get(p, 1) != null);
+        ExternalBuild elsewhere = ExternalBuilds.get().get(p, 1);
+        assertEquals("controller-other", elsewhere.getLocation());
+        assertTrue(p.isBuilding());
     }
 
     @Test
