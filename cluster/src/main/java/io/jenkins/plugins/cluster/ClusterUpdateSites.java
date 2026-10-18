@@ -10,6 +10,7 @@ import hudson.util.PluginServletFilter;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -138,6 +139,15 @@ public final class ClusterUpdateSites implements Filter {
         return !name.startsWith(".") && !name.endsWith(".tmp") && !name.endsWith(".bak") && !name.contains("atomic");
     }
 
+    /**
+     * Whether a name listed in the store can be taken into {@code updates/}: one file directly in it, which this
+     * controller would share too. Names come from other controllers, or from anything else writing to the store, so a
+     * name such as {@code ../plugins/x.jpi} must never become a path.
+     */
+    static boolean takeable(@CheckForNull String name) {
+        return Keys.isSafeName(name) && shareable(name);
+    }
+
     // ------------------------------------------------------------------ lifecycle
 
     @CheckForNull
@@ -221,6 +231,10 @@ public final class ClusterUpdateSites implements Filter {
             PersistenceStore.Entry current = store.read(KEY);
             Map<String, Shared> files = parse(current == null ? null : current.content());
             for (Map.Entry<String, Shared> f : files.entrySet()) {
+                if (!takeable(f.getKey())) {
+                    warnOnce("Ignoring the cluster's update-site file " + f.getKey() + ": not a file name in updates/");
+                    continue;
+                }
                 File local = new File(dir(), f.getKey());
                 if (direction(local.lastModified(), f.getValue()) == Direction.TAKE) {
                     take(f.getKey(), f.getValue(), local);
@@ -239,19 +253,33 @@ public final class ClusterUpdateSites implements Filter {
                 seen = localTimes();
             }
         } catch (IOException | RuntimeException e) {
-            // also called on every plugin manager request: say so once in a while, not on each (e.g. while the store is
-            // down)
-            long now = System.currentTimeMillis();
-            boolean warn = now - lastWarning > TimeUnit.MINUTES.toMillis(5);
-            if (warn) {
-                lastWarning = now;
-            }
-            LOGGER.log(warn ? Level.WARNING : Level.FINE, "Could not share update-site metadata with the cluster", e);
+            warnOnce("Could not share update-site metadata with the cluster", e);
         }
     }
 
+    private static void warnOnce(String message) {
+        warnOnce(message, null);
+    }
+
+    /** Also called on every plugin manager request: says so once in a while, not on each (e.g. while the store is down). */
+    private static void warnOnce(String message, @CheckForNull Throwable e) {
+        long now = System.currentTimeMillis();
+        boolean warn = now - lastWarning > TimeUnit.MINUTES.toMillis(5);
+        if (warn) {
+            lastWarning = now;
+        }
+        LOGGER.log(warn ? Level.WARNING : Level.FINE, message, e);
+    }
+
     private static void take(String name, Shared shared, File local) throws IOException {
-        Files.createDirectories(local.getParentFile().toPath());
+        File dir = dir();
+        if (!takeable(name)
+                || !local.toPath().normalize().getParent().equals(dir.toPath().normalize())
+                || Files.isSymbolicLink(local.toPath())) {
+            warnOnce("Not taking the cluster's " + name + ": " + local + " is not a plain file in " + dir);
+            return;
+        }
+        Files.createDirectories(dir.toPath());
         if (!local.exists() || !shared.sha256().equals(ClusterPlugins.sha256(local))) {
             File tmp = new File(local.getParentFile(), "." + name + ".cluster.tmp");
             ClusterBlobStore blobs = ClusterBlobStore.get();
