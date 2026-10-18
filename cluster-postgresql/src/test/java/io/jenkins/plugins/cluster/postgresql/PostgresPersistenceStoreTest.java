@@ -478,6 +478,149 @@ class PostgresPersistenceStoreTest {
         }
     }
 
+    private static void await(String what, java.util.concurrent.Callable<Boolean> condition) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (!condition.call()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("Timed out waiting for " + what);
+            }
+            Thread.sleep(50);
+        }
+    }
+
+    private static boolean seenKey(List<ChangeEvent> seen, String key) {
+        return seen.stream().anyMatch(e -> e.key().equals(key));
+    }
+
+    /** Opens a transaction as the store's would be (same application name) which takes an event number now. */
+    private static java.sql.Connection slowTransaction(String key) throws Exception {
+        java.sql.Connection slow = POSTGRES.createConnection("");
+        slow.setAutoCommit(false);
+        try (var s = slow.createStatement()) {
+            s.execute("set application_name = '" + PostgresPersistenceStore.APPLICATION_NAME + "'");
+            s.execute("insert into jenkins_store_events (kind, key, old_key, version, origin)" + " values ('WRITTEN', '"
+                    + key + "', null, 1, 'elsewhere')");
+        }
+        return slow;
+    }
+
+    private static void killListeners() throws Exception {
+        try (var c = POSTGRES.createConnection("");
+                var s = c.createStatement()) {
+            s.execute("select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid()"
+                    + " and (query like 'listen%' or query like '%jenkins_store_events where seq%'"
+                    + " or query like '%pg_stat_activity%')");
+        }
+    }
+
+    @Test
+    void anEventOfATransactionOpenAsTheListenerSubscribesIsDelivered() throws Exception {
+        List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
+        try (java.sql.Connection slow = slowTransaction("jobs/slow/config.xml")) {
+            a.write("jobs/fast/config.xml", bytes("fast"), PersistenceStore.ANY); // a later number, committed first
+            try (AutoCloseable sub = b.subscribe(seen::add)) {
+                // whatever is read from now on was changed before, or has its event delivered
+                slow.commit();
+                await(
+                        "the earlier event, committed after the subscription",
+                        () -> seenKey(seen, "jobs/slow/config.xml"));
+                assertFalse(seenKey(seen, "jobs/fast/config.xml"), "committed before: " + seen);
+            }
+        }
+    }
+
+    @Test
+    void aSkippedNumberIsWaitedForWhileATransactionThatMayCommitItIsOpen() throws Exception {
+        long hole = PostgresPersistenceStore.HOLE_MILLIS;
+        PostgresPersistenceStore.HOLE_MILLIS = 1000;
+        try {
+            List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
+            try (AutoCloseable sub = b.subscribe(seen::add);
+                    java.sql.Connection slow = slowTransaction("jobs/slow/config.xml")) {
+                a.write("jobs/fast/config.xml", bytes("fast"), PersistenceStore.ANY);
+                await("the later event", () -> seenKey(seen, "jobs/fast/config.xml"));
+                long skippedAt = System.currentTimeMillis();
+                // well past the time after which a number was forgotten, its transaction taken for rolled back
+                await("the slow transaction to outlast the wait", () -> System.currentTimeMillis() - skippedAt > 3000);
+                slow.commit();
+                await("the earlier event, committed late", () -> seenKey(seen, "jobs/slow/config.xml"));
+            }
+        } finally {
+            PostgresPersistenceStore.HOLE_MILLIS = hole;
+        }
+    }
+
+    @Test
+    void aListenerAsksForACatchUpWhenTheEventsAfterTheLastOneDeliveredMayBeGone() throws Exception {
+        List<String> catchUps = new CopyOnWriteArrayList<>();
+        b.resyncNeeded = catchUps::add;
+        List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
+        try (AutoCloseable sub = b.subscribe(seen::add)) {
+            a.write("jobs/one/config.xml", bytes("one"), PersistenceStore.ANY);
+            await("the first event", () -> seenKey(seen, "jobs/one/config.xml"));
+            // pruned while the listener was away: the events until now are gone
+            try (var c = POSTGRES.createConnection("");
+                    var s = c.createStatement()) {
+                s.execute("delete from jenkins_store_events");
+            }
+            killListeners();
+            a.write("jobs/two/config.xml", bytes("two"), PersistenceStore.ANY);
+            await("a catch-up to be asked for", () -> !catchUps.isEmpty());
+            await("the events still there to be delivered", () -> seenKey(seen, "jobs/two/config.xml"));
+            assertTrue(catchUps.get(0).contains("no longer has the last change event"), catchUps::toString);
+        }
+    }
+
+    @Test
+    void aListenerAsksForACatchUpWhenTheStoreWasRestoredToAnEarlierPoint() throws Exception {
+        List<String> catchUps = new CopyOnWriteArrayList<>();
+        b.resyncNeeded = catchUps::add;
+        List<ChangeEvent> seen = new CopyOnWriteArrayList<>();
+        a.write("jobs/before/config.xml", bytes("before"), PersistenceStore.ANY);
+        try (AutoCloseable sub = b.subscribe(seen::add)) {
+            for (int i = 0; i < 5; i++) {
+                a.write("jobs/after" + i + "/config.xml", bytes("after"), PersistenceStore.ANY);
+            }
+            await("the events", () -> seenKey(seen, "jobs/after4/config.xml"));
+            // as a point-in-time restore to before them: the events and their numbers go back
+            try (var c = POSTGRES.createConnection("");
+                    var s = c.createStatement()) {
+                s.execute("delete from jenkins_store_events where key like 'jobs/after%'");
+                s.execute("select setval('jenkins_store_events_seq_seq', (select max(seq) from jenkins_store_events))");
+            }
+            killListeners();
+            await("a catch-up to be asked for", () -> !catchUps.isEmpty());
+            seen.clear();
+            a.write("jobs/restored/config.xml", bytes("restored"), PersistenceStore.ANY);
+            await("events to be delivered again", () -> seenKey(seen, "jobs/restored/config.xml"));
+        }
+    }
+
+    @Test
+    void aListenerThatCouldNotReadWhereEventsStartAsksForACatchUp() throws Exception {
+        List<String> catchUps = new CopyOnWriteArrayList<>();
+        PostgresPersistenceStore c =
+                new PostgresPersistenceStore(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()) {
+                    @Override
+                    Baseline baseline(java.sql.Connection connection) throws java.sql.SQLException {
+                        if (catchUps.isEmpty() && !failed) {
+                            failed = true;
+                            throw new java.sql.SQLException("down");
+                        }
+                        return super.baseline(connection);
+                    }
+
+                    private boolean failed;
+                };
+        c.resyncNeeded = catchUps::add;
+        try (AutoCloseable sub = c.subscribe(e -> {})) {
+            await("a catch-up to be asked for", () -> !catchUps.isEmpty());
+            assertTrue(catchUps.get(0).contains("started after"), catchUps::toString);
+        } finally {
+            c.close();
+        }
+    }
+
     @Test
     void childrenSkipOverEverythingBelowEachChild() throws Exception {
         // names sorting just before and after '/' (".", "-", "0"), nested keys, a key equal to a child's name

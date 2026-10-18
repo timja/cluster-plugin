@@ -1884,7 +1884,16 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     public synchronized AutoCloseable subscribe(@NonNull Consumer<ChangeEvent> listener) {
         listeners.add(listener);
         if (listenerThread == null) {
-            listenerThread = new Thread(this::listen, "PostgresPersistenceStore listener");
+            // where the events start is sampled now, not when the listener thread first connects: whatever the
+            // subscriber reads from now on was either changed before, or has its event delivered
+            Baseline start = null;
+            try (Connection c = connect()) {
+                start = baseline(c);
+            } catch (SQLException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not read where the store's change events start; catching up later", e);
+            }
+            Baseline from = start;
+            listenerThread = new Thread(() -> listen(from), "PostgresPersistenceStore listener");
             listenerThread.setDaemon(true);
             listenerThread.start();
         }
@@ -1892,22 +1901,103 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
     }
 
     /**
-     * Follows {@code jenkins_store_events} from the current end, reconnecting as needed.
+     * Where a listener starts: after the newest event, {@code lastSeq}, with the numbers below it that may still commit
+     * ({@code holes}: missing among the events too recent for their transaction to have surely ended).
+     *
+     * @param last what the event at {@code lastSeq} is ({@code key} and {@code version}), or null if there is none
      */
-    private void listen() {
+    record Baseline(long lastSeq, @CheckForNull String last, List<Long> holes) {}
+
+    Baseline baseline(Connection c) throws SQLException {
+        long max;
+        long floor;
+        try (PreparedStatement ps = c.prepareStatement("select coalesce(max(seq), 0), coalesce(max(seq) filter (where"
+                + " at <= now() - ? * interval '1 millisecond'), 0) from jenkins_store_events")) {
+            ps.setLong(1, HOLE_MILLIS);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                max = rs.getLong(1);
+                floor = rs.getLong(2);
+            }
+        }
+        List<Long> holes = new ArrayList<>();
+        try (PreparedStatement ps =
+                c.prepareStatement("select seq from jenkins_store_events where seq > ? order by seq")) {
+            ps.setLong(1, floor);
+            try (ResultSet rs = ps.executeQuery()) {
+                long next = floor + 1;
+                while (rs.next() && holes.size() < MAX_HOLES) {
+                    long seq = rs.getLong(1);
+                    for (; next < seq && holes.size() < MAX_HOLES; next++) {
+                        holes.add(next);
+                    }
+                    next = seq + 1;
+                }
+            }
+        }
+        return new Baseline(max, identity(c, max), holes);
+    }
+
+    /** What the event numbered {@code seq} is, to tell it from another of that number later; null if none. */
+    @CheckForNull
+    private static String identity(Connection c, long seq) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("select key, version from jenkins_store_events where seq = ?")) {
+            ps.setLong(1, seq);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) + "@" + rs.getLong(2) : null;
+            }
+        }
+    }
+
+    /**
+     * Told when change events may have been lost, so that whatever mirrors the store catches up with it: the listener
+     * started late, or reconnected to a store whose events no longer go on from the last one it delivered (they were
+     * pruned while it was away, or the database was restored to an earlier point).
+     */
+    volatile Consumer<String> resyncNeeded = io.jenkins.plugins.cluster.spi.Resync::request;
+
+    /** The last event delivered, as {@link #identity}: the listener checks that the store still has it. */
+    private volatile String lastDelivered;
+
+    /**
+     * Follows {@code jenkins_store_events} from where {@link #subscribe} found its end, reconnecting as needed.
+     *
+     * @param start that end, or null if it could not be read then
+     */
+    private void listen(@CheckForNull Baseline start) {
         long lastSeq = -1;
+        if (start != null) {
+            lastSeq = start.lastSeq();
+            lastDelivered = start.last();
+            seedHoles(start);
+        }
         while (!closed) {
             try (Connection c = connect()) {
                 try (Statement s = c.createStatement()) {
                     s.execute("listen " + CHANNEL);
                     s.execute("listen " + MEMBERS_CHANNEL);
                 }
+                String lost = null;
                 if (lastSeq < 0) {
-                    try (Statement s = c.createStatement();
-                            ResultSet rs = s.executeQuery("select coalesce(max(seq), 0) from jenkins_store_events")) {
-                        rs.next();
-                        lastSeq = rs.getLong(1);
+                    lost = "the store's change listener started after its subscribers had read from the store";
+                } else if (lastSeq > 0 && !java.util.Objects.equals(identity(c, lastSeq), lastDelivered)) {
+                    lost = "the store no longer has the last change event delivered (number " + lastSeq
+                            + "): its events were pruned while this controller was disconnected, or the database was"
+                            + " restored to an earlier point";
+                }
+                if (lost != null) {
+                    Baseline b = baseline(c);
+                    if (lastSeq < 0 || b.lastSeq() < lastSeq) {
+                        // never started, or the numbers went back: from the end as it is now
+                        holes.clear();
+                        seedHoles(b);
+                        lastSeq = b.lastSeq();
+                        lastDelivered = b.last();
+                    } else {
+                        // pruned: the events still there after the last one delivered are delivered as usual
+                        lastDelivered = identity(c, lastSeq);
                     }
+                    resyncNeeded.accept(lost);
                 }
                 PGConnection pg = c.unwrap(PGConnection.class);
                 while (!closed) {
@@ -1935,19 +2025,71 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         }
     }
 
+    private void seedHoles(Baseline b) {
+        long now = System.currentTimeMillis();
+        for (long seq : b.holes()) {
+            holes.put(seq, now);
+        }
+    }
+
     /**
      * Sequence numbers skipped so far, with when they were first skipped. A number is taken when an event is
      * inserted, not when its transaction commits, so a later event can become visible before an earlier one; the
-     * earlier one is then delivered late, once it commits (or forgotten after {@link #HOLE_MILLIS}: its transaction
-     * rolled back). Consumers compare versions, so a late event never undoes a newer change (Target 14).
+     * earlier one is then delivered late, once it commits. A number is forgotten (its transaction rolled back) only once
+     * no transaction of the cluster's that could have taken it is still open: after {@link #HOLE_MILLIS} (more than a
+     * transaction of the store's lasts: a statement, then at most the idle-in-transaction timeout), if no transaction
+     * started before it was skipped is still open; after {@link #MAX_HOLE_MILLIS} in any case, asking for a catch-up
+     * then. Consumers compare versions, so a late event never undoes a newer change.
      */
     private final java.util.NavigableMap<Long, Long> holes = new java.util.concurrent.ConcurrentSkipListMap<>();
 
-    static final long HOLE_MILLIS = 60_000;
+    static final int MAX_HOLES = 10_000;
+
+    /** Our sessions' {@code application_name}, to tell their transactions from others'. */
+    static final String APPLICATION_NAME = "jenkins-cluster";
+
+    /** How long the oldest open transaction of the cluster's sessions (but this one) has been open, 0 if none. */
+    private static long oldestTransactionMillis(Connection c) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("select coalesce(extract(epoch from now() - min(xact_start)) *"
+                + " 1000, 0) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()"
+                + " and application_name = ?")) {
+            ps.setString(1, APPLICATION_NAME);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0;
+            }
+        }
+    }
+
+    /**
+     * The skipped numbers no transaction can still commit: judged before the events are read, so that one committed just
+     * before is read rather than forgotten.
+     */
+    private List<Long> forgettable(Connection c, long now) throws SQLException {
+        List<Long> forget = new ArrayList<>();
+        Long oldest = null;
+        for (Map.Entry<Long, Long> h : holes.entrySet()) {
+            long age = now - h.getValue();
+            if (age <= HOLE_MILLIS) {
+                continue;
+            }
+            if (age > MAX_HOLE_MILLIS) {
+                forget.add(h.getKey());
+                continue;
+            }
+            if (oldest == null) {
+                oldest = oldestTransactionMillis(c);
+            }
+            // a transaction open since before the number was skipped may still commit it (clocks: a second's slack)
+            if (oldest < age - 1000) {
+                forget.add(h.getKey());
+            }
+        }
+        return forget;
+    }
 
     private long drain(Connection c, long lastSeq) throws SQLException {
         long now = System.currentTimeMillis();
-        holes.values().removeIf(since -> now - since > HOLE_MILLIS);
+        List<Long> forget = forgettable(c, now);
         StringBuilder sql = new StringBuilder(
                 "select seq, kind, key, old_key, version, origin from jenkins_store_events where seq > ?");
         List<Long> waiting = List.copyOf(holes.keySet());
@@ -1965,11 +2107,12 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                     long seq = rs.getLong(1);
                     if (seq > lastSeq) {
                         for (long missing = lastSeq + 1; missing < seq && lastSeq >= 0; missing++) {
-                            if (holes.size() < 10_000) {
+                            if (holes.size() < MAX_HOLES) {
                                 holes.put(missing, now);
                             }
                         }
                         lastSeq = seq;
+                        lastDelivered = rs.getString(3) + "@" + rs.getLong(5);
                     } else if (holes.remove(seq) == null) {
                         continue; // delivered already
                     }
@@ -1987,6 +2130,13 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
                         }
                     }
                 }
+            }
+        }
+        for (long seq : forget) {
+            Long since = holes.remove(seq);
+            if (since != null && now - since > MAX_HOLE_MILLIS) {
+                resyncNeeded.accept("the change event numbered " + seq + " was neither committed nor rolled back"
+                        + " within " + TimeUnit.MILLISECONDS.toMinutes(MAX_HOLE_MILLIS) + " minutes");
             }
         }
         return lastSeq;
@@ -2201,6 +2351,19 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
             Integer.getInteger(PostgresPersistenceStore.class.getName() + ".lockTimeoutMillis", 10_000);
     static final int WORK_POOL_SIZE = Integer.getInteger(PostgresPersistenceStore.class.getName() + ".poolSize", 8);
 
+    /** Our sessions' {@code idle_in_transaction_session_timeout}. */
+    static final long IDLE_IN_TRANSACTION_MILLIS = 60_000;
+
+    /**
+     * How long a skipped event number is waited for before asking whether a transaction that may have taken it is still
+     * open: longer than any transaction of the store's lasts, unless paused (a statement, then the idle timeout, twice).
+     */
+    static /* non-final for tests */ long HOLE_MILLIS =
+            2 * IDLE_IN_TRANSACTION_MILLIS + STATEMENT_TIMEOUT_MILLIS + 5_000;
+
+    /** How long a skipped event number is waited for at most, whatever is still open. */
+    static /* non-final for tests */ long MAX_HOLE_MILLIS = TimeUnit.HOURS.toMillis(1);
+
     /** Uses the driver directly: {@code DriverManager} does not see drivers loaded by a plugin class loader. */
     private static final class DirectDataSource extends org.postgresql.ds.PGSimpleDataSource {
         @Override
@@ -2256,7 +2419,8 @@ public class PostgresPersistenceStore implements ClusterStore, AutoCloseable {
         ds.setLoginTimeout(CONNECT_TIMEOUT_SECONDS * 2);
         ds.setTcpKeepAlive(true);
         ds.setOptions("-c statement_timeout=" + STATEMENT_TIMEOUT_MILLIS + " -c lock_timeout=" + LOCK_TIMEOUT_MILLIS
-                + " -c idle_in_transaction_session_timeout=60000");
+                + " -c idle_in_transaction_session_timeout=" + IDLE_IN_TRANSACTION_MILLIS);
+        ds.setApplicationName(APPLICATION_NAME);
         return ds;
     }
 
