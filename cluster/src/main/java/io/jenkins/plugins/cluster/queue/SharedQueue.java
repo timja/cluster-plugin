@@ -39,6 +39,7 @@ import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import io.jenkins.plugins.cluster.spi.ClusterQueue;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
+import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -1348,6 +1349,49 @@ public final class SharedQueue {
             }
         }
 
+        /**
+         * Applies again what the store has of the items this controller mirrors or follows, as if their events had just
+         * arrived: every waiting or claimed record (as at startup), and the record of each item in the queue here or
+         * handed off from it which is neither (started or cancelled since, perhaps elsewhere).
+         */
+        static void catchUp() throws IOException {
+            Mirror m;
+            synchronized (Mirror.class) {
+                m = instance;
+            }
+            ClusterQueue cq = queue();
+            if (m == null || cq == null) {
+                return;
+            }
+            List<ClusterQueue.Record> records = new ArrayList<>(cq.pending());
+            Set<Long> listed = new HashSet<>();
+            records.forEach(r -> listed.add(r.id()));
+            Set<Long> ids = new TreeSet<>(HandOffs.ids());
+            for (Queue.Item item : Queue.getInstance().getItems()) {
+                if (item.getId() < Ids.LOCAL_RANGE) {
+                    ids.add(item.getId());
+                }
+            }
+            for (long id : ids) {
+                if (!listed.contains(id)) {
+                    ClusterQueue.Record r = cq.get(id);
+                    if (r != null) {
+                        records.add(r);
+                    }
+                }
+            }
+            m.changes.addAll(records);
+        }
+
+        /** Catches the mirror up with the store: events may have been lost. */
+        @Extension
+        public static final class CatchUp extends Resync {
+            @Override
+            public void catchUp() throws IOException {
+                Mirror.catchUp();
+            }
+        }
+
         /** Whether every change received so far has been applied, for tests. */
         static synchronized boolean isIdle() {
             return instance == null || instance.changes.isEmpty() && instance.busy == 0;
@@ -1660,6 +1704,11 @@ public final class SharedQueue {
 
         static void clear() {
             pending.clear();
+        }
+
+        /** The items followed. */
+        static Set<Long> ids() {
+            return Set.copyOf(pending.keySet());
         }
 
         /** How many are followed, for tests. */
