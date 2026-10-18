@@ -3,7 +3,7 @@
 # ET setup (two tmpfs controllers, S0 seed of pre-plugin keys, Postgres, Azurite, token auth) plus `rr`,
 # a round-robin load balancer which does not pin browsers. Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t6-m6-stateless-sessions experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=$PORT_A B=$PORT_B RR=$PORT_RR OUT="$RAW_DIR/ET6" ET1="$ET1_DIR"
@@ -35,7 +35,7 @@ export CNJ_CASC_DIR="$ET1/casc-et6"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
@@ -176,7 +176,7 @@ open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
 PY
 create_both fs6
 post $A "/job/fs6/build?delay=0sec" >/dev/null; sleep 8; post $B "/job/fs6/build?delay=0sec" >/dev/null; sleep 8
-(cd "$VALIDATION_DIR/journey" && mvn -B -ntp -q compile exec:java -Dexec.args="http://localhost:$RR/ u3 u3-password-1 u3-password-2 fs6") > "$OUT/journey.txt" 2>&1 || true
+(cd "$VALIDATION_DIR/journey" && ${MVN_BIN:-mvn} -B -ntp -q compile exec:java -Dexec.args="http://localhost:$RR/ u3 u3-password-1 u3-password-2 fs6") > "$OUT/journey.txt" 2>&1 || true
 fwd=$(( $(g $A 'println io.jenkins.plugins.cluster.BoundRequestForwarder.getForwardedCount()') + $(g $B 'println io.jenkins.plugins.cluster.BoundRequestForwarder.getForwardedCount()') ))
 while read -r kind ok rest; do
   case "$kind" in
@@ -187,7 +187,7 @@ done < <(grep -E '^(RESULT|INFO) ' "$OUT/journey.txt")
 info "8 bound-object requests forwarded between controllers: $fwd"
 check "8 some bound-object requests were forwarded" test "$fwd" -gt 0
 # the same journey's browser, after A dies (fresh password change: back to the first one)
-(cd "$VALIDATION_DIR/journey" && mvn -B -ntp -q exec:java -Dexec.args="http://localhost:$RR/ u3 u3-password-2 u3-password-1 fs6 'docker kill -s KILL ${P}jenkins-a-1'") > "$OUT/journey-failover.txt" 2>&1 || true
+(cd "$VALIDATION_DIR/journey" && ${MVN_BIN:-mvn} -B -ntp -q exec:java -Dexec.args="http://localhost:$RR/ u3 u3-password-2 u3-password-1 fs6 'docker kill -s KILL ${P}jenkins-a-1'") > "$OUT/journey-failover.txt" 2>&1 || true
 check "8 after losing A the browser is still signed in" grep -q '^RESULT ok still signed in after losing a controller' "$OUT/journey-failover.txt"
 et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
 

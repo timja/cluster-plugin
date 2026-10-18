@@ -3,7 +3,7 @@
 # The chart with two controllers in its own namespace; plugins come from the update center (network) and an upload.
 # Exits non-zero if any check fails.
 #
-# Prerequisites: CORE_REF=cnj/t12-m1-remainder experiments/ET1-build.sh; experiments/ET9-build-image.sh
+# Prerequisites: experiments/ET1-build.sh; experiments/ET9-build-image.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj-plugins REL=plug OUT="$RAW_DIR/ET13" CHART="$ROOT_DIR/charts/jenkins-cluster"

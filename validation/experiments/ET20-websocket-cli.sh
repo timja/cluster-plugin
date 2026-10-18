@@ -5,7 +5,7 @@
 # ET setup (two tmpfs controllers, S0, Postgres, Azurite, token auth); an inbound agent `ala` connected to A only.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.WebSocketEcho.enabled=true"
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET20" ET1="$ET1_DIR"
@@ -42,7 +42,7 @@ rm -rf "$ET1/seed"; mkdir -p "$ET1/seed"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -

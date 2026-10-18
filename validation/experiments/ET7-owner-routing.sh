@@ -4,7 +4,7 @@
 # and the round-robin LB `rr`. Builds start on A; every request about them goes to B, or through rr.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t6-m6-stateless-sessions experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 # notifyCommit without a token, as a webhook relay would call it
@@ -29,8 +29,8 @@ exists() { [[ "$(http "$1" "$2/api/json")" == 200 ]]; }
 building() { [[ "$(json "$1" "$2/api/json?tree=building" 2>/dev/null | jq_ 'd["building"]')" == True ]]; }
 result_is() { [[ "$(json "$1" "$2/api/json?tree=result" 2>/dev/null | jq_ 'd["result"]')" == "$3" ]]; }
 console_has() { text "$1" "$2/consoleText" 2>/dev/null | grep -q -- "$3"; }
-owner_is() { [[ "$(json $B "$1/api/json?tree=actions[builds[number,controller]]" 2>/dev/null \
-  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "builds" in a for b in a["builds"])')" == *"$2@$3"* ]]; }
+owner_is() { [[ "$(json $B "$1/api/json?tree=actions[buildsElsewhere[number,controller]]" 2>/dev/null \
+  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "buildsElsewhere" in a for b in a["buildsElsewhere"])')" == *"$2@$3"* ]]; }
 agent_online_on() { [[ "$(g "$1" 'print(jenkins.model.Jenkins.get().getComputer("agent1")?.isOnline())' 2>/dev/null)" == true ]]; }
 counter() { g "$1" "println io.jenkins.plugins.cluster.OwnerRoutingFilter.$2()"; }
 pipeline_job() { # name script
@@ -53,7 +53,7 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
