@@ -6,6 +6,7 @@ import hudson.Extension;
 import hudson.model.AsyncPeriodicWork;
 import hudson.model.TaskListener;
 import hudson.util.AtomicFileWriter;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.config.XmlMerge;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
@@ -13,8 +14,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -44,8 +43,8 @@ public final class MaterializedWriteBack extends AsyncPeriodicWork {
     /** A copy as written back here: what core's record of it was replaced with. */
     private record Copy(File file, byte[] content, long version, long modified) {}
 
-    /** By key: copies written back here, newer than core's record of them. */
-    private static final Map<String, Copy> written = new ConcurrentHashMap<>();
+    /** By key: copies written back here, newer than core's record of them; forgotten with their items. */
+    private static final PerItemCache<Copy> written = PerItemCache.create();
 
     public MaterializedWriteBack() {
         super("Files changed directly on disk");
