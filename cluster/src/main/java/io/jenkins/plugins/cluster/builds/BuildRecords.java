@@ -23,6 +23,7 @@ import hudson.security.ACL;
 import hudson.security.ACLContext;
 import hudson.util.DirScanner;
 import hudson.util.FileVisitor;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
@@ -625,7 +626,7 @@ public final class BuildRecords {
     private record Published(WeakReference<Run<?, ?>> run, String signature, long at) {}
 
     /** By record key. */
-    static final Map<String, Published> recentlyPublished = new ConcurrentHashMap<>();
+    static final PerItemCache<Published> recentlyPublished = PerItemCache.create();
 
     /** How long after publishing a build files added to its directory are still published. */
     static final long LATE_FILES_MILLIS = TimeUnit.HOURS.toMillis(1);
@@ -694,14 +695,17 @@ public final class BuildRecords {
                 lastScan = now;
                 scanLoaded();
             }
-            for (Map.Entry<String, Published> e : recentlyPublished.entrySet()) {
-                Published p = e.getValue();
+            for (String key : recentlyPublished.keys()) {
+                Published p = recentlyPublished.get(key);
+                if (p == null) {
+                    continue;
+                }
                 Run<?, ?> run = p.run().get();
                 if (run == null
                         || now - p.at() > LATE_FILES_MILLIS
-                        || isDeleted(e.getKey(), run)
+                        || isDeleted(key, run)
                         || !new File(run.getRootDir(), RECORD).isFile()) { // e.g. its job was deleted
-                    recentlyPublished.remove(e.getKey());
+                    recentlyPublished.remove(key);
                     continue;
                 }
                 if (!signature(run.getRootDir()).equals(p.signature())) {
@@ -1862,8 +1866,7 @@ public final class BuildRecords {
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.WARNING, "Failed to delete what was stored about " + name + "; it is retried later", e);
         } finally {
-            RunningBuilds.invalidate(prefix);
-            StoredPermalinks.forget(prefix);
+            PerItemCache.forgetAll(prefix); // again: anything cached while it was deleted
         }
     }
 

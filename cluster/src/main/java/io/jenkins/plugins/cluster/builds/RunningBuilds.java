@@ -16,6 +16,7 @@ import hudson.model.TaskListener;
 import hudson.model.listeners.RunListener;
 import hudson.security.ACL;
 import hudson.security.ACLContext;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.spi.BuildLeases;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
@@ -131,7 +132,7 @@ public final class RunningBuilds {
     }
 
     /** Placeholders per item prefix, kept up to date by change events; loaded from the store on first use. */
-    private static final Map<String, List<Placeholder>> cache = new ConcurrentHashMap<>();
+    private static final PerItemCache<List<Placeholder>> cache = PerItemCache.create();
 
     /**
      * A build running on some controller, as its placeholder says.
@@ -298,7 +299,7 @@ public final class RunningBuilds {
     /** Puts the placeholder of one build, as stored now, in the cached placeholders of its job, if they are cached. */
     private static void refresh(@NonNull String prefix, int number) {
         ClusterStore store = ClusterStore.get();
-        if (store == null || !cache.containsKey(prefix)) {
+        if (store == null || !cache.contains(prefix)) {
             return;
         }
         Placeholder p;
@@ -325,13 +326,6 @@ public final class RunningBuilds {
         Queue.getInstance().scheduleMaintenance(); // e.g. an item blocked by a build elsewhere which completed
     }
 
-    /** How many changes made elsewhere to each job's placeholders were seen, by item prefix. */
-    private static final Map<String, Long> generations = new ConcurrentHashMap<>();
-
-    private static long generationOf(String prefix) {
-        return generations.getOrDefault(prefix, 0L);
-    }
-
     /** Forgets the cached placeholders of a job, by its item prefix. */
     static void invalidate(@NonNull String prefix) {
         cache.remove(prefix);
@@ -347,8 +341,8 @@ public final class RunningBuilds {
             return;
         }
         boolean changed = false;
-        for (String prefix : List.copyOf(cache.keySet())) {
-            long generation = generationOf(prefix);
+        for (String prefix : cache.keys()) {
+            long generation = cache.generation(prefix);
             List<Placeholder> before = cache.get(prefix);
             List<Placeholder> loaded;
             try {
@@ -362,7 +356,7 @@ public final class RunningBuilds {
             LOGGER.info(() -> "Running builds of " + prefix + " changed without their change events reaching here");
             // never over a change seen while listing (its event is applied, or being applied): then forgotten instead,
             // and loaded again when needed
-            if (generationOf(prefix) == generation) {
+            if (cache.generation(prefix) == generation) {
                 cache.replace(prefix, before, loaded);
             } else {
                 cache.remove(prefix, before);
@@ -429,26 +423,11 @@ public final class RunningBuilds {
             return List.of();
         }
         try {
-            for (int attempt = 0; ; attempt++) {
-                List<Placeholder> cached = cache.get(prefix);
-                if (cached != null) {
-                    return cached;
-                }
-                // a change of one of them arriving while they are loaded is not applied to the cache (nothing is
-                // cached yet), and may be missing from what is loaded: loaded again then
-                long generation = generationOf(prefix);
-                List<Placeholder> loaded = load(store, prefix);
-                cache.putIfAbsent(prefix, loaded);
-                if (generationOf(prefix) == generation) {
-                    return cache.getOrDefault(prefix, loaded); // a change from now on refreshes the cache
-                }
-                cache.remove(prefix, loaded);
-                if (attempt == 4) {
-                    return loaded; // changing all the time: not cached, asked again next time
-                }
-            }
-        } catch (java.io.UncheckedIOException e) {
-            LOGGER.log(Level.FINE, "Could not list running builds of " + job.getFullName(), e.getCause());
+            // a change of one of them arriving while they are loaded is not applied to the cache (nothing is cached
+            // yet), and may be missing from what is loaded: loaded again then
+            return cache.load(prefix, k -> load(store, k));
+        } catch (IOException | java.io.UncheckedIOException e) {
+            LOGGER.log(Level.FINE, "Could not list running builds of " + job.getFullName(), e);
             return List.of();
         }
     }
@@ -488,7 +467,7 @@ public final class RunningBuilds {
                 } finally {
                     loading.remove(prefix);
                 }
-                if (cache.containsKey(
+                if (cache.contains(
                         prefix)) { // else not loaded (the store is unreachable): asked again at the next maintenance
                     Queue.getInstance().scheduleMaintenance();
                 }
@@ -1720,8 +1699,8 @@ public final class RunningBuilds {
     static void changedElsewhere(@NonNull String uuid, @NonNull String prefix, @NonNull String name, boolean deleted) {
         int number = placeholderNumber(name);
         if (number >= 0) {
-            generations.merge(prefix, 1L, Long::sum); // a load in progress loads again
-            if (cache.containsKey(prefix)) {
+            cache.changed(prefix); // a load in progress loads again
+            if (cache.contains(prefix)) {
                 // kept warm: read again off this thread, in the order the changes came (dropped, it would be read on
                 // the caller's thread by the next one which must know, e.g. under the queue lock)
                 ItemEvents.submit(uuid, prefix + " running build #" + number, () -> refresh(prefix, number));

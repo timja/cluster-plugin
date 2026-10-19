@@ -10,6 +10,7 @@ import hudson.ExtensionList;
 import hudson.model.FreeStyleProject;
 import hudson.model.Result;
 import io.jenkins.plugins.cluster.ClusterFixture;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.spi.Keys;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -66,7 +67,7 @@ class StoredPermalinksTest {
 
         // as on a controller which did not run them: nothing loaded, nothing cached here
         p._getRuns().purgeCache();
-        StoredPermalinks.forgetForTests();
+        PerItemCache.forgetAllForTests();
         assertNull(p.getLastFailedBuild(), "known to be none, from the store");
         assertEquals(5, p.getLastSuccessfulBuild().getNumber());
         assertThat(

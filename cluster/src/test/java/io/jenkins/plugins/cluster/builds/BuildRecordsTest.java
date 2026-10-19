@@ -19,6 +19,7 @@ import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
 import hudson.model.Result;
 import io.jenkins.plugins.cluster.ClusterFixture;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.spi.InMemoryClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import io.jenkins.plugins.cluster.spi.Resync;
@@ -110,7 +111,7 @@ class BuildRecordsTest {
     /** As a controller which never had the job's builds on disk: its build directories gone, its index read again. */
     private static FreeStyleProject withoutLocalBuilds(JenkinsRule r, FreeStyleProject p) throws Exception {
         Util.deleteRecursive(p.getBuildDir());
-        StoredPermalinks.forgetForTests();
+        PerItemCache.forgetAllForTests();
         r.jenkins.reload();
         return r.jenkins.getItemByFullName(p.getFullName(), FreeStyleProject.class);
     }

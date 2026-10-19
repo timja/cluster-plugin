@@ -7,6 +7,7 @@ import hudson.ExtensionList;
 import hudson.Util;
 import hudson.model.Job;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.IOException;
@@ -44,7 +45,7 @@ public final class StoredPermalinks implements PeepholePermalink.Cache {
     private static final Logger LOGGER = Logger.getLogger(StoredPermalinks.class.getName());
 
     /** Item prefix → the stored cache, as last read or written here. */
-    private static final Map<String, Cached> caches = new ConcurrentHashMap<>();
+    private static final PerItemCache<Cached> caches = PerItemCache.create();
 
     /** Of a cache changed elsewhere: newer than anything read before, so that it is read again. */
     private static final long CHANGED = Long.MAX_VALUE;
@@ -174,11 +175,6 @@ public final class StoredPermalinks implements PeepholePermalink.Cache {
         }
     }
 
-    /** Forgets the cache of an item (deleted). */
-    static void forget(@NonNull String prefix) {
-        caches.remove(prefix);
-    }
-
     /**
      * Updates the permalinks a completed build matches, as {@link PeepholePermalink}'s listener does when a build
      * completes here; for a build whose record this controller published for another one, gone before publishing it.
@@ -256,9 +252,5 @@ public final class StoredPermalinks implements PeepholePermalink.Cache {
             }
         }
         throw new IllegalStateException("no other permalinks cache");
-    }
-
-    static void forgetForTests() {
-        caches.clear();
     }
 }
