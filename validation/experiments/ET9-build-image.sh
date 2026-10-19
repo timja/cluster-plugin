@@ -1,10 +1,10 @@
 #!/bin/bash
-# Builds cnj/jenkins:k8s (or $IMAGE) for Target 9 from the outputs of ET1-build.sh (the harness image $DEV_IMAGE), plus
+# Builds $K8S_IMAGE (cnj/jenkins:k8s by default) for Target 9 from the outputs of ET1-build.sh (the harness image $DEV_IMAGE), plus
 # the kubernetes plugin built from ../kubernetes-plugin-cnj (cnj/t9-m2-cluster-cap), and loads it and the other images
 # into the kind cluster.
 source "$(dirname "$0")/../lib.sh"
 ET1="$ET1_DIR" K8S=${K8S_PLUGIN:-$(cd "$VALIDATION_DIR/../.." && pwd)/kubernetes-plugin-cnj} CLUSTER=${KIND_CLUSTER:-cnj}
-IMAGE=${IMAGE:-cnj/jenkins:k8s} DEV_IMAGE=${DEV_IMAGE:-cnj/jenkins:dev}
+IMAGE=$K8S_IMAGE
 [[ -f "$ET1/war/jenkins.war" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
 # kept out of $ET1/plugins, which the compose controllers mount: there it would fail to load without its dependencies
 rm -f "$ET1/plugins/kubernetes.hpi"; mkdir -p "$ET1/k8s-plugins"

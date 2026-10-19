@@ -54,6 +54,8 @@ PASSWORD_AUTH="admin:admin"
 
 # the harness image (experiments/ET1-build.sh builds it under this tag)
 export DEV_IMAGE=${DEV_IMAGE:-cnj/jenkins:dev}
+# the kind experiments' controller image (experiments/ET9-build-image.sh builds it under this tag, from $DEV_IMAGE)
+export K8S_IMAGE=${K8S_IMAGE:-cnj/jenkins:k8s}
 
 dc() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.yaml" "$@"; }
 

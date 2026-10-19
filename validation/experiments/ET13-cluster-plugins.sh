@@ -76,8 +76,8 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || { echo "run ET9 first (it
 curl -sfL -o "$OUT_DIR/$P-$OLD.hpi" "https://updates.jenkins.io/download/plugins/$P/$OLD/$P.hpi" || { echo "cannot download $P $OLD" >&2; exit 2; }
 
 claim_ns "kind-$CLUSTER" "$NS" || exit 2
-"$CHART/scripts/make-seed-secret.sh" cnj/jenkins:k8s "$NS" >/dev/null || exit 3
-h install "$REL" "$CHART" --set kubernetesCloud.enabled=false >/dev/null || exit 3
+"$CHART/scripts/make-seed-secret.sh" "$K8S_IMAGE" "$NS" >/dev/null || exit 3
+h install "$REL" "$CHART" --set image="$K8S_IMAGE" --set kubernetesCloud.enabled=false >/dev/null || exit 3
 eventually 400 ready 2 || { echo "controllers did not come up" >&2; exit 3; }
 until on "$REL-0" /api/json >/dev/null 2>&1 && on "$REL-1" /api/json >/dev/null 2>&1; do sleep 3; done
 for pod in "$REL-0" "$REL-1"; do on "$pod" /pluginManager/checkUpdatesServer -X POST >/dev/null 2>&1 || true; done # update site metadata
