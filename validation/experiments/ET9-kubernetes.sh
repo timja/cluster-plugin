@@ -150,7 +150,8 @@ owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store w
 info "4 survive #1 running on $owner_before, agent pod $first_pod"
 k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4 the build completes after its controller's pod was deleted" eventually 400 result_is survive 1 SUCCESS
-check "4 it was retried on a new agent pod" bash -c "[[ \$(curl -gsf -u '$AUTH' http://localhost:$SVC/job/survive/1/consoleText | grep -c 'attempt-on-') -ge 2 ]]"
+# each attempt prints its pod twice: in the shell's trace (+ echo attempt-on-…) and as output (a line of its own)
+check "4 it was retried on a new agent pod" bash -c "[[ \$(curl -gsf -u '$AUTH' http://localhost:$SVC/job/survive/1/consoleText | grep -c '^attempt-on-') -ge 2 ]]"
 check "4 the old agent pod is garbage collected" eventually 400 bash -c "! kubectl --context kind-$CLUSTER -n $NS get pod '$first_pod' >/dev/null 2>&1"
 eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 2 ]]"
 
@@ -171,7 +172,7 @@ owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store w
 info "4b carry #1 running on $owner_before"
 k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4b the build completes after its controller's pod was deleted" eventually 600 result_is carry 1 SUCCESS
-check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c 'attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
+check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c '^attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
 check "4b ... and got the earlier stage's file from its stash" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q '^carried-by-stash'"
 info "4b the stash in blob storage while the build ran: ${stash_keys:-none}"
 check "4b ... which the artifact manager had put in blob storage" test -n "$stash_keys"
