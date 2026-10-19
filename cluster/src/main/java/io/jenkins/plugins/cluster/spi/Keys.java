@@ -27,6 +27,7 @@ import java.util.Objects;
  *     {@code items/<uuid>/files/<rel>}; users {@code users/<id>/files/<rel>}</td></tr>
  * <tr><td>locks</td><td>{@code _locks/<resource>}, {@code _locks-meta/<name>}</td></tr>
  * <tr><td>launch lease</td><td>{@code _nodes/<name>/launch}</td></tr>
+ * <tr><td>what an agent connected to a controller is doing</td><td>{@code _nodes/<name>/status}</td></tr>
  * <tr><td>signed-out login, deleted user</td><td>{@code _logins/revoked/<login id>},
  *     {@code _logins/deleted-users/<user>}</td></tr>
  * <tr><td>queue reservation</td><td>{@code _queue/reserved/<id>}</td></tr>
@@ -167,9 +168,21 @@ public final class Keys {
         return "_locks-meta/" + name;
     }
 
+    /** First segment of agent entries. */
+    public static final String NODES = "_nodes";
+
+    /** Last segment of an agent's status, {@link #agentStatus}. */
+    public static final String AGENT_STATUS = "/status";
+
     @NonNull
     public static String launchLease(@NonNull String node) {
-        return "_nodes/" + node + "/launch";
+        return NODES + "/" + node + "/launch";
+    }
+
+    /** What an agent connected to a controller is doing there, as that controller publishes it. */
+    @NonNull
+    public static String agentStatus(@NonNull String node) {
+        return NODES + "/" + node + AGENT_STATUS;
     }
 
     /** A login signed out of (see {@code jenkins.security.LoginRevocation}), by its id. */
