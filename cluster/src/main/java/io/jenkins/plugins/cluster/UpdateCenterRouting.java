@@ -1,26 +1,15 @@
 package io.jenkins.plugins.cluster;
 
 import edu.umd.cs.findbugs.annotations.CheckForNull;
-import hudson.init.InitMilestone;
-import hudson.init.Initializer;
-import hudson.util.PluginServletFilter;
 import io.jenkins.plugins.cluster.spi.ClusterMember;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
-import jakarta.servlet.Filter;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.ServletRequest;
-import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.regex.Pattern;
-import jenkins.persistence.PersistenceStores;
 
 /**
  * The install progress page and its polling go to the controller running the install.
@@ -30,11 +19,9 @@ import jenkins.persistence.PersistenceStores;
  * an install through the plugin manager sets a cookie naming the controller ({@link ClusterPluginSet}), and these
  * pages are forwarded to it while it is alive and has run an install recently; for a browser without the cookie,
  * to the controller with installs running. The other controllers apply the change from the cluster's plugin set,
- * which the cluster view and the notice on the plugin manager pages show.
+ * which the cluster view and the notice on the plugin manager pages show. Routed by {@link OwnerRoutingFilter}.
  */
-public final class UpdateCenterRouting implements Filter {
-
-    private static final Logger LOGGER = Logger.getLogger(UpdateCenterRouting.class.getName());
+public final class UpdateCenterRouting {
 
     static final String COOKIE = "jenkins-cluster-uc";
     /** How long after its last install a controller is still the one to show progress. */
@@ -45,10 +32,7 @@ public final class UpdateCenterRouting implements Filter {
             + "|updateCenter(?:/(?:body|installStatus|incompleteInstallStatus|api/.*)?)?"
             + ")/?$");
 
-    @Initializer(after = InitMilestone.PLUGINS_STARTED)
-    public static void install() throws ServletException {
-        PluginServletFilter.addFilter(new UpdateCenterRouting());
-    }
+    private UpdateCenterRouting() {}
 
     /**
      * Which controller should answer: the one the browser installed on (its cookie lasts {@link #RECENT_MILLIS}), if
@@ -75,28 +59,16 @@ public final class UpdateCenterRouting implements Filter {
         return best;
     }
 
-    @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
-            throws IOException, ServletException {
-        if (request instanceof HttpServletRequest req
-                && response instanceof HttpServletResponse rsp
-                && !Forwarding.wasForwarded(req)
-                && PersistenceStores.get() instanceof ClusterStore store
-                && PROGRESS.matcher(req.getRequestURI()
-                                .substring(req.getContextPath().length()))
-                        .matches()) {
-            try {
-                ClusterStore.Member t = target(store.members(), cookie(req));
-                if (t != null
-                        && !ClusterMember.NAME.equals(t.name())
-                        && Forwarding.forward(req, rsp, t.name(), t.url())) {
-                    return;
-                }
-            } catch (IOException | RuntimeException e) {
-                LOGGER.log(Level.FINE, "Could not route the install progress; answering it here", e);
-            }
+    /** The install progress pages: to the controller running the install, if it is another. */
+    @CheckForNull
+    static OwnerRoutingFilter.Route route(HttpServletRequest req, String path, ClusterStore store) throws IOException {
+        if (!PROGRESS.matcher(path).matches()) {
+            return null;
         }
-        chain.doFilter(request, response);
+        ClusterStore.Member t = target(store.members(), cookie(req));
+        return t == null || ClusterMember.NAME.equals(t.name())
+                ? null
+                : new OwnerRoutingFilter.Forward(t.name(), t.url(), false, null);
     }
 
     @CheckForNull

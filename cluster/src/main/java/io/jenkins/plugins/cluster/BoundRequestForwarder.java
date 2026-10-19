@@ -2,17 +2,8 @@ package io.jenkins.plugins.cluster;
 
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
-import hudson.init.InitMilestone;
-import hudson.init.Initializer;
-import hudson.util.PluginServletFilter;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
-import jakarta.servlet.Filter;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.ServletRequest;
-import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -21,7 +12,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.persistence.PersistenceStores;
 import org.kohsuke.stapler.bind.BoundObjectTable;
 
 /**
@@ -31,13 +21,13 @@ import org.kohsuke.stapler.bind.BoundObjectTable;
  * of the controller which rendered the page, called back at {@code /$stapler/bound/<id>}. With Stapler's bound id prefix
  * ({@code -Dorg.kohsuke.stapler.bind.BoundObjectTable.idPrefix=<controller name>}), their ids start with that controller's
  * name; when such a request reaches another controller (browsers are not pinned), it is forwarded, with its cookies, to
- * the owner's internal URL (from the membership table), and the answer is relayed. The server id in a URL is chosen by
+ * the owner's internal URL (from the membership table), and the answer is relayed ({@link OwnerRoutingFilter}). The server id in a URL is chosen by
  * the client: it only routes the request (with the client's own cookies), and authorizes nothing.
  *
  * <p>Stapler's {@code BoundObjectTable.getIdPrefix()} and {@code serverIdOf(String)} are looked up at runtime: with a
  * Stapler that lacks them (ids are never prefixed), nothing is forwarded.
  */
-public final class BoundRequestForwarder implements Filter {
+public final class BoundRequestForwarder {
 
     private static final Logger LOGGER = Logger.getLogger(BoundRequestForwarder.class.getName());
     private static final AtomicLong forwarded = new AtomicLong();
@@ -59,6 +49,8 @@ public final class BoundRequestForwarder implements Filter {
             return null;
         }
     }
+
+    private BoundRequestForwarder() {}
 
     /** Requests forwarded so far, for diagnostics. */
     public static long getForwardedCount() {
@@ -89,13 +81,6 @@ public final class BoundRequestForwarder implements Filter {
         }
     }
 
-    @Initializer(after = InitMilestone.PLUGINS_STARTED)
-    public static void install() throws ServletException {
-        if (!idPrefix().isEmpty()) {
-            PluginServletFilter.addFilter(new BoundRequestForwarder());
-        }
-    }
-
     /** The controller owning a bound object, from its id, or null if it is ours (or not prefixed). */
     @CheckForNull
     static String ownerOf(String path) {
@@ -115,29 +100,14 @@ public final class BoundRequestForwarder implements Filter {
         return owner == null || owner.equals(ours) ? null : owner;
     }
 
-    @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
-            throws IOException, ServletException {
-        if (!(request instanceof HttpServletRequest req)
-                || !(response instanceof HttpServletResponse rsp)
-                || Forwarding.wasForwarded(req)) {
-            chain.doFilter(request, response);
-            return;
+    /** A bound object of another controller: to that controller (502 if it cannot be reached: it is nowhere else). */
+    @CheckForNull
+    static OwnerRoutingFilter.Route route(HttpServletRequest req, String path, ClusterStore store) throws IOException {
+        if (idPrefix().isEmpty()) {
+            return null; // ids are not prefixed: every bound object is this controller's
         }
-        String owner = ownerOf(req.getRequestURI());
-        String url = null;
-        if (owner != null && PersistenceStores.get() instanceof ClusterStore store) {
-            url = store.urlOf(owner);
-        }
-        if (url == null) {
-            chain.doFilter(request, response);
-            return;
-        }
-        if (Forwarding.forward(req, rsp, owner, url)) {
-            forwarded.incrementAndGet();
-        } else {
-            LOGGER.warning(() -> "Failed to forward " + req.getRequestURI() + " to " + owner);
-            rsp.sendError(HttpServletResponse.SC_BAD_GATEWAY, "Could not reach " + owner);
-        }
+        String owner = ownerOf(path);
+        String url = owner == null ? null : store.urlOf(owner);
+        return url == null ? null : new OwnerRoutingFilter.Forward(owner, url, true, forwarded);
     }
 }
