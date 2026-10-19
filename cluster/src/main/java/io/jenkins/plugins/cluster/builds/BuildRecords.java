@@ -2,23 +2,15 @@ package io.jenkins.plugins.cluster.builds;
 
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
-import hudson.Extension;
 import hudson.ExtensionList;
 import hudson.ExtensionPoint;
 import hudson.FilePath;
 import hudson.Util;
-import hudson.XmlFile;
-import hudson.model.AsyncPeriodicWork;
 import hudson.model.Item;
 import hudson.model.Job;
 import hudson.model.Result;
 import hudson.model.Run;
 import hudson.model.RunMap;
-import hudson.model.Saveable;
-import hudson.model.TaskListener;
-import hudson.model.listeners.ItemListener;
-import hudson.model.listeners.RunListener;
-import hudson.model.listeners.SaveableListener;
 import hudson.security.ACL;
 import hudson.security.ACLContext;
 import hudson.util.DirScanner;
@@ -28,7 +20,6 @@ import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
 import io.jenkins.plugins.cluster.spi.LeaseLostException;
-import io.jenkins.plugins.cluster.spi.Resync;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -64,7 +55,6 @@ import jenkins.model.lazy.LazyBuildMixIn;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
-import jenkins.util.ClusterSingleton;
 import jenkins.util.ThrowingCallable;
 import jenkins.util.Timer;
 import org.kohsuke.accmod.Restricted;
@@ -100,7 +90,7 @@ public final class BuildRecords {
             List.of(RECORD, "archive/**", "**/*.tmp", Manifest.NAME, RecordVersion.NAME, SnapshotFiles.NAME);
 
     /** Set while this thread loads a build, so that saves made while loading are not republished. */
-    private static final ThreadLocal<Boolean> LOADING = new ThreadLocal<>();
+    static final ThreadLocal<Boolean> LOADING = new ThreadLocal<>();
 
     private BuildRecords() {}
 
@@ -113,16 +103,6 @@ public final class BuildRecords {
          */
         @NonNull
         Collection<String> excludes(@NonNull Run<?, ?> run);
-    }
-
-    /** State a Pipeline needs only while it runs, which the cluster keeps elsewhere (save points), or never needs again. */
-    @Extension
-    public static final class PipelineState implements Exclusion {
-        @NonNull
-        @Override
-        public Collection<String> excludes(@NonNull Run<?, ?> run) {
-            return List.of("program.dat", "workflow/**", "stashes/**");
-        }
     }
 
     /** The cluster store, if builds are shared through one. */
@@ -329,16 +309,6 @@ public final class BuildRecords {
         }
     }
 
-    /** Catches up with the store's build records of the jobs whose build index is loaded here. */
-    @Extension
-    @Restricted(NoExternalUse.class)
-    public static final class CatchUp extends Resync {
-        @Override
-        public void catchUp() {
-            BuildRecords.catchUp();
-        }
-    }
-
     /**
      * Publishes a completed build.
      */
@@ -359,8 +329,7 @@ public final class BuildRecords {
      * @param recordChanged its record was saved here too (not only files added): this controller's record is written,
      *     as a republish does, rather than the stored one marked
      */
-    private static void publish(@NonNull Run<?, ?> run, boolean filesChanged, boolean recordChanged)
-            throws IOException {
+    static void publish(@NonNull Run<?, ?> run, boolean filesChanged, boolean recordChanged) throws IOException {
         Job<?, ?> job = run.getParent();
         String prefix = prefix(job);
         if (prefix == null) {
@@ -623,7 +592,7 @@ public final class BuildRecords {
     }
 
     /** A build published here recently, and the signature of its directory when it was. */
-    private record Published(WeakReference<Run<?, ?>> run, String signature, long at) {}
+    record Published(WeakReference<Run<?, ?>> run, String signature, long at) {}
 
     /** By record key. */
     static final PerItemCache<Published> recentlyPublished = PerItemCache.create();
@@ -662,105 +631,8 @@ public final class BuildRecords {
         return b.toString();
     }
 
-    /**
-     * Republishes recently completed builds whose directories changed without their record being saved, as when a
-     * plugin adds a file to a completed build: their snapshots would otherwise miss it on other controllers.
-     */
-    @Extension
-    public static final class LateFiles extends AsyncPeriodicWork {
-        public LateFiles() {
-            super("Files added to completed builds");
-        }
-
-        @Override
-        public long getRecurrencePeriod() {
-            return TimeUnit.SECONDS.toMillis(
-                    Long.getLong(BuildRecords.class.getName() + ".lateFilesPeriodSeconds", 60));
-        }
-
-        /** Builds looked at by the broader scan per run, at most; the next run carries on. */
-        static final int SCAN_LIMIT = Integer.getInteger(BuildRecords.class.getName() + ".lateFilesScanLimit", 1000);
-
-        static final long SCAN_MILLIS = TimeUnit.MINUTES.toMillis(10);
-        private long lastScan;
-        private int scanFrom;
-
-        @Override
-        protected void execute(TaskListener listener) {
-            if (store() == null) {
-                return;
-            }
-            long now = System.currentTimeMillis();
-            if (now - lastScan > SCAN_MILLIS) {
-                lastScan = now;
-                scanLoaded();
-            }
-            for (String key : recentlyPublished.keys()) {
-                Published p = recentlyPublished.get(key);
-                if (p == null) {
-                    continue;
-                }
-                Run<?, ?> run = p.run().get();
-                if (run == null
-                        || now - p.at() > LATE_FILES_MILLIS
-                        || isDeleted(key, run)
-                        || !new File(run.getRootDir(), RECORD).isFile()) { // e.g. its job was deleted
-                    recentlyPublished.remove(key);
-                    continue;
-                }
-                if (!signature(run.getRootDir()).equals(p.signature())) {
-                    try {
-                        LOGGER.fine(() -> "Republishing " + run + ": files were added to it after it was published");
-                        republishFiles(run);
-                    } catch (IOException | RuntimeException x) {
-                        LOGGER.log(Level.WARNING, "Could not republish " + run, x);
-                    }
-                }
-            }
-        }
-
-        /**
-         * Builds held in memory here, whichever controller published them and however long ago, whose directories
-         * gained files since (compared with their {@link Manifest}): plugins add files through a loaded build.
-         */
-        private void scanLoaded() {
-            List<Run<?, ?>> loaded = new ArrayList<>();
-            for (Job<?, ?> job : Jenkins.get().allItems(Job.class)) {
-                RunMap<?> runs = runsOf(job);
-                if (runs != null && isShared(job)) {
-                    loaded.addAll(runs.getLoadedBuilds().values());
-                }
-            }
-            int n = loaded.size();
-            int from = n == 0 ? 0 : scanFrom % n;
-            int count = Math.min(n, SCAN_LIMIT);
-            for (int i = 0; i < count; i++) {
-                Run<?, ?> run = loaded.get((from + i) % n);
-                if (run.isBuilding() || !Manifest.filesAdded(run.getRootDir())) {
-                    continue;
-                }
-                try {
-                    String key = recordKeyOf(run);
-                    ClusterStore store = store();
-                    if (key != null && store != null && store.read(key) != null && !isDeleted(key, run)) {
-                        LOGGER.fine(() -> "Republishing " + run + ": files were added to it");
-                        republishFiles(run);
-                    }
-                } catch (IOException | RuntimeException x) {
-                    LOGGER.log(Level.WARNING, "Could not republish " + run, x);
-                }
-            }
-            scanFrom = from + count;
-        }
-
-        @Override
-        protected Level getNormalLoggingLevel() {
-            return Level.FINE;
-        }
-    }
-
     @CheckForNull
-    private static String recordKeyOf(Run<?, ?> run) {
+    static String recordKeyOf(Run<?, ?> run) {
         String prefix = prefix(run.getParent());
         return prefix == null ? null : Keys.buildRecord(prefix, run.getNumber());
     }
@@ -1030,7 +902,7 @@ public final class BuildRecords {
 
     static /* non-final for tests */ long DELETED_MILLIS = TimeUnit.HOURS.toMillis(1);
 
-    private static boolean isDeleted(String recordKey, Run<?, ?> run) {
+    static boolean isDeleted(String recordKey, Run<?, ?> run) {
         synchronized (deleted) {
             Long marked = deleted.get(recordKey);
             return marked != null && marked >= run.getTimeInMillis();
@@ -1516,7 +1388,7 @@ public final class BuildRecords {
     }
 
     /** A build of a job, by the job's identity: what a retry finds the build by, whatever the job is called by then. */
-    private record BuildId(String uuid, int number) {
+    record BuildId(String uuid, int number) {
         static BuildId of(Run<?, ?> run) {
             return new BuildId(run.getParent().getItemUuid(), run.getNumber());
         }
@@ -1535,7 +1407,7 @@ public final class BuildRecords {
      * Completed builds whose record or placeholder removal failed (e.g. the store was unreachable): retried until both
      * are done. Until then the build stays "running" for the other controllers, rather than vanishing.
      */
-    private static final Set<BuildId> unpublished = ConcurrentHashMap.newKeySet();
+    static final Set<BuildId> unpublished = ConcurrentHashMap.newKeySet();
 
     /** Publishes a completed build's record, then removes its running placeholder; queues a retry if either fails. */
     static void complete(@NonNull Run<?, ?> run) {
@@ -1630,116 +1502,10 @@ public final class BuildRecords {
     static /* non-final for tests */ long COMPLETE_AGAIN_SECONDS = 15;
 
     /** Placeholders of builds deleted before they were published whose removal failed: retried with the publications. */
-    private static final Set<RunningBuilds.Placeholder> unfinished = ConcurrentHashMap.newKeySet();
-
-    /** Retries {@link #complete} for builds whose publication failed. */
-    @Extension
-    public static final class Unpublished extends AsyncPeriodicWork {
-        public Unpublished() {
-            super("Completed builds not yet published");
-        }
-
-        @Override
-        public long getRecurrencePeriod() {
-            return TimeUnit.SECONDS.toMillis(15);
-        }
-
-        @Override
-        protected void execute(TaskListener listener) {
-            listAgain();
-            for (RunningBuilds.Placeholder p : List.copyOf(unfinished)) {
-                try {
-                    RunningBuilds.finished(p);
-                    unfinished.remove(p);
-                } catch (IOException | RuntimeException x) {
-                    LOGGER.log(
-                            Level.FINE, "Still cannot remove the placeholder " + p.getKey() + " of a deleted build", x);
-                }
-            }
-            for (BuildId id : List.copyOf(unpublished)) {
-                Run<?, ?> run = id.resolve();
-                if (run == null || RunningBuilds.wasLost(run)) {
-                    unpublished.remove(id);
-                    continue;
-                }
-                LOGGER.info(() -> "Retrying the publication of " + run);
-                complete(run);
-            }
-        }
-
-        @Override
-        protected Level getNormalLoggingLevel() {
-            return Level.FINE;
-        }
-    }
+    static final Set<RunningBuilds.Placeholder> unfinished = ConcurrentHashMap.newKeySet();
 
     static int unpublishedCount() {
         return unpublished.size();
-    }
-
-    @Extension
-    public static final class Publisher extends RunListener<Run<?, ?>> {
-
-        @Override
-        public void onFinalized(Run<?, ?> run) {
-            if (PersistenceStores.isApplyingRemoteChange() || !isShared(run.getParent())) {
-                return;
-            }
-            if (RunningBuilds.wasLost(run) || !RunningBuilds.owns(run)) {
-                // another controller has taken it over and will publish it
-                LOGGER.warning(() -> "Not publishing " + run + ": it is owned by another controller");
-                RunningBuilds.lost(run); // fenced until discarded: a save of this copy meanwhile is not republished
-                RunningBuilds.discard(run);
-                return;
-            }
-            complete(run);
-        }
-
-        @Override
-        public void onDeleted(Run<?, ?> run) {
-            if (PersistenceStores.isApplyingRemoteChange() || !isShared(run.getParent())) {
-                return;
-            }
-            try {
-                delete(run);
-            } catch (IOException | RuntimeException e) {
-                LOGGER.log(Level.WARNING, "Failed to delete stored " + run, e);
-            }
-            // completed here and not published yet (the store was unreachable): no retry publishes it now, so its
-            // placeholder goes too, or it would show as running elsewhere, and be closed into a record once this
-            // controller is gone
-            unpublished.remove(BuildId.of(run));
-            RunningBuilds.Placeholder placeholder = RunningBuilds.ownedPlaceholder(run);
-            if (placeholder != null && !run.isLogUpdated()) {
-                try {
-                    RunningBuilds.finished(placeholder);
-                } catch (IOException | RuntimeException e) {
-                    LOGGER.log(Level.WARNING, "Failed to remove the placeholder of deleted " + run + "; will retry", e);
-                    unfinished.add(placeholder);
-                }
-            }
-        }
-    }
-
-    /**
-     * Removes everything stored about a job deleted here (not when applying a deletion made elsewhere: the controller
-     * making it does this): its build records, permalinks, number sequence, placeholders and blobs. A job made again with
-     * the name has another identity, and nothing of this. Done off the deleting thread; what fails is left to
-     * {@link Orphans}.
-     */
-    @Extension
-    public static final class ItemDeleted extends ItemListener {
-        @Override
-        public void onDeleted(Item item) {
-            // folders delete their children one by one, so each job gets here
-            if (!(item instanceof Job<?, ?> job) || PersistenceStores.isApplyingRemoteChange() || !isShared(job)) {
-                return;
-            }
-            String prefix = Keys.item(job);
-            String blobPrefix = Keys.blobs(job);
-            String name = job.getFullName();
-            Timer.get().submit(() -> deleteStored(prefix, blobPrefix, name));
-        }
     }
 
     /** Items whose stored data is being deleted: written before, removed once all of it is gone. */
@@ -1766,55 +1532,6 @@ public final class BuildRecords {
             LOGGER.log(Level.WARNING, "Failed to delete what was stored about " + name + "; it is retried later", e);
         } finally {
             PerItemCache.forgetAll(prefix); // again: anything cached while it was deleted
-        }
-    }
-
-    /**
-     * Finishes deleting what is stored about deleted items whose cleanup failed, or whose controller died during it
-     * (their {@link #DELETING} marker is still there), once per cluster, every few minutes. And, less often, deletes
-     * what is stored about items that no longer exist anywhere although nothing marked them deleted (their deletion
-     * failed before the marker was written, or something was written for them as they were deleted): see
-     * {@link #sweepUnknown}.
-     */
-    @ClusterSingleton
-    @Extension
-    public static final class Orphans extends AsyncPeriodicWork {
-        public Orphans() {
-            super("Stored data of deleted items");
-        }
-
-        @Override
-        public long getRecurrencePeriod() {
-            return TimeUnit.MINUTES.toMillis(5);
-        }
-
-        private long lastUnknownSweep;
-
-        @Override
-        protected void execute(TaskListener listener) throws IOException {
-            ClusterStore store = store();
-            if (store == null) {
-                return;
-            }
-            for (String uuid : store.children(DELETING)) {
-                PersistenceStore.Entry e = store.read(DELETING + "/" + uuid);
-                String[] lines =
-                        e == null ? new String[0] : new String(e.content(), StandardCharsets.UTF_8).split("\n");
-                if (lines.length >= 2 && lines[0].equals(Keys.itemByUuid(uuid))) {
-                    LOGGER.info(() -> "Finishing the deletion of what was stored about item " + uuid);
-                    deleteStored(lines[0], lines[1], uuid);
-                }
-            }
-            long now = System.currentTimeMillis();
-            if (now - lastUnknownSweep >= UNKNOWN_SWEEP_MILLIS) {
-                lastUnknownSweep = now;
-                sweepUnknown(store, now);
-            }
-        }
-
-        @Override
-        protected Level getNormalLoggingLevel() {
-            return Level.FINE;
         }
     }
 
@@ -1925,39 +1642,5 @@ public final class BuildRecords {
         return new TreeSet<>(store.children(prefix)) + " " + (next == null ? "-" : next.version()) + " "
                 + new TreeSet<>(store.children(Keys.running(prefix))) + " "
                 + new TreeSet<>(store.children(Keys.builds(prefix)));
-    }
-
-    @Extension
-    public static final class Republisher extends SaveableListener {
-
-        @Override
-        public void onChange(Saveable o, XmlFile file) {
-            if (!(o instanceof Run<?, ?> run)
-                    || PersistenceStores.isApplyingRemoteChange()
-                    || !isShared(run.getParent())) {
-                return;
-            }
-            if (RunningBuilds.wasDiscarded(run)) {
-                // a copy of a build lost to another controller, discarded here but still referenced, saved its
-                // build.xml
-                // again: never published, and dropped again, as it would stand for the new owner's record here
-                RunningBuilds.discardAgain(run);
-                return;
-            }
-            if (run.isLogUpdated() || LOADING.get() != null || RunningBuilds.wasLost(run)) {
-                return;
-            }
-            try {
-                String key = recordKeyOf(run);
-                ClusterStore store = store();
-                if (key != null && store != null && Manifest.filesAdded(run.getRootDir()) && store.read(key) != null) {
-                    publish(run, true, true); // files were added too: the record alone would leave them out
-                } else {
-                    republish(run);
-                }
-            } catch (IOException | RuntimeException e) {
-                LOGGER.log(Level.WARNING, "Failed to republish " + run, e);
-            }
-        }
     }
 }
