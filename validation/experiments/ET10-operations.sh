@@ -1,6 +1,6 @@
 #!/bin/bash
 # ET10: acceptance experiment for Target 10 (rolling upgrades, importing a file-based home, backup and restore), on kind.
-# Uses the cluster and images of ET9 (cnj/jenkins:k8s; cnj/jenkins:k8s-next is the same with a rebuilt plugin).
+# Uses the cluster and image of ET9 ($K8S_IMAGE; $K8S_IMAGE-next is the same, rebuilt).
 # Exits non-zero if any check fails.
 #
 # Prerequisites: experiments/ET1-build.sh; experiments/ET9-build-image.sh
@@ -34,11 +34,12 @@ fresh_ns() { claim_ns "kind-$CLUSTER" "$NS" || exit 2; }
 
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || { echo "run ET9 first (it creates the kind cluster)" >&2; exit 2; }
 # the "next" image: the same build, rebuilt (a new image id), to roll to
-docker build -q -t cnj/jenkins:k8s-next - <<'EOF' >/dev/null
-FROM cnj/jenkins:k8s
+NEXT="$K8S_IMAGE-next"
+docker build -q -t "$NEXT" - <<EOF >/dev/null
+FROM $K8S_IMAGE
 LABEL io.jenkins.cnj.next=true
 EOF
-kind_load "$CLUSTER" cnj/jenkins:k8s-next
+kind_load "$CLUSTER" "$NEXT"
 r "## ET10 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -47,19 +48,19 @@ r "|---|---|"
 # ------------------------------------------------------------------ 1. rolling upgrade with builds running
 log "scenario 1: rolling upgrade while Pipelines run"
 fresh_ns
-"$CHART/scripts/make-seed-secret.sh" cnj/jenkins:k8s "$NS" >/dev/null
-h install "$REL" "$CHART" --set kubernetesCloud.enabled=false >/dev/null
+"$CHART/scripts/make-seed-secret.sh" "$K8S_IMAGE" "$NS" >/dev/null
+h install "$REL" "$CHART" --set image="$K8S_IMAGE" --set kubernetesCloud.enabled=false >/dev/null
 eventually 400 ready 2
 pipeline_on "$REL-0" roll 'for (int i = 1; i <= 90; i++) { echo "tick ${i}"; sleep 1 }; echo "rolled"'
 on "$REL-0" "/job/roll/build?delay=0sec" -X POST >/dev/null; on "$REL-1" "/job/roll/build?delay=0sec" -X POST >/dev/null
 sleep 15
-h upgrade "$REL" "$CHART" --reuse-values --set image=cnj/jenkins:k8s-next >/dev/null
+h upgrade "$REL" "$CHART" --reuse-values --set image="$NEXT" >/dev/null
 both_versions=0
 for i in $(seq 1 120); do
   v=$(on "$REL-0" /manage/cluster/api/json?depth=1 2>/dev/null || on "$REL-1" /manage/cluster/api/json?depth=1 2>/dev/null || true)
   imgs=$(k get pods -l "app.kubernetes.io/name=$REL-controller" -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u | wc -l | tr -d ' ')
   [[ "$imgs" == 2 ]] && both_versions=1
-  [[ "$(k get pods -l "app.kubernetes.io/name=$REL-controller" -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u)" == cnj/jenkins:k8s-next ]] && ready 2 && break
+  [[ "$(k get pods -l "app.kubernetes.io/name=$REL-controller" -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u)" == "$NEXT" ]] && ready 2 && break
   sleep 3
 done
 check "1 controllers were replaced one at a time (both images ran at once)" test "$both_versions" = 1
@@ -112,7 +113,7 @@ spec:
   securityContext: {fsGroup: 1000}
   containers:
     - name: jenkins
-      image: cnj/jenkins:k8s
+      image: $K8S_IMAGE
       imagePullPolicy: Never
       env:
         - {name: JAVA_OPTS, value: "-Djenkins.install.runSetupWizard=false"}
@@ -147,7 +148,7 @@ spec:
   securityContext: {fsGroup: 1000}
   containers:
     - name: jenkins
-      image: cnj/jenkins:k8s
+      image: $K8S_IMAGE
       imagePullPolicy: Never
       envFrom: [{secretRef: {name: $REL-store}}]
       env:
@@ -202,7 +203,7 @@ k get secret old-seed -o yaml | sed -e '/resourceVersion/d' -e '/uid:/d' -e '/cr
 k delete namespace "$NS" --wait=true >/dev/null 2>&1
 NS="$NS-restored"; fresh_ns
 k apply -f "$OUT_DIR/seed.yaml" >/dev/null
-CONTROLLERS=2 "$CHART/scripts/restore.sh" "$NS" "$REL" "$OUT_DIR/backup" "$CHART" --set kubernetesCloud.enabled=false --set seedSecret=old-seed > "$OUT/restore.txt" 2>&1
+CONTROLLERS=2 "$CHART/scripts/restore.sh" "$NS" "$REL" "$OUT_DIR/backup" "$CHART" --set image="$K8S_IMAGE" --set kubernetesCloud.enabled=false --set seedSecret=old-seed > "$OUT/restore.txt" 2>&1
 check "4 the restored cluster comes up" eventually 400 ready 2
 jobs_after=$(on "$REL-0" '/api/json?tree=jobs[name]' | jq_ '",".join(sorted(j["name"] for j in d["jobs"]))')
 check "4 every job is there ($jobs_after)" test "$jobs_after" = "$jobs_before"
