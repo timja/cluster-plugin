@@ -18,6 +18,7 @@ import hudson.model.listeners.SaveableListener;
 import hudson.security.ACL;
 import hudson.security.ACLContext;
 import io.jenkins.plugins.cluster.ClusterRouting;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import io.jenkins.plugins.cluster.spi.Keys;
@@ -101,27 +102,21 @@ public final class ItemFiles {
             "lastSuccessful");
 
     /** The version of each manifest this controller last took or shared over what it had taken, by manifest key. */
-    private static final Map<String, Long> taken = new ConcurrentHashMap<>();
+    private static final PerItemCache<Long> taken = PerItemCache.create();
 
     /** What was last shared or taken here, per manifest key: path → checksum. */
-    private static final Map<String, Map<String, String>> known = new ConcurrentHashMap<>();
+    private static final PerItemCache<Map<String, String>> known = PerItemCache.create();
 
     /**
      * One take or publication of a directory at a time, by its manifest key: of two takes at once, the one of the older
      * manifest could otherwise finish last, leaving its files and baseline here while the store has newer ones.
      */
-    private static final Map<String, Object> locks = new ConcurrentHashMap<>();
+    private static final PerItemCache<Object> locks = PerItemCache.create();
 
     private ItemFiles() {}
 
     private static Object lock(String manifest) {
         return locks.computeIfAbsent(manifest, k -> new Object());
-    }
-
-    /** For tests: as a controller that never shared or took an item's files (another JVM). */
-    static void forgetForTests() {
-        known.clear();
-        taken.clear();
     }
 
     /** Where the files of a directory are shared: its manifest's key, and how a file's blob is named. */
@@ -312,7 +307,7 @@ public final class ItemFiles {
         PersistenceStore.Entry entry = store.read(place.manifest());
         Map<String, String> shared = parse(entry);
         Map<String, String> last = last(place);
-        if (shared.isEmpty() && !known.containsKey(place.manifest())) {
+        if (shared.isEmpty() && !known.contains(place.manifest())) {
             return; // nothing shared, nothing taken before: leave the directory as it is (or absent)
         }
         Path dir = place.dir().toPath();
@@ -578,8 +573,7 @@ public final class ItemFiles {
             if (place == null) {
                 return;
             }
-            known.remove(place.manifest());
-            taken.remove(place.manifest());
+            PerItemCache.forgetAll(place.manifest()); // a user is not an item: forgotten here
             if (PersistenceStores.isApplyingRemoteChange()) {
                 return; // deleted elsewhere: that controller removes them
             }
@@ -615,8 +609,8 @@ public final class ItemFiles {
 
     /**
      * An item created elsewhere takes its shared files once loaded here: a manifest applied before the item was (its
-     * creation behind here) found no item to take them for. An item deleted is forgotten (its files are removed from the
-     * stores with the rest of what is kept about it).
+     * creation behind here) found no item to take them for. An item deleted is forgotten with what else is cached about
+     * it ({@link PerItemCache}); its files are removed from the stores with the rest of what is kept about it.
      */
     @Extension
     public static final class Lifecycle extends ItemListener {
@@ -625,15 +619,6 @@ public final class ItemFiles {
             if (enabled() && item instanceof AbstractItem && PersistenceStores.isApplyingRemoteChange()) {
                 Place place = ItemFiles.of(item);
                 Timer.get().submit(() -> takeOrLater(place));
-            }
-        }
-
-        @Override
-        public void onDeleted(Item item) {
-            Place place = item instanceof AbstractItem ? ItemFiles.of(item) : null;
-            if (place != null) {
-                known.remove(place.manifest());
-                taken.remove(place.manifest());
             }
         }
     }

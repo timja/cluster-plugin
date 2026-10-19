@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import hudson.model.FreeStyleProject;
 import io.jenkins.plugins.cluster.ClusterFixture;
+import io.jenkins.plugins.cluster.PerItemCache;
 import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -54,7 +55,7 @@ class ItemFilesTest {
         // as another controller, which never had it
         Files.delete(state);
         Files.delete(p.getRootDir().toPath().resolve(ItemFiles.KNOWN));
-        ItemFiles.forgetForTests();
+        PerItemCache.forgetAllForTests();
         ItemFiles.take(place);
         assertEquals("{\"v\":1}", Files.readString(state));
     }
