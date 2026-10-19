@@ -1157,134 +1157,31 @@ public final class BuildRecords {
     }
 
     /**
-     * Creates the local directory of a build which so far exists only in the stores.
+     * Creates the local directory of a build which so far exists only in the stores ({@link BuildFetches}: never read
+     * under the build index lock, nor waited for under the queue's lock).
      *
      * @param dir the build directory, named after the build number
-     * @return true if the build was found in the store and {@code dir} now holds its {@code build.xml}
+     * @param wait false to only start the fetch, for a caller which loads the build later
+     * @return whether {@code dir} now holds the build's {@code build.xml}, and how
      */
-    /** Builds found without a stored snapshot, by item prefix and number: told once. */
-    private static final Set<String> missingSnapshots = ConcurrentHashMap.newKeySet();
-
-    static boolean materialize(@NonNull Job<?, ?> job, @NonNull File dir) throws IOException {
+    @NonNull
+    static BuildFetches.Outcome materialize(@NonNull Job<?, ?> job, @NonNull File dir, boolean wait)
+            throws IOException {
         String prefix = prefix(job);
         int number;
         try {
             number = Integer.parseInt(dir.getName());
         } catch (NumberFormatException e) {
-            return false;
+            return BuildFetches.Outcome.NOT_FETCHED;
         }
-        ClusterStore store = store();
-        if (prefix == null || store == null) {
-            return false;
+        if (prefix == null || store() == null) {
+            return BuildFetches.Outcome.NOT_FETCHED;
         }
-        PersistenceStore.Entry record = store.read(Keys.buildRecord(prefix, number));
-        if (record == null) {
-            return false;
-        }
-        ClusterBlobStore blobs = ClusterBlobStore.get();
-        InputStream snapshot = null;
-        if (blobs != null) {
-            String blobPrefix = Keys.blobs(job);
-            snapshot = blobs.get(Keys.snapshotBlob(blobPrefix, number));
-            if (snapshot == null) {
-                snapshot = blobs.get(blob(blobPrefix, number, LOST_SNAPSHOT)); // closed as lost: only the stand-in
-            }
-            if (snapshot == null) {
-                // a record is stored only once its snapshot is: one stored before a blob store was configured, or
-                // the store restored to an earlier point than the blob store, say; left unmaterialized (not loadable,
-                // which core remembers) rather than taken as complete without its files. Told once per build
-                Level level = missingSnapshots.add(prefix + "#" + number) ? Level.INFO : Level.FINE;
-                LOGGER.log(
-                        level,
-                        () -> job.getFullName() + " #" + number
-                                + " has a stored record but no stored snapshot; it cannot be opened here");
-                return false;
-            }
-        }
-        Files.createDirectories(dir.toPath());
-        if (snapshot != null) {
-            Set<String> shared;
-            try (InputStream in = snapshot) {
-                shared = extractOver(in, dir);
-            }
-            // files the snapshot it replaces had, and this one no longer has (removed elsewhere): nothing else here
-            // is touched, as nothing else came from a snapshot
-            Path root = dir.toPath().toRealPath();
-            for (String rel : SnapshotFiles.read(dir)) {
-                Path old = root.resolve(rel).normalize();
-                if (!shared.contains(rel)
-                        && old.startsWith(root)
-                        && !old.equals(root)
-                        && !throughLink(root, old)
-                        && Files.isRegularFile(old, LinkOption.NOFOLLOW_LINKS)) {
-                    Files.delete(old);
-                }
-            }
-            SnapshotFiles.write(dir, shared);
-        }
-        Manifest.write(dir, signature(dir)); // what it holds as published: files added later are told apart
-        RecordVersion.write(dir, record.version());
-        // last, as on the publishing side: a local build.xml means the directory is complete
-        writeRecord(dir, record.content());
-        LOGGER.fine(() -> "Materialized " + job.getFullName() + " #" + number);
-        return true;
-    }
-
-    /**
-     * Extracts a snapshot into a build directory over what it holds: its files replace those of the same name, and
-     * nothing else there is removed (artifacts, and whatever else no snapshot holds, have no other copy). Extracted aside
-     * first, so that a link in the snapshot is never followed, nor one in the directory.
-     *
-     * @return the paths of the files extracted, relative to the directory
-     */
-    private static Set<String> extractOver(InputStream snapshot, File dir) throws IOException {
-        Path root = dir.toPath().toRealPath();
-        Path staged = Files.createTempDirectory(dir.getParentFile().toPath(), "." + dir.getName() + "-fetched");
-        Set<String> extracted = new TreeSet<>();
-        try {
-            try {
-                new FilePath(staged.toFile()).untarFrom(snapshot, FilePath.TarCompression.GZIP);
-            } catch (InterruptedException e) {
-                throw (IOException) new InterruptedIOException().initCause(e);
-            }
-            removeLinks(staged);
-            List<Path> files;
-            try (Stream<Path> walk = Files.walk(staged)) {
-                files = walk.filter(f -> Files.isRegularFile(f, LinkOption.NOFOLLOW_LINKS))
-                        .toList();
-            }
-            for (Path f : files) {
-                String rel = staged.relativize(f).toString().replace(File.separatorChar, '/');
-                Path target = root.resolve(rel).normalize();
-                if (rel.equals(RECORD)
-                        || rel.equals(Manifest.NAME)
-                        || rel.equals(RecordVersion.NAME)
-                        || rel.equals(SnapshotFiles.NAME)
-                        || !target.startsWith(root)
-                        || target.equals(root)) {
-                    continue; // what this class writes itself, or not a file of the directory
-                }
-                if (throughLink(root, target)) {
-                    LOGGER.warning(() -> "Not extracting " + rel + " into " + dir + ": through a link");
-                    continue;
-                }
-                Files.createDirectories(target.getParent());
-                if (!target.getParent().toRealPath().startsWith(root)
-                        || Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
-                    LOGGER.warning(() -> "Not extracting " + rel + " into " + dir + ": through a link, or a directory");
-                    continue;
-                }
-                Files.move(f, target, StandardCopyOption.REPLACE_EXISTING); // a link there is replaced, not followed
-                extracted.add(rel);
-            }
-        } finally {
-            Util.deleteRecursive(staged.toFile());
-        }
-        return extracted;
+        return BuildFetches.fetch(job, prefix, number, dir, wait);
     }
 
     /** Whether a path below a directory goes through a link there: never created, written or deleted through. */
-    private static boolean throughLink(Path root, Path target) {
+    static boolean throughLink(Path root, Path target) {
         for (Path p = target.getParent(); p != null && !p.equals(root); p = p.getParent()) {
             if (Files.isSymbolicLink(p)) {
                 return true;
@@ -1348,7 +1245,7 @@ public final class BuildRecords {
         }
     }
 
-    private static void writeRecord(File dir, byte[] content) throws IOException {
+    static void writeRecord(File dir, byte[] content) throws IOException {
         Path tmp = Files.createTempFile(dir.toPath(), RECORD, ".tmp");
         Files.write(tmp, content);
         try {
@@ -1383,6 +1280,7 @@ public final class BuildRecords {
         if (runs == null || prefix == null || store == null) {
             return;
         }
+        BuildFetches.changed(Keys.buildRecord(prefix, number)); // a fetch of it in progress fetches it again
         Run<?, ?> running = runs.getLoadedBuilds().get(number);
         if (running != null && running.isBuilding()) {
             // a record of a build running here is stored only by a controller which took it over (this one cut off
@@ -1475,6 +1373,7 @@ public final class BuildRecords {
         if (runs == null || prefix == null || store == null) {
             return;
         }
+        BuildFetches.changed(Keys.buildRecord(prefix, number));
         Run<?, ?> loaded = runs.getLoadedBuilds().get(number);
         if (loaded != null && loaded.isBuilding()) {
             return; // running here, so not what was deleted elsewhere (its record was never published)

@@ -35,6 +35,7 @@ public class InMemoryClusterBlobStore implements ClusterBlobStore {
 
     @Override
     public InputStream get(@NonNull String key) {
+        InMemoryClusterStore.hook("blob", key);
         byte[] b = blobs.get(key);
         return b == null ? null : new ByteArrayInputStream(b);
     }

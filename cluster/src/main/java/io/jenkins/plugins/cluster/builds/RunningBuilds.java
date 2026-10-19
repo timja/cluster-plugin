@@ -658,13 +658,16 @@ public final class RunningBuilds {
                 return true; // completed here before the restart
             }
             // no placeholder, and the copy here says running: it completed elsewhere (adopted while this controller was
-            // down): load its record, not this copy, which would resume it a second time
+            // down): load its record, not this copy, which would resume it a second time. Fetched in the background:
+            // not waited for here, under the build index lock and perhaps the queue's; not this load, the next one
+            // loads it (one waiting for the fetch then)
             if (BuildRecords.isStored(job, number)) {
                 java.nio.file.Files.delete(local.toPath());
-                if (BuildRecords.materialize(job, local.getParentFile())) {
+                if (BuildRecords.materialize(job, local.getParentFile(), false) != BuildFetches.Outcome.NOT_FETCHED) {
                     LOGGER.info(() -> job.getFullName() + " #" + number
-                            + " completed elsewhere while this controller restarted; loading its record");
-                    return true;
+                            + " completed elsewhere while this controller restarted; its record is fetched, and loaded"
+                            + " instead of the copy here once fetched");
+                    return false;
                 }
             }
             LOGGER.info(() -> job.getFullName() + " #" + number

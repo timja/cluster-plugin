@@ -65,8 +65,9 @@ public class InMemoryClusterStore implements ClusterStore {
 
     /**
      * For tests: told of some operations, and may fail them by throwing (an {@link IOException} too, as a store that
-     * cannot be reached would): {@code children} once the children are listed, {@code release} before a build lease is
-     * released.
+     * cannot be reached would): {@code read} before an entry is read, {@code children} once the children are listed,
+     * {@code release} before a build lease is released, and {@code blob} before a blob is read
+     * ({@link InMemoryClusterBlobStore}).
      */
     public static volatile Hook hook;
 
@@ -76,7 +77,7 @@ public class InMemoryClusterStore implements ClusterStore {
         void on(@NonNull String operation, @NonNull String key) throws IOException;
     }
 
-    private static void hook(String operation, String key) {
+    static void hook(String operation, String key) {
         Hook h = hook;
         if (h != null) {
             try {
@@ -141,6 +142,7 @@ public class InMemoryClusterStore implements ClusterStore {
     @CheckForNull
     @Override
     public Entry read(@NonNull String key) {
+        hook("read", key);
         synchronized (shared) {
             Entry e = shared.entries.get(key);
             return e == null ? null : new Entry(e.content().clone(), e.version());

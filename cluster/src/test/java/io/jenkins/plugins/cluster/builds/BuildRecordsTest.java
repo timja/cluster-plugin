@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import hudson.Launcher;
@@ -35,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import jenkins.persistence.PersistenceStore;
@@ -155,6 +157,252 @@ class BuildRecordsTest {
                 p.getBuilds().stream().map(FreeStyleBuild::getNumber).toList());
         r.assertBuildStatusSuccess(p.scheduleBuild2(0));
         assertEquals(3, p.getLastBuild().getNumber());
+    }
+
+    /** Whether a store key is a build's record or snapshot (what fetching a build reads). */
+    private static boolean buildData(FreeStyleProject p, String key) {
+        return key.startsWith(Keys.builds(Keys.item(p)) + "/") && key.endsWith("/" + BuildRecords.RECORD)
+                || key.startsWith(Keys.blobs(p) + "/");
+    }
+
+    @Test
+    void theQueueNeverWaitsForABuildMadeElsewhereToBeFetched() throws Exception {
+        FreeStyleProject made = project(r, "queued");
+        r.buildAndAssertSuccess(made);
+        r.buildAndAssertSuccess(made);
+        FreeStyleProject p = withoutLocalBuilds(r, made);
+        List<String> underTheQueueLock = new java.util.concurrent.CopyOnWriteArrayList<>();
+        Thread[] queueLockHolder = new Thread[1];
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        InMemoryClusterStore.hook = (operation, key) -> {
+            if (!buildData(p, key)) {
+                return;
+            }
+            if (Thread.currentThread() == queueLockHolder[0]) {
+                underTheQueueLock.add(operation + " " + key);
+            }
+            try {
+                go.await(); // a slow store: the build is fetched only once the queue is done
+            } catch (InterruptedException e) {
+                throw new IOException(e);
+            }
+        };
+        try {
+            // as Queue.maintain asks a job for its last build
+            java.util.concurrent.CompletableFuture<Void> maintain =
+                    java.util.concurrent.CompletableFuture.runAsync(() -> hudson.model.Queue.withLock(() -> {
+                        queueLockHolder[0] = Thread.currentThread();
+                        try {
+                            p.getLastBuild();
+                        } finally {
+                            queueLockHolder[0] = null;
+                        }
+                    }));
+            maintain.get(30, java.util.concurrent.TimeUnit.SECONDS); // not waiting for the store
+            assertThat("no store read under the queue's lock", underTheQueueLock, empty());
+            go.countDown();
+            ClusterFixture.await("#2 fetched, and loaded on its next access", () -> {
+                FreeStyleBuild last = p.getLastBuild();
+                return last != null && last.getNumber() == 2;
+            });
+        } finally {
+            go.countDown();
+            InMemoryClusterStore.hook = null;
+        }
+        FreeStyleBuild b2 = p.getBuildByNumber(2);
+        assertThat(b2.getLog(), containsString("hello from #2"));
+        assertEquals("data of #2", Files.readString(new File(b2.getRootDir(), "extra/data.txt").toPath()));
+        ClusterFixture.await(
+                "nothing staged is left next to the builds",
+                () -> Stream.of(p.getBuildDir().list()).noneMatch(n -> n.startsWith(".")));
+    }
+
+    @Test
+    void aBuildMadeElsewhereIsFetchedWithoutHoldingItsJobsBuildIndex() throws Exception {
+        FreeStyleProject made = project(r, "indexed");
+        r.buildAndAssertSuccess(made);
+        FreeStyleProject p = withoutLocalBuilds(r, made);
+        String snapshot = Keys.snapshotBlob(Keys.blobs(p), 1);
+        java.util.concurrent.CountDownLatch fetching = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        InMemoryClusterStore.hook = (operation, key) -> {
+            if (operation.equals("blob") && key.equals(snapshot)) {
+                fetching.countDown();
+                try {
+                    go.await();
+                } catch (InterruptedException e) {
+                    throw new IOException(e);
+                }
+            }
+        };
+        try {
+            java.util.concurrent.CompletableFuture<FreeStyleBuild> load =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() -> p.getBuildByNumber(1));
+            assertTrue(fetching.await(30, java.util.concurrent.TimeUnit.SECONDS), "fetching #1");
+            // while it is fetched (its snapshot downloads), the job's build index is free: e.g. for the queue
+            java.util.concurrent.CompletableFuture<Boolean> index = java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> p._getRuns().knows(1));
+            assertTrue(index.get(30, java.util.concurrent.TimeUnit.SECONDS));
+            go.countDown();
+            FreeStyleBuild b1 = load.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            assertNotNull(b1, "loaded once fetched");
+            assertThat(b1.getLog(), containsString("hello from #1"));
+        } finally {
+            go.countDown();
+            InMemoryClusterStore.hook = null;
+        }
+    }
+
+    /** Holds the download of a build's snapshot until released: a slow blob store. */
+    private static final class SlowSnapshot implements AutoCloseable {
+        final java.util.concurrent.CountDownLatch fetching = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+
+        SlowSnapshot(FreeStyleProject p, int number) {
+            String snapshot = Keys.snapshotBlob(Keys.blobs(p), number);
+            InMemoryClusterStore.hook = (operation, key) -> {
+                if (operation.equals("blob") && key.equals(snapshot)) {
+                    fetching.countDown();
+                    try {
+                        go.await();
+                    } catch (InterruptedException e) {
+                        throw new IOException(e);
+                    }
+                }
+            };
+        }
+
+        void awaitFetching() throws InterruptedException {
+            assertTrue(fetching.await(30, java.util.concurrent.TimeUnit.SECONDS), "fetching");
+        }
+
+        @Override
+        public void close() {
+            go.countDown();
+            InMemoryClusterStore.hook = null;
+        }
+    }
+
+    /** A build asked for under the queue's lock, as Queue.maintain asks a job for its last build. */
+    private static FreeStyleBuild underTheQueueLock(FreeStyleProject p, int number) throws Exception {
+        FreeStyleBuild[] b = new FreeStyleBuild[1];
+        java.util.concurrent.CompletableFuture.runAsync(() -> hudson.model.Queue.withLock(() -> {
+                    b[0] = p.getBuildByNumber(number);
+                }))
+                .get(30, java.util.concurrent.TimeUnit.SECONDS);
+        return b[0];
+    }
+
+    /** A load waiting for the fetch of a build, the build index lock released meanwhile. */
+    private static Thread waitingLoad(FreeStyleProject p, int number, FreeStyleBuild[] loaded) throws Exception {
+        Thread t = new Thread(() -> loaded[0] = p.getBuildByNumber(number), "load of #" + number);
+        t.start();
+        ClusterFixture.await(
+                t.getName() + " waiting for the fetch",
+                () -> t.getState() == Thread.State.TIMED_WAITING
+                        && Stream.of(t.getStackTrace())
+                                .anyMatch(e -> e.getClassName().equals(BuildFetches.class.getName())
+                                        && e.getMethodName().equals("await")));
+        return t;
+    }
+
+    @Test
+    void aLoadWaitingForAFetchWhenTheQueueGivesUpOnTheBuildLoadsItOnce() throws Exception {
+        FreeStyleProject made = project(r, "given-up");
+        r.buildAndAssertSuccess(made);
+        FreeStyleProject p = withoutLocalBuilds(r, made);
+        FreeStyleBuild[] page = new FreeStyleBuild[1];
+        try (SlowSnapshot slow = new SlowSnapshot(p, 1)) {
+            Thread load = waitingLoad(p, 1, page);
+            slow.awaitFetching();
+            assertNull(underTheQueueLock(p, 1), "the queue does not wait, and gives up on the build");
+            slow.go.countDown();
+            load.join(30_000);
+            assertFalse(load.isAlive());
+        }
+        assertNotNull(page[0], "loaded once fetched");
+        assertSame(page[0], p.getBuildByNumber(1), "one instance of the build, not one per load");
+    }
+
+    @Test
+    void twoLoadsWaitingForTheSameFetchGetTheSameBuild() throws Exception {
+        FreeStyleProject made = project(r, "two-loads");
+        r.buildAndAssertSuccess(made);
+        FreeStyleProject p = withoutLocalBuilds(r, made);
+        FreeStyleBuild[] first = new FreeStyleBuild[1];
+        FreeStyleBuild[] second = new FreeStyleBuild[1];
+        try (SlowSnapshot slow = new SlowSnapshot(p, 1)) {
+            Thread one = waitingLoad(p, 1, first);
+            slow.awaitFetching();
+            Thread two = waitingLoad(p, 1, second);
+            slow.go.countDown();
+            one.join(30_000);
+            two.join(30_000);
+            assertFalse(one.isAlive() || two.isAlive());
+        }
+        assertNotNull(first[0], "loaded once fetched");
+        assertSame(first[0], second[0], "one instance of the build");
+        assertSame(first[0], p.getBuildByNumber(1));
+    }
+
+    @Test
+    void aBuildAskedForWhileAFetchTheQueueGaveUpOnRunsWaitsForIt() throws Exception {
+        FreeStyleProject made = project(r, "page");
+        r.buildAndAssertSuccess(made);
+        FreeStyleProject p = withoutLocalBuilds(r, made);
+        FreeStyleBuild[] page = new FreeStyleBuild[1];
+        try (SlowSnapshot slow = new SlowSnapshot(p, 1)) {
+            assertNull(underTheQueueLock(p, 1), "the queue does not wait, and gives up on the build");
+            slow.awaitFetching();
+            String key = Keys.buildRecord(Keys.item(p), 1);
+            ClusterFixture.await(
+                    "the build loadable again, though not fetched yet", () -> !BuildFetches.isDeferred(key));
+            Thread load = waitingLoad(p, 1, page); // e.g. its page: waits rather than finding nothing
+            slow.go.countDown();
+            load.join(30_000);
+            assertFalse(load.isAlive());
+        }
+        assertNotNull(page[0], "loaded once fetched");
+        assertThat(page[0].getLog(), containsString("hello from #1"));
+        assertSame(page[0], p.getBuildByNumber(1));
+    }
+
+    @Test
+    void aCopyLeftRunningByAPreviousRunIsReplacedByTheRecordOfTheBuildCompletedElsewhere() throws Exception {
+        FreeStyleProject made = project(r, "reclaimed");
+        r.buildAndAssertSuccess(made);
+        String stored = record(made, 1);
+        FreeStyleProject p = withoutLocalBuilds(r, made);
+        // as this controller left it when it stopped, before another controller adopted and completed the build
+        File local = new File(p.getBuildDir(), "1/" + BuildRecords.RECORD);
+        Files.createDirectories(local.getParentFile().toPath());
+        Files.writeString(local.toPath(), stored.replace("<result>SUCCESS</result>", ""));
+        List<String> told = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(RunningBuilds.class.getName());
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                told.add(record.getMessage());
+            }
+
+            @Override
+            public void flush() {}
+
+            @Override
+            public void close() {}
+        };
+        logger.addHandler(handler);
+        try {
+            underTheQueueLock(p, 1); // not resumed from the copy here; fetched in the background
+            ClusterFixture.await("#1 loaded from its record", () -> {
+                FreeStyleBuild b = p.getBuildByNumber(1);
+                return b != null && b.getResult() == Result.SUCCESS;
+            });
+        } finally {
+            logger.removeHandler(handler);
+        }
+        assertThat(told, hasItem(containsString("completed elsewhere while this controller restarted")));
+        assertThat(told, not(hasItem(containsString("neither running nor recorded"))));
     }
 
     @Test
