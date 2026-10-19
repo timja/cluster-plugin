@@ -55,7 +55,8 @@ import net.sf.json.JSONObject;
  *
  * <p>Changes are captured from the update center (every install and upgrade, including dependencies and uploads,
  * {@link ClusterUpdateCenterConfiguration}) and from the plugin manager's uninstall, disable and enable actions
- * ({@link ClusterPluginSet}). CLI installs from a file or URL bypass the update center and stay local.
+ * ({@link ClusterPluginSet}). CLI installs from a file, URL or standard input bypass the update center; they are
+ * refused or recorded in the overlay as the plugin manager's installs are ({@link ClusterCliPlugins}).
  */
 public final class ClusterPlugins {
 
