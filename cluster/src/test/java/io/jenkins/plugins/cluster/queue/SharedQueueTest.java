@@ -124,7 +124,7 @@ class SharedQueueTest {
         // the build completes there and its record arrives here
         FreeStyleBuild here = r.buildAndAssertSuccess(p); // #1 as this controller would have made it
         assertEquals(1, here.getNumber());
-        SharedQueue.HandOffs.recorded(p, 1);
+        HandOffs.recorded(p, 1);
         assertSame(here, future.get(10, TimeUnit.SECONDS));
     }
 
@@ -205,7 +205,7 @@ class SharedQueueTest {
         ClusterFixture.await("owned", () -> RunningBuilds.ownedPlaceholder(b) != null);
         // a future following this item's build (handed off, then put back and started here after all)
         AtomicReference<Queue.Executable> completed = new AtomicReference<>();
-        SharedQueue.HandOffs.add(b.getQueueId(), new Queue.HandOff() {
+        HandOffs.add(b.getQueueId(), new Queue.HandOff() {
             @Override
             public void started(Queue.Executable view) {}
 
@@ -217,7 +217,7 @@ class SharedQueueTest {
             @Override
             public void cancelled() {}
         });
-        SharedQueue.HandOffs.startedHere(b.getQueueId(), b);
+        HandOffs.startedHere(b.getQueueId(), b);
         RunningBuilds.lost(b); // another controller took the build over: the copy here stops
         r.waitForCompletion(b);
         // every listener has seen it finalized once its executor is free
@@ -248,9 +248,9 @@ class SharedQueueTest {
         // handed off when first claimed elsewhere; re-created here when that claimant died, and handed off again
         Told first = new Told();
         Told again = new Told();
-        SharedQueue.HandOffs.add(id, first);
-        SharedQueue.HandOffs.add(id, again);
-        SharedQueue.HandOffs.startedElsewhere(new ClusterQueue.Record(
+        HandOffs.add(id, first);
+        HandOffs.add(id, again);
+        HandOffs.startedElsewhere(new ClusterQueue.Record(
                 id,
                 p.getItemUuid(),
                 p.getFullName(),
@@ -264,7 +264,7 @@ class SharedQueueTest {
                 7));
         assertNotNull(first.started.get(), "the first left item gets the build");
         assertNotNull(again.started.get(), "and so does the one it was handed off as again");
-        SharedQueue.HandOffs.cancelled(id);
+        HandOffs.cancelled(id);
     }
 
     @Test
