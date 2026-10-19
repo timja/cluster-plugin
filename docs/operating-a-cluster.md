@@ -110,9 +110,10 @@ In-chart Postgres and Azurite are for development. In production, point at manag
   then makes none of its own: put every store setting in it.
   - always: `CLUSTER_POSTGRES_URL` (with its TLS parameters), `CLUSTER_POSTGRES_USER`, `CLUSTER_POSTGRES_PASSWORD`
   - `blob.type: azure`: `CLUSTER_AZURE_BLOB_CONNECTION_STRING`, `CLUSTER_AZURE_BLOB_CONTAINER`, and for the artifact
-    manager `CNJ_BLOB_ACCOUNT_NAME`, `CNJ_BLOB_ACCOUNT_KEY` and `CNJ_BLOB_ENDPOINT` (the chart's
-    `artifactManager.accountName` and `.blobEndpoint` only reach a Secret the chart makes, so with an existing Secret they
-    go in it)
+    manager `CNJ_BLOB_ACCOUNT_KEY`. The account name and endpoint are not secret: set them as
+    `artifactManager.accountName` and `.blobEndpoint`, which the chart gives the controllers as `CNJ_BLOB_ACCOUNT_NAME`
+    and `CNJ_BLOB_ENDPOINT`, or leave those empty and put both in the Secret too. `artifactManager.accountName` without
+    `store.existingSecret` fails the install, as the key would be missing.
   - `blob.type: s3`: `CLUSTER_S3_BUCKET`, `CLUSTER_S3_PREFIX`, `CLUSTER_S3_REGION`, `CLUSTER_S3_ENDPOINT`,
     `CLUSTER_S3_PATH_STYLE`, and AWS credentials if they do not come from elsewhere in the default chain
     (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`; or IRSA through the service account)
