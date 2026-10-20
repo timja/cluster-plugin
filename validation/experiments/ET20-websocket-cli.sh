@@ -5,9 +5,8 @@
 # ET setup (two tmpfs controllers, S0, Postgres, Azurite, token auth); an inbound agent `ala` connected to A only.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
-export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.WebSocketEcho.enabled=true"
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET20" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
@@ -42,14 +41,15 @@ rm -rf "$ET1/seed"; mkdir -p "$ET1/seed"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 docker rm -fv ${P}et20-ala >/dev/null 2>&1 || true
 r "## ET20 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
@@ -59,6 +59,32 @@ curl -gsf -o "$OUT_DIR/jenkins-cli.jar" "http://localhost:$B/jnlpJars/jenkins-cl
 
 # ------------------------------------------------------------------ 1. a WebSocket for a build running on A, opened on B
 log "scenario 1: WebSocket relay"
+# no WebSocket endpoint under a build's URL ships with Jenkins: A gets one from the script console, an echo answering
+# with its controller's name (B has none, so only a relayed request is answered)
+groovy $A '
+import hudson.model.Action
+import hudson.model.Run
+import jenkins.model.Jenkins
+import jenkins.model.TransientActionFactory
+import jenkins.websocket.WebSocketSession
+import jenkins.websocket.WebSockets
+import org.kohsuke.stapler.HttpResponse
+class EchoSession extends WebSocketSession {
+  protected void text(String message) { sendText(message + " from " + io.jenkins.plugins.cluster.spi.ClusterMember.NAME) }
+}
+class EchoAction implements Action {
+  String getIconFileName() { null }
+  String getDisplayName() { null }
+  String getUrlName() { "cluster-ws-echo" }
+  HttpResponse doIndex() { Jenkins.get().checkPermission(Jenkins.ADMINISTER); WebSockets.upgrade(new EchoSession()) }
+}
+class EchoFactory extends TransientActionFactory<Run> {
+  Class<Run> type() { Run }
+  Collection<? extends Action> createFor(Run target) { [new EchoAction()] }
+}
+hudson.ExtensionList.lookup(TransientActionFactory).add(new EchoFactory())
+println "echo registered"' > "$OUT/echo-register.txt" 2>&1 || true
+info "1 echo on A: $(head -c 200 "$OUT/echo-register.txt")"
 pipeline wsp 'pipeline { agent none; stages { stage("run") { steps { echo "running"; sleep 60 } } } }'
 post $A "/job/wsp/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/wsp/1 running

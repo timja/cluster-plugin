@@ -21,16 +21,16 @@ eventually() { # eventually <seconds> <command...>
   local t=$1 start=$SECONDS; shift
   until "$@"; do (( SECONDS - start > t )) && return 1; sleep 1; done
 }
-http() { curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$1$2"; }
+http() { curl -gs -m 60 -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$1$2"; }
 exists() { [[ "$(http "$1" "$2/api/json")" == 200 ]]; }
 absent() { [[ "$(http "$1" "$2/api/json")" == 404 ]]; }
-json() { curl -gsf -u "$AUTH" "http://localhost:$1$2"; }
+json() { curl -gsf -m 60 -u "$AUTH" "http://localhost:$1$2"; }
 idle() { [[ "$(json "$1" "/computer/api/json?tree=busyExecutors" | python3 -c 'import json,sys; print(json.load(sys.stdin)["busyExecutors"])')" == 0 && \
           "$(json "$1" "/queue/api/json?tree=items[id]" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')" == 0 ]]; }
 wait_idle() { sleep 3; eventually 300 idle "$1"; }
 branches() { json "$1" "/job/mb/api/json?tree=jobs[name]" | python3 -c 'import json,sys; print(" ".join(sorted(j["name"] for j in json.load(sys.stdin)["jobs"])))'; }
 has_branches() { [[ "$(branches "$1")" == "$2" ]]; }
-conflicts() { groovy "$1" 'print(jenkins.persistence.PersistenceStores.getConflictCount())'; }
+conflicts() { groovy "$1" 'print((io.jenkins.plugins.cluster.config.ConflictCounts.merged() + jenkins.persistence.PersistenceStores.getRefusedCount()))'; }
 store_versions() { et1 exec -T postgres psql -U jenkins -At -c "select key, version from jenkins_store order by key"; }
 psql_q() { et1 exec -T postgres psql -U jenkins -At -c "$1"; }
 
@@ -44,7 +44,7 @@ log "S0: seeding key material from a throwaway controller"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get(); jenkins.model.Jenkins.get().getCrumbIssuer()' >/dev/null
 # docker cp cannot read tmpfs mounts
@@ -67,12 +67,34 @@ JF
 sed 's#file:///tmp/repo#file:///repo#' "$JOBS/multibranch.xml" > "$OUT_DIR/multibranch.xml"
 
 et1 up -d postgres >/dev/null 2>&1; wait_postgres
+# both controllers started at once on a fresh store (as a StatefulSet with parallel pod management starts them): each
+# applies the same configuration as code, the admin user included. The other experiments start A, then B.
 et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
+both_up() { curl -gsf -m 5 -u "$AUTH" "http://localhost:$A/api/json" >/dev/null 2>&1 && curl -gsf -m 5 -u "$AUTH" "http://localhost:$B/api/json" >/dev/null 2>&1; }
+exited() { docker ps -a --filter "name=^${P}jenkins-" --filter status=exited --format '{{.Names}}'; }
+t0=$SECONDS; until both_up || [[ -n "$(exited)" ]] || (( SECONDS - t0 > 300 )); do sleep 2; done
+# failed: exited, or up without answering an authenticated API call
+together_failed=$(exited)
+for c in a b; do
+  port=$A; [[ $c == b ]] && port=$B
+  [[ " $together_failed " == *" ${P}jenkins-$c-1 "* ]] || curl -gsf -m 5 -u "$AUTH" "http://localhost:$port/api/json" >/dev/null 2>&1 \
+    || together_failed="$together_failed ${P}jenkins-$c-1"
+done
+together_failed=$(echo $together_failed)
+if [[ -n "$together_failed" ]]; then # carry on with the rest: those started again, one after the other
+  for c in $together_failed; do docker logs "$c" > "$OUT/$c-together.log" 2>&1; done
+  for c in a b; do
+    [[ " $together_failed " == *" ${P}jenkins-$c-1 "* ]] || continue
+    port=$A; [[ $c == b ]] && port=$B
+    et1 rm -sf jenkins-$c >/dev/null 2>&1; et1 up -d jenkins-$c >/dev/null 2>&1; wait_up $port
+  done
+fi
 wait_up $A; wait_up $B
 r "## ET1 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
 r "|---|---|"
+check "two controllers started at the same time on a fresh store both boot (failed: ${together_failed:-none})" test -z "$together_failed"
 check "store plugin active on A and B" bash -c "[[ \$(source $VALIDATION_DIR/lib.sh; groovy $A 'print(jenkins.persistence.PersistenceStores.get()?.getClass()?.simpleName)') == PostgresPersistenceStore ]]"
 check "A and B decrypt each other's secrets (S0 seed)" bash -c "source $VALIDATION_DIR/lib.sh; e=\$(groovy $A 'print(hudson.util.Secret.fromString(\"et1\").getEncryptedValue())'); [[ \$(groovy $B \"print(hudson.util.Secret.decrypt('\$e')?.plainText)\") == et1 ]]"
 
@@ -142,7 +164,7 @@ while (( SECONDS < end )); do
 done
 wait_idle $A; wait_idle $B; sleep 5
 ca=$(( $(conflicts $A) - ca0 )); cb=$(( $(conflicts $B) - cb0 ))
-r "| ℹ️ | conflicts detected during scenario 4: A=$ca B=$cb (warn policy: logged, last writer wins) |"
+r "| ℹ️ | conflicts detected during scenario 4: A=$ca B=$cb (each merged by the reconciler, or refused and reloaded) |"
 for br in main feature2; do
   check "4 mb/$br keeps its properties() parameter in the store" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select convert_from(content,'UTF8') from jenkins_store where key='jobs/mb/branches/$br/config.xml'\" | grep -c ParametersDefinitionProperty) -ge 1 ]]"
   check "4 mb/$br shows the parameter on A and B" bash -c "curl -gsf -u $AUTH 'http://localhost:$A/job/mb/job/$br/api/json?tree=property[parameterDefinitions[name]]' | grep -q GREETING && curl -gsf -u $AUTH 'http://localhost:$B/job/mb/job/$br/api/json?tree=property[parameterDefinitions[name]]' | grep -q GREETING"

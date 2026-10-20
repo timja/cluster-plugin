@@ -5,7 +5,8 @@ Run several Jenkins controllers as one cluster:
 - a build keeps running when its controller dies, because another controller adopts it
 - `JENKINS_HOME` can be ephemeral
 
-High availability is the main benefit. The design is described in JEP-250 to JEP-257 (draft JEPs).
+High availability is the main benefit. The design is described in JEP-250 to JEP-257 (draft JEPs). How to install,
+scale, upgrade, back up and restore a cluster is in [Operating a cluster](docs/operating-a-cluster.md).
 
 This is a prototype. It needs a Jenkins core built from the `cnj/t*` branches of [timja/jenkins](https://github.com/timja/jenkins), and the forked plugins listed under [Building](#building).
 
@@ -51,6 +52,9 @@ It needs, installed locally:
 [`charts/jenkins-cluster`](charts/jenkins-cluster) runs a cluster of controllers on Kubernetes. It includes PostgreSQL, and blob storage set by `blob.type`:
 - `azure`: in-chart Azurite
 - `s3`: an external bucket
+
+[Operating a cluster](docs/operating-a-cluster.md) describes its values, managed services, upgrades, backups and
+restores.
 
 ## Acceptance experiments
 [`validation/`](validation) holds the experiments (ET1 to ET22) that check a cluster end to end, on Docker Compose and on kind.

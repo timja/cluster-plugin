@@ -3,7 +3,7 @@
 # Same setup as ET1: two controllers on tmpfs homes, identical JCasC, seeded keys (S0), Postgres store.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t2-m2-trigger-coordination experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 # the scratch repos are throwaway; never start fsmonitor daemons for them (they can hang in the background)
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
@@ -24,16 +24,16 @@ wait_idle() { sleep 3; eventually 300 idle "$1"; }
 psql_q() { et1 exec -T postgres psql -U jenkins -At -c "$1"; }
 container_of() { [[ $1 == "$A" ]] && echo jenkins-a || echo jenkins-b; }
 
-# ran_on <job key> <number>: the port of the controller that first wrote the build's record (builds are shared since T3,
+# ran_on <item key> <number>: the port of the controller that first wrote the build's record (builds are shared since T3,
 # so every controller lists every build; the writer is the one that ran it)
 ran_on() {
-  local n; n=$(psql_q "select m.name from jenkins_store_events e left join jenkins_members m on m.origin = e.origin where e.key in ('$1/builds/$2/build.xml', '$(echo "$1" | sed -E 's#/jobs/([^/]+)$#/branches/\1#')/builds/$2/build.xml') and e.kind = 'WRITTEN' order by e.seq limit 1" </dev/null)
+  local n; n=$(psql_q "select m.name from jenkins_store_events e left join jenkins_members m on m.origin = e.origin where e.key = '$1/builds/$2/build.xml' and e.kind = 'WRITTEN' order by e.seq limit 1" </dev/null)
   case "$n" in jenkins-a) echo $A ;; jenkins-b) echo $B ;; *) echo "?" ;; esac
 }
 # snap <job path, e.g. /job/x or /job/mb/job/main> <ports...>: record every build the controllers know about, with the controller that ran it
 snap() {
   local path=$1 key; shift
-  key=$(echo "$path" | sed -e 's#^/job/#jobs/#' -e 's#/job/#/jobs/#g')
+  key=$(item_key "$1" "$(echo "$path" | sed -e 's#^/job/##' -e 's#/job/#/#g')") || return 0 # not there yet
   for port in "$@"; do
     json "$port" "$path/api/json?tree=builds[number,timestamp]" 2>/dev/null \
       | python3 -c 'import json,sys
@@ -86,7 +86,7 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
@@ -99,8 +99,9 @@ done
 commit() { (cd "$ET1/repo/$1" && date +%s%N > stamp && git add stamp && git commit -qm "change $(date +%s)"); }
 
 et1 up -d postgres >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 r "## ET2 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"

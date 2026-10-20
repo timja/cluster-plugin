@@ -3,7 +3,7 @@
 # ET setup (two tmpfs controllers, S0, Postgres, Azurite, token auth) plus agent1, an inbound WebSocket agent
 # reaching the controllers through a failover URL (profile "agents"). Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t4-m2-build-leases experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET4" ET1="$ET1_DIR"
@@ -25,8 +25,8 @@ console_has() { text "$1" "$2/consoleText" 2>/dev/null | grep -q -- "$3"; }
 count_in_console() { text "$1" "$2/consoleText" 2>/dev/null | grep -c -x -- "$3"; }
 building_on() { [[ "$(json "$1" "$2/api/json?tree=building" 2>/dev/null | jq_ 'd["building"]')" == True ]]; }
 result_is() { [[ "$(json "$1" "$2/api/json?tree=result" 2>/dev/null | jq_ 'd["result"]')" == "$3" ]]; }
-placeholders() { json "$1" "$2/api/json?tree=actions[builds[number,controller]]" 2>/dev/null \
-  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "builds" in a for b in a["builds"])'; }
+placeholders() { json "$1" "$2/api/json?tree=actions[buildsElsewhere[number,controller]]" 2>/dev/null \
+  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "buildsElsewhere" in a for b in a["buildsElsewhere"])'; }
 has_placeholder() { [[ " $(placeholders "$1" "$2") " == *" $3 "* ]]; }
 no_placeholders() { [[ -z "$(placeholders "$1" "$2")" ]]; }
 agent_online_on() { [[ "$(groovy "$1" 'print(jenkins.model.Jenkins.get().getComputer("agent1")?.isOnline())' 2>/dev/null)" == true ]]; }
@@ -34,7 +34,7 @@ all_lines() { local port=$1 path=$2 prefix=$3 n=$4 i out; out=$(text "$port" "$p
 same_text() { cmp -s <(text "$1" "$3") <(text "$2" "$3"); }
 in_log() { et1 logs "$1" 2>&1 | grep -q -- "$2"; }
 not_in_log() { ! in_log "$@"; }
-record_writers() { psql_q "select count(distinct origin) from jenkins_store_events where key = 'jobs/$1/builds/$2/build.xml' and kind = 'WRITTEN'"; }
+record_writers() { psql_q "select count(distinct origin) from jenkins_store_events where key = '$(item_key $B "$1")/builds/$2/build.xml' and kind = 'WRITTEN'"; }
 kill_a() { docker kill -s KILL ${P}jenkins-a-1 >/dev/null; }
 kill_b() { docker kill -s KILL ${P}jenkins-b-1 >/dev/null; }
 restart() { et1 up -d "$1" >/dev/null 2>&1; }
@@ -59,7 +59,7 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 # the agent's secret is an HMAC whose key is part of the seed, so it is valid on every controller
@@ -69,8 +69,9 @@ docker rm -fv ${P}seed >/dev/null
 [[ -s "$ET1/agent1.secret" ]] || { echo "no agent secret" >&2; exit 2; }
 
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d lb agent1 >/dev/null 2>&1
 r "## ET4 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
@@ -217,7 +218,7 @@ create_job $A steps "$OUT_DIR/steps.xml"
 post $A "/job/steps/build?delay=0sec" >/dev/null
 eventually 120 result_is $A /job/steps/1 SUCCESS
 dur=$(json $A /job/steps/1/api/json?tree=duration | jq_ 'd["duration"]')
-commits=$(psql_q "select count(*) from jenkins_store_events where key = 'jobs/steps/running/1.xml'")
+commits=$(psql_q "select count(*) from jenkins_store_events where key = '$(item_key $A steps)/running/1.xml'")
 info "7 200 echo steps: ${dur} ms; placeholder writes (save point commits + start/end): ${commits}"
 pipeline_job steps0 'for (int i = 1; i <= 200; i++) { echo "s${i}" }' PERFORMANCE_OPTIMIZED
 create_job $A steps0 "$OUT_DIR/steps0.xml"
@@ -225,8 +226,8 @@ post $A "/job/steps0/build?delay=0sec" >/dev/null
 eventually 120 result_is $A /job/steps0/1 SUCCESS
 dur0=$(json $A /job/steps0/1/api/json?tree=duration | jq_ 'd["duration"]')
 info "7 the same with PERFORMANCE_OPTIMIZED (no save points): ${dur0} ms"
-leftover=$(groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").findAll { it.contains("/running/") }.collect { it.replaceAll("/running/.*", "") }.unique().join(" ")')
-groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").findAll { it.contains("/running/") }.join("\n")' > "$OUT/leftover-save-points.txt" 2>&1 || true
+blob_list $A items | grep /running/ > "$OUT/leftover-save-points.txt" 2>&1 || true
+leftover=$(sed 's#/running/.*##' "$OUT/leftover-save-points.txt" | sort -u | tr '\n' ' ' | sed 's/ $//')
 info "7 builds with save points left in blob storage: ${leftover:-none}"
 check "7 no save points left in blob storage after completion" test -z "$leftover"
 

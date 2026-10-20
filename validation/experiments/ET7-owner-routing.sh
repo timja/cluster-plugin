@@ -4,7 +4,7 @@
 # and the round-robin LB `rr`. Builds start on A; every request about them goes to B, or through rr.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t6-m6-stateless-sessions experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 # notifyCommit without a token, as a webhook relay would call it
@@ -29,8 +29,8 @@ exists() { [[ "$(http "$1" "$2/api/json")" == 200 ]]; }
 building() { [[ "$(json "$1" "$2/api/json?tree=building" 2>/dev/null | jq_ 'd["building"]')" == True ]]; }
 result_is() { [[ "$(json "$1" "$2/api/json?tree=result" 2>/dev/null | jq_ 'd["result"]')" == "$3" ]]; }
 console_has() { text "$1" "$2/consoleText" 2>/dev/null | grep -q -- "$3"; }
-owner_is() { [[ "$(json $B "$1/api/json?tree=actions[builds[number,controller]]" 2>/dev/null \
-  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "builds" in a for b in a["builds"])')" == *"$2@$3"* ]]; }
+owner_is() { [[ "$(json $B "$1/api/json?tree=actions[buildsElsewhere[number,controller]]" 2>/dev/null \
+  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "buildsElsewhere" in a for b in a["buildsElsewhere"])')" == *"$2@$3"* ]]; }
 agent_online_on() { [[ "$(g "$1" 'print(jenkins.model.Jenkins.get().getComputer("agent1")?.isOnline())' 2>/dev/null)" == true ]]; }
 counter() { g "$1" "println io.jenkins.plugins.cluster.OwnerRoutingFilter.$2()"; }
 pipeline_job() { # name script
@@ -53,7 +53,7 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
@@ -65,8 +65,9 @@ for repo in poll mb; do
 done
 commit() { (cd "$ET1/repo/$1" && date +%s%N > stamp && git add stamp && git commit -qm "change $(date +%s%N)"); }
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d lb agent1 rr >/dev/null 2>&1
 r "## ET7 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
@@ -231,8 +232,11 @@ check "10 requests for a completed build are not forwarded ($fwd_before -> $fwd_
 pipeline_job loop 'echo "loop started"; sleep 60'
 create_both loop
 start_on_a loop
-code=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" -H 'X-Jenkins-Cluster-Forwarded-From: jenkins-a' "http://localhost:$B/job/loop/1/api/json")
-check "10 an already forwarded request is not forwarded again (answered by B itself: $code)" test "$code" = 404
+# the forwarding header is signed with the cluster's key: one a client made up does not make B answer itself (which
+# would let a client keep a request from the build's owner); a request from another controller carries a valid one
+fwd=$(curl -gs -o /dev/null -D - -u "$AUTH" -H 'X-Jenkins-Cluster-Forwarded-From: jenkins-a' "http://localhost:$B/job/loop/1/api/json" | tr -d '\r')
+code=$(awk 'NR == 1 {print $2}' <<<"$fwd")
+check "10 a forwarding header made up by a client is ignored: the request still reaches A ($code)" bash -c "[[ '$code' == 200 ]] && grep -qi '^X-Jenkins-Cluster-Forwarded-From: jenkins-a' <<<'$fwd'"
 post $B "/job/loop/1/stop" >/dev/null
 info "forwarded build requests: A=$(counter $A getForwardedBuildRequests) B=$(counter $B getForwardedBuildRequests); computer requests: A=$(counter $A getForwardedComputerRequests) B=$(counter $B getForwardedComputerRequests)"
 check "10 no routing warnings in the logs" bash -c "! (cd $VALIDATION_DIR && docker compose -f compose.et1.yaml --profile agents logs jenkins-a jenkins-b 2>&1 | grep -q 'Could not route')"

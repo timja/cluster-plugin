@@ -47,9 +47,9 @@ groovy $A 'org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get(); 
 c=$(dc ps -q jenkins-a)
 for f in secret.key secret.key.not-so-secret identity.key.enc secrets; do docker cp "$c:/var/jenkins_home/$f" "$OUT_DIR/sync/seed/" ; done
 r ""; r "Seed key set: \`$(ls "$OUT_DIR/sync/seed/secrets" | tr '\n' ' ')\`"
-dc down -v >/dev/null 2>&1; docker volume rm -f validation_home-a >/dev/null 2>&1 || true
+dc down -v >/dev/null 2>&1; docker volume rm -f ${PROJ}_home-a >/dev/null 2>&1 || true
 for v in home-a home-b; do
-  docker run --rm --user root --entrypoint sh -v "validation_$v:/h" -v "$OUT_DIR/sync/seed:/s:ro" cnj/jenkins:dev \
+  docker run --rm --user root --entrypoint sh -v "${PROJ}_$v:/h" -v "$OUT_DIR/sync/seed:/s:ro" "$DEV_IMAGE" \
     -c 'cp -a /s/. /h/ && chown -R 1000:1000 /h' >/dev/null
 done
 dc --profile multi up -d postgres azurite jenkins-a jenkins-b >/dev/null 2>&1; wait_up $A; wait_up $B

@@ -2,7 +2,7 @@
 # Backs up a Jenkins cluster release with in-chart Postgres and Azurite (Target 10): the database first, then the blob
 # container. It is consistent when no controller runs (scale the controllers' StatefulSet to 0 first): blobs are written
 # before the records referring to them, but a build deleted or republished while this runs can leave a record in the dump
-# whose files are gone from the copy, or newer. For an online backup, use point-in-time recovery (JEP-255).
+# whose files are gone from the copy, or newer. For an online backup, use point-in-time recovery (docs/operating-a-cluster.md).
 # usage: backup.sh <namespace> <release> <directory>
 set -euo pipefail
 ns=$1 rel=$2 dir=$3

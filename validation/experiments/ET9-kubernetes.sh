@@ -2,13 +2,13 @@
 # ET9: acceptance experiment for Target 9 (the helm chart on kind; Kubernetes agents across controllers).
 # A kind cluster `cnj` (kindest/node:v1.37.0, no image pulls: everything is loaded with `kind load`), the chart with
 # 2 controllers, in-chart Postgres and Azurite, and the kubernetes cloud with a container cap of 4.
-# The Service is a NodePort mapped to localhost:8095. Exits non-zero if any check fails.
+# The Service is a NodePort mapped to localhost:8095 ($KIND_SVC_PORT; only when this experiment creates the kind cluster). Exits non-zero if any check fails.
 #
-# Prerequisites: CORE_REF=cnj/t10-m1-import-api experiments/ET1-build.sh (the top of the core stack, with the T11 merge:
+# Prerequisites: experiments/ET1-build.sh (the top of the core stack, with the T11 merge:
 # controllers booting at once all write the shared admin user); experiments/ET9-build-image.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj REL=cnj SVC=8095 OUT="$RAW_DIR/ET9" CHART="$ROOT_DIR/charts/jenkins-cluster"
+CLUSTER=${KIND_CLUSTER:-cnj} NS=cnj REL=cnj SVC=${KIND_SVC_PORT:-8095} OUT="$RAW_DIR/ET9" CHART="$ROOT_DIR/charts/jenkins-cluster"
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
 : > "$OUT/results.md"
 r() { echo "$*" | tee -a "$OUT/results.md" >&2; }
@@ -26,8 +26,10 @@ psql_q() { k exec "$REL-postgres-0" -- psql -U jenkins -At -c "$1"; }
 controllers() { k get pods -l "app.kubernetes.io/name=$REL-controller" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'; }
 ready_count() { k get pods -l "app.kubernetes.io/name=$REL-controller" -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{"\n"}{end}' | grep -c true; }
 alive_members() { svc /manage/cluster/api/json?depth=1 | jq_ '",".join(sorted(m["name"] for m in d["members"] if m["alive"]))'; }
+# a job's identity, under which the store keeps its builds (_items/<uuid>), as the controller behind the Service knows it
+uuid_of() { svc_post /scriptText --data-urlencode "script=print(Jenkins.get().getItemByFullName('$1').getItemUuid())" | tr -d '\r\n'; }
 # which controller wrote a completed build's record (the store's events, by origin → member name)
-ran_on() { psql_q "select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = 'jobs/$1/builds/$2/build.xml' and e.kind = 'WRITTEN' order by e.seq desc limit 1"; }
+ran_on() { psql_q "select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = '_items/$(uuid_of "$1")/builds/$2/build.xml' and e.kind = 'WRITTEN' order by e.seq desc limit 1"; }
 result_is() { [[ "$(svc "/job/$1/$2/api/json?tree=result" 2>/dev/null | jq_ 'd["result"]')" == "$3" ]]; }
 pipeline() { # name script [string parameter]
   python3 - "$OUT_DIR/$1.xml" "$2" "${3:-}" <<'PY'
@@ -45,7 +47,7 @@ PY
 }
 
 command -v kind >/dev/null && command -v helm >/dev/null || { echo "kind and helm are needed" >&2; exit 2; }
-docker image inspect cnj/jenkins:k8s >/dev/null 2>&1 || { echo "run ET9-build-image.sh first" >&2; exit 2; }
+docker image inspect "$K8S_IMAGE" >/dev/null 2>&1 || { echo "run ET9-build-image.sh first" >&2; exit 2; }
 
 # ------------------------------------------------------------------ setup: a fresh namespace in the kind cluster
 if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
@@ -61,8 +63,8 @@ EOF
   "$VALIDATION_DIR/experiments/ET9-build-image.sh" >/dev/null || exit 3
 fi
 claim_ns "kind-$CLUSTER" "$NS" || exit 2
-"$CHART/scripts/make-seed-secret.sh" cnj/jenkins:k8s "$NS" >/dev/null || exit 3
-helm --kube-context "kind-$CLUSTER" -n "$NS" install "$REL" "$CHART" --set service.type=NodePort --set service.nodePort=30080 >/dev/null || exit 3
+"$CHART/scripts/make-seed-secret.sh" "$K8S_IMAGE" "$NS" >/dev/null || exit 3
+helm --kube-context "kind-$CLUSTER" -n "$NS" install "$REL" "$CHART" --set image="$K8S_IMAGE" --set service.type=NodePort --set service.nodePort=30080 >/dev/null || exit 3
 r "## ET9 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -144,11 +146,12 @@ pipeline survive 'retry(count: 2, conditions: [kubernetesAgent(), nonresumable()
 on "$REL-0" "/job/survive/build?delay=0sec" -X POST >/dev/null
 eventually 120 bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/survive/1/consoleText 2>/dev/null | grep -q attempt-on" || true
 first_pod=$(svc /job/survive/1/consoleText | grep -o 'attempt-on-[a-z0-9-]*' | head -1 | sed 's/^attempt-on-//')
-owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = 'jobs/survive/running/1.xml'" | sed -n 's/^controller=//p')
+owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = '_items/$(uuid_of survive)/running/1.xml'" | sed -n 's/^controller=//p')
 info "4 survive #1 running on $owner_before, agent pod $first_pod"
 k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4 the build completes after its controller's pod was deleted" eventually 400 result_is survive 1 SUCCESS
-check "4 it was retried on a new agent pod" bash -c "[[ \$(curl -gsf -u '$AUTH' http://localhost:$SVC/job/survive/1/consoleText | grep -c 'attempt-on-') -ge 2 ]]"
+# each attempt prints its pod twice: in the shell's trace (+ echo attempt-on-…) and as output (a line of its own)
+check "4 it was retried on a new agent pod" bash -c "[[ \$(curl -gsf -u '$AUTH' http://localhost:$SVC/job/survive/1/consoleText | grep -c '^attempt-on-') -ge 2 ]]"
 check "4 the old agent pod is garbage collected" eventually 400 bash -c "! kubectl --context kind-$CLUSTER -n $NS get pod '$first_pod' >/dev/null 2>&1"
 eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 2 ]]"
 
@@ -163,19 +166,20 @@ stage("use") { podTemplate { retry(count: 2, conditions: [kubernetesAgent(), non
 on "$REL-0" "/job/carry/build?delay=0sec" -X POST >/dev/null
 eventually 180 bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText 2>/dev/null | grep -q attempt-on" || true
 # while the build runs (stashes are deleted when it completes): the artifact manager put the stash in blob storage
-stash_keys=$(g_on "$REL-1" 'println jenkins.persistence.PersistenceStores.getBlobStore().list("artifacts/carry/1/stashes").join(" ")' | tr -d '\r')
-owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = 'jobs/carry/running/1.xml'" | sed -n 's/^controller=//p')
+stash_keys=$(g_on "$REL-1" "println(($BLOBS_GROOVY).list('artifacts/carry/1/stashes').join(' '))" | tr -d '\r')
+carry=$(uuid_of carry)
+owner_before=$(psql_q "select convert_from(content, 'UTF8') from jenkins_store where key = '_items/$carry/running/1.xml'" | sed -n 's/^controller=//p')
 info "4b carry #1 running on $owner_before"
 k delete pod "$owner_before" --grace-period=0 --force >/dev/null 2>&1
 check "4b the build completes after its controller's pod was deleted" eventually 600 result_is carry 1 SUCCESS
-check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c 'attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
+check "4b the retried stage ran on a new pod, with a new workspace" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -c '^attempt-on-' | grep -q '^[2-9]' && curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q workspace-new"
 check "4b ... and got the earlier stage's file from its stash" bash -c "curl -gsf -u '$AUTH' http://localhost:$SVC/job/carry/1/consoleText | grep -q '^carried-by-stash'"
 info "4b the stash in blob storage while the build ran: ${stash_keys:-none}"
 check "4b ... which the artifact manager had put in blob storage" test -n "$stash_keys"
 # evidence of 4b while it is still there (the pods are replaced later)
 curl -gs -u "$AUTH" "http://localhost:$SVC/job/carry/1/consoleText" > "$OUT/4b-carry-console.txt" 2>/dev/null || true
 for pod in $(k get pods -l app.kubernetes.io/name=$REL-controller -o name 2>/dev/null); do k logs "$pod" > "$OUT/4b-${pod#pod/}.log" 2>&1 || true; done
-psql_q "select key, convert_from(content, 'UTF8') from jenkins_store where key like 'jobs/carry/%' and key not like '%/builds/%'" > "$OUT/4b-carry-keys.txt" 2>&1 || true
+psql_q "select key, convert_from(content, 'UTF8') from jenkins_store where key = 'jobs/carry/config.xml' or (key like '_items/$carry/%' and key not like '%/builds/%')" > "$OUT/4b-carry-keys.txt" 2>&1 || true
 eventually 400 bash -c "[[ \$(kubectl --context kind-$CLUSTER -n $NS get pods -l app.kubernetes.io/name=$REL-controller -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{\"\\n\"}{end}' | grep -c true) == 2 ]]"
 counters_zero() { [[ "$(psql_q "select coalesce(sum(count), 0) from jenkins_counters")" == 0 ]]; }
 check "4b the cluster's agent counters are back to 0 once the pods are gone" eventually 300 counters_zero

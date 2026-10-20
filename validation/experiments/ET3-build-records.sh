@@ -3,7 +3,7 @@
 # Same setup as ET1/ET2: two controllers on tmpfs homes, identical JCasC, seeded keys (S0), Postgres store,
 # plus Azurite for build snapshots and Pipeline logs. Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t3-m4-explicit-numbering experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET3" ET1="$ET1_DIR"
@@ -31,8 +31,8 @@ same() { [[ "$1" == "$2" ]]; }
 same_text() { cmp -s <(text "$1" "$3") <(text "$2" "$3"); }
 permalinks() { json "$1" "$2/api/json?tree=lastBuild[number],lastSuccessfulBuild[number],lastFailedBuild[number]" \
   | jq_ '" ".join(k + "=" + str((d.get(k) or {}).get("number")) for k in ["lastBuild", "lastSuccessfulBuild", "lastFailedBuild"])'; }
-placeholders() { json "$1" "$2/api/json?tree=actions[builds[number,controller]]" \
-  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "builds" in a for b in a["builds"])'; }
+placeholders() { json "$1" "$2/api/json?tree=actions[buildsElsewhere[number,controller]]" \
+  | jq_ '" ".join(str(b["number"]) + "@" + b["controller"] for a in d["actions"] if a and "buildsElsewhere" in a for b in a["buildsElsewhere"])'; }
 has_placeholder() { [[ " $(placeholders "$1" "$2") " == *" $3 "* ]]; }
 no_placeholders() { [[ -z "$(placeholders "$1" "$2")" ]]; }
 pipeline_job() { # name script
@@ -61,8 +61,8 @@ graph() { local g=${GRAPH//@JOB@/$2}; groovy "$1" "${g//@N@/$3}"; }
 same_graph() { [[ -n "$(graph "$1" "$3" "$4")" ]] && cmp -s <(graph "$1" "$3" "$4") <(graph "$2" "$3" "$4"); }
 numbers_are() { [[ "$(numbers "$1" "$2")" == "$3" ]]; }
 permalinks_agree() { local a; a="$(permalinks "$A" "$1")"; [[ -n "$a" && "$a" == "$(permalinks "$B" "$1")" ]]; }
-blob_names() { groovy "$1" "println jenkins.persistence.PersistenceStores.getBlobStore().list(\"$2\").sort().join(' ')"; }
-blob_store_class() { groovy "$1" 'println jenkins.persistence.PersistenceStores.getBlobStore()?.getClass()?.simpleName'; }
+blob_names() { blob_list "$1" "$2" | tr '\n' ' ' | sed 's/ $//'; }
+blob_store_class() { groovy "$1" "println(($BLOBS_GROOVY)?.getClass()?.simpleName)"; }
 both_use_blobs() { [[ "$(blob_store_class $A)" == *$BLOB_CLASS* && "$(blob_store_class $B)" == *$BLOB_CLASS* ]]; }
 console_has() { text "$1" "$2" 2>/dev/null | grep -q -- "$3"; }
 some_console_has() { local n; for n in $(seq "$3" "$4"); do console_has "$1" "$2/$n/consoleText" "$5" && return 0; done; return 1; }
@@ -78,15 +78,16 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 r "## ET3 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -131,8 +132,13 @@ check "2 consoleText is byte-identical on B" same_text $A $B /job/pl/1/consoleTe
 check "2 flow graph and step logs are identical on B" same_graph $A $B pl 1
 graph $B pl 1 > "$OUT/pl-graph-B.txt"
 info "2 flow nodes on B: $(grep -vc '  log:' "$OUT/pl-graph-B.txt"), step logs: $(grep -c '  log:' "$OUT/pl-graph-B.txt")"
-info "2 blobs of pl #1: $(blob_names $A jobs/pl/builds/1)"
-check "2 the log is in log storage (append blobs), next to the snapshot" same "$(blob_names $A jobs/pl/builds/1)" "jobs/pl/builds/1/files.tgz jobs/pl/builds/1/log jobs/pl/builds/1/log-index"
+PL=$(item_blobs $A pl)
+info "2 blobs of pl #1: $(blob_names $A $PL/builds/1)"
+# S3 cannot append: the log was shipped in chunks, fenced per writer, and compacted once the build completed (the fences
+# stay, so that a writer from before cannot append after a later one)
+want_blobs="$PL/builds/1/files.tgz $PL/builds/1/log $PL/builds/1/log-index"
+[[ $BLOB_CLASS == S3BlobStore ]] && want_blobs="$want_blobs $PL/builds/1/log-index.fence $PL/builds/1/log.fence"
+check "2 the log is in log storage, next to the snapshot, under the job's identity" same "$(blob_names $A $PL/builds/1)" "$want_blobs"
 
 # ------------------------------------------------------------------ 3. interleaved history
 log "scenario 3: 10 builds on A and 10 on B of one job"
@@ -184,63 +190,77 @@ check "5 fresh A shows the test results" same "$(json $A '/job/fs/1/testReport/a
 check "5 fresh A shows the flow graph and step logs" same_graph $A $B pl 1
 
 # ------------------------------------------------------------------ 6. running builds
-log "scenario 6: a 60 s build on A as seen from B"
+log "scenario 6: a 60 s build of one controller as seen from the other"
+# the shared queue gives the build to whichever controller claims it first: OWN runs it, SEE watches it
+owner_of() { # <number>: sets OWN/SEE (ports), OWN_NAME and SEE_NAME once one controller lists the build running on the other
+  if has_placeholder $B /job/long "$1@jenkins-a"; then OWN=$A SEE=$B OWN_NAME=a SEE_NAME=b
+  elif has_placeholder $A /job/long "$1@jenkins-b"; then OWN=$B SEE=$A OWN_NAME=b SEE_NAME=a
+  else return 1; fi; }
 pipeline_job long 'echo "long ${params.ID} start"; for (int i = 1; i <= 12; i++) { echo "tick ${i}"; sleep 5 }; echo "long ${params.ID} end"'
 create_job $A long "$OUT_DIR/long.xml"
 eventually 15 exists $B /job/long
 post $A "/job/long/buildWithParameters?ID=1&delay=0sec" >/dev/null
 started=$SECONDS
-check "6 B shows a placeholder for #1 running on jenkins-a" eventually 20 has_placeholder $B /job/long 1@jenkins-a
-info "6 placeholder visible on B after $((SECONDS - started)) s"
-check "6 A shows no placeholder for its own build" no_placeholders $A /job/long
-check "6 B's read-only console shows the output so far" eventually 30 console_has $B /job/long/running-console/1 "tick 2"
-check "6 placeholder replaced by the full build on B when it completes" eventually 120 result_is $B /job/long/1 SUCCESS
-# until B applies the completed record, it forwards /job/long/1 to A (the placeholder names A): the check above can pass
-# through A just before B drops the placeholder
+check "6 the other controller shows a placeholder for #1 running on its owner" eventually 20 owner_of 1
+info "6 #1 runs on jenkins-${OWN_NAME:-?}; placeholder visible on jenkins-${SEE_NAME:-?} after $((SECONDS - started)) s"
+: "${OWN:=$A}" "${SEE:=$B}" "${OWN_NAME:=a}" "${SEE_NAME:=b}"
+check "6 the owner shows no placeholder for its own build" no_placeholders $OWN /job/long
+check "6 the other's console shows the output so far" eventually 30 console_has $SEE /job/long/1/consoleText "tick 2"
+check "6 placeholder replaced by the full build on the other when it completes" eventually 120 result_is $SEE /job/long/1 SUCCESS
+# until the other applies the completed record, it forwards /job/long/1 to the owner (the placeholder names it): the check
+# above can pass through the owner just before the other drops the placeholder
 done_at=$SECONDS
-check "6 no placeholder left on B (within 15 s)" eventually 15 no_placeholders $B /job/long
-info "6 placeholder gone from B $((SECONDS - done_at)) s after the build showed as completed"
-check "6 completed console identical on B" same_text $A $B /job/long/1/consoleText
-log "scenario 6b: SIGKILL A during a running build"
+check "6 no placeholder left on the other (within 15 s)" eventually 15 no_placeholders $SEE /job/long
+info "6 placeholder gone $((SECONDS - done_at)) s after the build showed as completed"
+check "6 completed console identical on both" same_text $A $B /job/long/1/consoleText
+log "scenario 6b: SIGKILL the owner during a running build"
 post $A "/job/long/buildWithParameters?ID=2&delay=0sec" >/dev/null
-eventually 30 has_placeholder $B /job/long 2@jenkins-a
-docker kill -s KILL ${P}jenkins-a-1 >/dev/null
+OWN= SEE=; eventually 30 owner_of 2
+: "${OWN:=$A}" "${SEE:=$B}" "${OWN_NAME:=a}" "${SEE_NAME:=b}"
+info "6b #2 runs on jenkins-$OWN_NAME"
+docker kill -s KILL ${P}jenkins-$OWN_NAME-1 >/dev/null
 killed=$SECONDS
-check "6 B removes the stale placeholder within 90 s" eventually 90 no_placeholders $B /job/long
+check "6 the other removes the stale placeholder within 90 s" eventually 90 no_placeholders $SEE /job/long
 info "6 stale placeholder removed $((SECONDS - killed)) s after the kill"
-et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-$OWN_NAME >/dev/null 2>&1; wait_up $OWN
 
 # ------------------------------------------------------------------ 7. rename
 log "scenario 7: rename il to il2 on B"
+il_uuid=$(item_uuid $A il)
 post $B "/job/il/confirmRename?newName=il2" >/dev/null
 check "7 A sees the rename" eventually 30 exists $A /job/il2
 check "7 history intact on A under the new name" eventually 30 numbers_are $A /job/il2 "$expected"
 check "7 history intact on B under the new name" numbers_are $B /job/il2 "$expected"
 check "7 console of an old build readable on A" console_has $A /job/il2/1/consoleText "interleaved"
 check "7 console of an old build readable on B" console_has $B /job/il2/2/consoleText "interleaved"
-check "7 nothing left under the old name in the blob store" same "$(blob_names $A jobs/il)" ""
+check "7 the job keeps its identity, so its blobs stay where they are" bash -c "[[ -n '$il_uuid' && \$(cd $VALIDATION_DIR && source lib.sh && item_uuid $A il2) == '$il_uuid' && \$(cd $VALIDATION_DIR && source lib.sh && blob_list $A items/$il_uuid/builds/1 | grep -c /log\$) == 1 ]]"
 post $A "/job/il2/buildWithParameters?ID=after-rename&delay=0sec" >/dev/null; wait_idle $A
 check "7 numbering continues after the rename (#21)" eventually 30 exists $B /job/il2/21
 
 # ------------------------------------------------------------------ 8. delete and recreate
 log "scenario 8: delete fs on A, recreate it on B"
+fs_uuid=$(item_uuid $A fs)
 post $A "/job/fs/doDelete" >/dev/null
 check "8 the job is gone on B" eventually 30 gone $B /job/fs
 create_job $B fs "$OUT_DIR/fs.xml"
 eventually 15 exists $A /job/fs
 post $B "/job/fs/build?delay=0sec" >/dev/null; wait_idle $B
-check "8 first build of the recreated job is numbered after the old ones (#2)" eventually 30 numbers_are $B /job/fs "2"
-check "8 no old build in its history on A" eventually 30 numbers_are $A /job/fs "2"
+# a job made again under the same name is a new item, with a new identity: it inherits nothing (as without a store)
+check "8 the recreated job has a new identity" bash -c "[[ -n '$fs_uuid' && \$(cd $VALIDATION_DIR && source lib.sh && item_uuid $B fs) != '$fs_uuid' ]]"
+check "8 its first build is #1, as for any new job" eventually 30 numbers_are $B /job/fs "1"
+check "8 no old build in its history on A" eventually 30 numbers_are $A /job/fs "1"
+check "8 the deleted job's entries are gone from the store" eventually 60 bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like '_items/$fs_uuid/%'\") == 0 ]]"
+check "8 and its blobs" eventually 60 bash -c "[[ -z \$(cd $VALIDATION_DIR && source lib.sh && blob_list $A items/$fs_uuid) ]]"
 
 # ------------------------------------------------------------------ 9. large data is not in Postgres
 log "scenario 9: what Postgres holds"
 check "9 no snapshots or logs in jenkins_store" same "$(psql_q "select count(*) from jenkins_store where key like '%/files.tgz' or key like '%/log' or key like '%/log-index'")" 0
 max=$(psql_q "select coalesce(max(length(content)), 0) from jenkins_store")
 check "9 largest jenkins_store value is under 1 MB ($max bytes)" test "$max" -lt 1048576
-blobs=$(groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").size()')
+blobs=$(blob_list $A items | wc -l | tr -d ' ')
 check "9 snapshots and logs are in the blob container ($blobs blobs)" test "${blobs:-0}" -gt 10
 psql_q "select key, length(content) from jenkins_store order by key" > "$OUT/jenkins_store.txt"
-groovy $A 'println jenkins.persistence.PersistenceStores.getBlobStore().list("jobs").join("\n")' > "$OUT/blobs.txt"
+blob_list $A items > "$OUT/blobs.txt"
 
 et1 logs jenkins-a > "$OUT/jenkins-a.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b.log" 2>&1
 r ""

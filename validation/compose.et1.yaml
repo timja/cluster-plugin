@@ -12,7 +12,7 @@
 name: et1
 
 x-jenkins: &jenkins
-  image: cnj/jenkins:dev
+  image: ${DEV_IMAGE:-cnj/jenkins:dev}
   depends_on:
     postgres: {condition: service_started}
     azurite: {condition: service_started}
