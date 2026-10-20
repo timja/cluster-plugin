@@ -45,7 +45,7 @@ kubernetesCloud:
   agentImage: jenkins/inbound-agent:latest-jdk21
 
 # Shared state. In-chart Postgres and Azurite are for development; point at managed services in production.
-# The stores' connection settings (Target 15: managed services). existingSecret names a Secret with
+# The stores' connection settings. existingSecret names a Secret with
 # CLUSTER_POSTGRES_URL, CLUSTER_POSTGRES_USER, CLUSTER_POSTGRES_PASSWORD, CLUSTER_AZURE_BLOB_CONNECTION_STRING and CLUSTER_AZURE_BLOB_CONTAINER, used instead
 # of postgres.url/user/password and blob.connectionString/container (which then need not be in values at all), and the
 # artifact manager's CNJ_BLOB_ACCOUNT_KEY (see artifactManager).
@@ -62,13 +62,13 @@ store:
   # process died (its session lock freed) is taken for gone after ~6 s whatever this says.
   memberTimeoutSeconds: 15
   # Share the files plugins write with their own file APIs in item and user directories (e.g. the avatar plugin's
-  # image), every minute (Target 15). Off by default: it scans every item and user directory.
+  # image), every minute. Off by default: it scans every item and user directory.
   sharePluginFiles: false
 postgres:
   inChart: true
   image: postgres:16
   url: ""                # e.g. jdbc:postgresql://db.example.com:5432/jenkins when not in-chart
-  # appended to the URL, e.g. sslmode=verify-full&sslrootcert=/etc/cluster-db/root.crt (mount it with extraVolumes)
+  # appended to the URL, e.g. sslmode=verify-full&sslrootcert=/etc/cluster-db/root.crt (the file must be mounted in the controller pods; the chart does not mount it)
   urlParameters: ""
   user: jenkins
   password: jenkins
