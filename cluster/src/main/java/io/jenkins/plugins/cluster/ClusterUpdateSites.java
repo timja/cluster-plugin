@@ -1,7 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
@@ -9,6 +7,10 @@ import hudson.model.UpdateSite;
 import hudson.security.ACL;
 import hudson.security.ACLContext;
 import hudson.util.PluginServletFilter;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -29,7 +31,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import jenkins.model.Jenkins;
-import jenkins.persistence.BlobStore;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
@@ -60,12 +61,18 @@ public final class ClusterUpdateSites implements Filter {
     static final int WATCH_SECONDS = 5;
     /** Modification times of the local files after the last {@link #sync}. */
     private static volatile Map<String, Long> seen = Map.of();
+
     private static long lastWarning;
     static final Pattern CHECK = Pattern.compile("^(?:/manage)?/pluginManager/checkUpdatesServer/?$");
     static final Pattern PAGES = Pattern.compile("^(?:/manage)?/(?:pluginManager|updateCenter|setupWizard)(?:/.*)?$");
 
     /** One shared file: when it was fetched (its modification time), its checksum and its archive. */
-    record Shared(long timestamp, String sha256, String blob, @CheckForNull String previousBlob, String by) {
+    record Shared(
+            long timestamp,
+            String sha256,
+            String blob,
+            @CheckForNull String previousBlob,
+            String by) {
         JSONObject toJson() {
             JSONObject o = new JSONObject();
             o.put("timestamp", timestamp);
@@ -79,15 +86,20 @@ public final class ClusterUpdateSites implements Filter {
         }
 
         static Shared fromJson(JSONObject o) {
-            return new Shared(o.getLong("timestamp"), o.getString("sha256"), o.getString("blob"),
-                    o.optString("previousBlob", null), o.optString("by", ""));
+            return new Shared(
+                    o.getLong("timestamp"),
+                    o.getString("sha256"),
+                    o.getString("blob"),
+                    o.optString("previousBlob", null),
+                    o.optString("by", ""));
         }
     }
 
     static Map<String, Shared> parse(@CheckForNull byte[] content) {
         Map<String, Shared> files = new TreeMap<>();
         if (content != null) {
-            JSONObject o = JSONObject.fromObject(new String(content, StandardCharsets.UTF_8)).optJSONObject("files");
+            JSONObject o = JSONObject.fromObject(new String(content, StandardCharsets.UTF_8))
+                    .optJSONObject("files");
             if (o != null) {
                 for (Object name : o.keySet()) {
                     files.put((String) name, Shared.fromJson(o.getJSONObject((String) name)));
@@ -106,7 +118,11 @@ public final class ClusterUpdateSites implements Filter {
     }
 
     /** What to do with one file, given the local copy's modification time (0 if absent) and the cluster's entry. */
-    enum Direction { NONE, PUBLISH, TAKE }
+    enum Direction {
+        NONE,
+        PUBLISH,
+        TAKE
+    }
 
     static Direction direction(long localModified, @CheckForNull Shared shared) {
         if (shared == null) {
@@ -123,6 +139,15 @@ public final class ClusterUpdateSites implements Filter {
         return !name.startsWith(".") && !name.endsWith(".tmp") && !name.endsWith(".bak") && !name.contains("atomic");
     }
 
+    /**
+     * Whether a name listed in the store can be taken into {@code updates/}: one file directly in it, which this
+     * controller would share too. Names come from other controllers, or from anything else writing to the store, so a
+     * name such as {@code ../plugins/x.jpi} must never become a path.
+     */
+    static boolean takeable(@CheckForNull String name) {
+        return Keys.isSafeName(name) && shareable(name);
+    }
+
     // ------------------------------------------------------------------ lifecycle
 
     @CheckForNull
@@ -131,7 +156,7 @@ public final class ClusterUpdateSites implements Filter {
     }
 
     static boolean active() {
-        return store() != null && PersistenceStores.getBlobStore() != null;
+        return store() != null && ClusterBlobStore.get() != null;
     }
 
     @Initializer(after = InitMilestone.PLUGINS_STARTED)
@@ -155,18 +180,25 @@ public final class ClusterUpdateSites implements Filter {
             return;
         }
         store.subscribe(e -> {
-            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN && KEY.equals(e.key())
+            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN
+                    && KEY.equals(e.key())
                     && !store.getOrigin().equals(e.origin())) {
                 Timer.get().submit(() -> sync(false));
             }
         });
-        // shares what this controller's DailyCheck downloaded within seconds, so a controller starting meanwhile takes it
+        // shares what this controller's DailyCheck downloaded within seconds, so a controller starting meanwhile takes
+        // it
         // instead of fetching too; looking at modification times costs nothing, the store is read only when one changed
-        Timer.get().scheduleWithFixedDelay(() -> {
-            if (!localTimes().equals(seen)) {
-                sync(true);
-            }
-        }, WATCH_SECONDS, WATCH_SECONDS, TimeUnit.SECONDS);
+        Timer.get()
+                .scheduleWithFixedDelay(
+                        () -> {
+                            if (!localTimes().equals(seen)) {
+                                sync(true);
+                            }
+                        },
+                        WATCH_SECONDS,
+                        WATCH_SECONDS,
+                        TimeUnit.SECONDS);
         Timer.get().scheduleWithFixedDelay(() -> sync(true), PERIOD_SECONDS, PERIOD_SECONDS, TimeUnit.SECONDS);
     }
 
@@ -199,6 +231,10 @@ public final class ClusterUpdateSites implements Filter {
             PersistenceStore.Entry current = store.read(KEY);
             Map<String, Shared> files = parse(current == null ? null : current.content());
             for (Map.Entry<String, Shared> f : files.entrySet()) {
+                if (!takeable(f.getKey())) {
+                    warnOnce("Ignoring the cluster's update-site file " + f.getKey() + ": not a file name in updates/");
+                    continue;
+                }
                 File local = new File(dir(), f.getKey());
                 if (direction(local.lastModified(), f.getValue()) == Direction.TAKE) {
                     take(f.getKey(), f.getValue(), local);
@@ -208,7 +244,8 @@ public final class ClusterUpdateSites implements Filter {
                 File[] locals = dir().listFiles(File::isFile);
                 if (locals != null) {
                     for (File local : locals) {
-                        if (shareable(local.getName()) && direction(local.lastModified(), files.get(local.getName())) == Direction.PUBLISH) {
+                        if (shareable(local.getName())
+                                && direction(local.lastModified(), files.get(local.getName())) == Direction.PUBLISH) {
                             publish(store, local);
                         }
                     }
@@ -216,28 +253,51 @@ public final class ClusterUpdateSites implements Filter {
                 seen = localTimes();
             }
         } catch (IOException | RuntimeException e) {
-            // also called on every plugin manager request: say so once in a while, not on each (e.g. while the store is down)
-            long now = System.currentTimeMillis();
-            boolean warn = now - lastWarning > TimeUnit.MINUTES.toMillis(5);
-            if (warn) {
-                lastWarning = now;
-            }
-            LOGGER.log(warn ? Level.WARNING : Level.FINE, "Could not share update-site metadata with the cluster", e);
+            warnOnce("Could not share update-site metadata with the cluster", e);
         }
     }
 
+    private static void warnOnce(String message) {
+        warnOnce(message, null);
+    }
+
+    /** Also called on every plugin manager request: says so once in a while, not on each (e.g. while the store is down). */
+    private static void warnOnce(String message, @CheckForNull Throwable e) {
+        long now = System.currentTimeMillis();
+        boolean warn = now - lastWarning > TimeUnit.MINUTES.toMillis(5);
+        if (warn) {
+            lastWarning = now;
+        }
+        LOGGER.log(warn ? Level.WARNING : Level.FINE, message, e);
+    }
+
     private static void take(String name, Shared shared, File local) throws IOException {
-        Files.createDirectories(local.getParentFile().toPath());
+        File dir = dir();
+        if (!takeable(name)
+                || !local.toPath().normalize().getParent().equals(dir.toPath().normalize())
+                || Files.isSymbolicLink(local.toPath())) {
+            warnOnce("Not taking the cluster's " + name + ": " + local + " is not a plain file in " + dir);
+            return;
+        }
+        Files.createDirectories(dir.toPath());
         if (!local.exists() || !shared.sha256().equals(ClusterPlugins.sha256(local))) {
             File tmp = new File(local.getParentFile(), "." + name + ".cluster.tmp");
-            try (InputStream in = PersistenceStores.getBlobStore().get(shared.blob())) {
+            ClusterBlobStore blobs = ClusterBlobStore.get();
+            if (blobs == null) {
+                throw new IOException("No cluster blob store to take the cluster's " + name + " from");
+            }
+            try (InputStream in = blobs.get(shared.blob())) {
+                if (in == null) {
+                    throw new IOException("The cluster's " + name + " (" + shared.blob() + ") is missing");
+                }
                 Files.copy(in, tmp.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
             if (!shared.sha256().equals(ClusterPlugins.sha256(tmp))) {
                 Files.deleteIfExists(tmp.toPath());
                 throw new IOException("Checksum mismatch for the cluster's " + name);
             }
-            Files.move(tmp.toPath(), local.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            Files.move(
+                    tmp.toPath(), local.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             LOGGER.info(() -> "Took " + name + " from the cluster (downloaded by " + shared.by() + ")");
         }
         // the fetch time: neither due again here, nor newer than the cluster's
@@ -261,7 +321,7 @@ public final class ClusterUpdateSites implements Filter {
         String name = local.getName();
         long timestamp = local.lastModified();
         String sha256 = ClusterPlugins.sha256(local);
-        BlobStore blobs = PersistenceStores.getBlobStore();
+        ClusterBlobStore blobs = ClusterBlobStore.get();
         String blob = BLOBS + name + "/" + sha256;
         boolean uploaded = false;
         for (int attempt = 0; ; attempt++) {
@@ -280,7 +340,8 @@ public final class ClusterUpdateSites implements Filter {
             }
             Shared next = sameContent
                     ? new Shared(timestamp, sha256, previous.blob(), previous.previousBlob(), ClusterMember.NAME)
-                    : new Shared(timestamp, sha256, blob, previous == null ? null : previous.blob(), ClusterMember.NAME);
+                    : new Shared(
+                            timestamp, sha256, blob, previous == null ? null : previous.blob(), ClusterMember.NAME);
             files.put(name, next);
             try {
                 store.write(KEY, toBytes(files), current == null ? PersistenceStore.ABSENT : current.version());
@@ -290,11 +351,15 @@ public final class ClusterUpdateSites implements Filter {
                 }
                 continue;
             }
-            LOGGER.info(() -> "Shared " + name + " with the cluster" + (sameContent ? " (unchanged, newer check)" : ""));
+            LOGGER.info(
+                    () -> "Shared " + name + " with the cluster" + (sameContent ? " (unchanged, newer check)" : ""));
             reload(name); // report the file's time, as the others do, rather than when the download started
             // keep the archive being replaced, which others may still be downloading; drop the one before it
-            if (!sameContent && previous != null && previous.previousBlob() != null
-                    && !previous.previousBlob().equals(blob) && !previous.previousBlob().equals(previous.blob())) {
+            if (!sameContent
+                    && previous != null
+                    && previous.previousBlob() != null
+                    && !previous.previousBlob().equals(blob)
+                    && !previous.previousBlob().equals(previous.blob())) {
                 try {
                     blobs.delete(previous.previousBlob());
                 } catch (IOException e) {

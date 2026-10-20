@@ -28,7 +28,7 @@ import org.jenkinsci.Symbol;
 import org.kohsuke.stapler.DataBoundConstructor;
 
 /**
- * Fingerprints in the persistence store (Target 8), so that every controller sees every usage, whichever controller
+ * Fingerprints in the persistence store, so that every controller sees every usage, whichever controller
  * recorded it, and they survive the controllers.
  *
  * <p>Each fingerprint is one entry, {@code fingerprints/<md5>.xml}, in the XML {@link FileFingerprintStorage} uses.
@@ -49,9 +49,11 @@ public final class ClusterFingerprintStorage extends FingerprintStorage {
      * What each fingerprint object in memory was last read or written as: the base of its next merge. Per object, not
      * per id: Jenkins may hold several objects for one fingerprint (its cache is weak), each with its own history.
      */
-    // static: not part of the saved configuration (a WeakHashMap cannot be saved), and kept when Configure System binds a
+    // static: not part of the saved configuration (a WeakHashMap cannot be saved), and kept when Configure System binds
+    // a
     // new instance of this storage
-    private static final Map<Fingerprint, Base> bases = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static final Map<Fingerprint, Base> bases =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     private record Base(long version, Map<String, String> usages) {}
 

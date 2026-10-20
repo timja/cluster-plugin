@@ -1,12 +1,12 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import hudson.Extension;
 import hudson.model.AsyncPeriodicWork;
 import hudson.model.Item;
 import hudson.model.PeriodicWork;
 import hudson.model.TaskListener;
 import hudson.model.listeners.ItemListener;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -15,7 +15,7 @@ import jenkins.persistence.PersistenceStores;
 import jenkins.util.PeriodicWorkCoordinator;
 
 /**
- * Housekeeping for the shared build queue and cluster-singleton periodic work (Target 5).
+ * Housekeeping for the shared build queue and cluster-singleton periodic work.
  */
 public final class SharedQueueMaintenance {
 
@@ -46,7 +46,8 @@ public final class SharedQueueMaintenance {
                 }
                 // started by a controller that died before the build's placeholder was written: the build never began
                 for (ClusterStore.StartedItem item : store.startedByGone()) {
-                    hudson.model.Job<?, ?> job = jenkins.model.Jenkins.get().getItemByFullName(item.task(), hudson.model.Job.class);
+                    hudson.model.Job<?, ?> job =
+                            jenkins.model.Jenkins.get().getItemByFullName(item.task(), hudson.model.Job.class);
                     String jobKey = job == null ? null : PersistenceStores.keyFor(job.getRootDir());
                     if (jobKey == null) {
                         continue;
@@ -54,7 +55,8 @@ public final class SharedQueueMaintenance {
                     int number = item.buildNumber();
                     if (store.read(jobKey + "/running/" + number + ".xml") == null
                             && store.read(jobKey + "/builds/" + number + "/build.xml") == null) {
-                        LOGGER.info(() -> item.task() + " #" + number + " was started by a gone controller and never began; queued again");
+                        LOGGER.info(() -> item.task() + " #" + number
+                                + " was started by a gone controller and never began; queued again");
                         store.requeueStarted(item.id());
                     }
                 }

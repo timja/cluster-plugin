@@ -10,16 +10,23 @@ import org.junit.jupiter.api.Test;
 
 class ClusterUpdateSitesTest {
 
-    private static final ClusterUpdateSites.Shared AT_100 = new ClusterUpdateSites.Shared(100, "abc", "cluster-updates/default.json/abc", null, "cnj-0");
+    private static final ClusterUpdateSites.Shared AT_100 =
+            new ClusterUpdateSites.Shared(100, "abc", "cluster-updates/default.json/abc", null, "cnj-0");
 
     @Test
     void newerWinsEitherWay() {
-        assertEquals(ClusterUpdateSites.Direction.PUBLISH, ClusterUpdateSites.direction(50, null), "nothing shared yet");
+        assertEquals(
+                ClusterUpdateSites.Direction.PUBLISH, ClusterUpdateSites.direction(50, null), "nothing shared yet");
         assertEquals(ClusterUpdateSites.Direction.NONE, ClusterUpdateSites.direction(0, null), "nothing anywhere");
         assertEquals(ClusterUpdateSites.Direction.TAKE, ClusterUpdateSites.direction(0, AT_100), "a fresh home");
-        assertEquals(ClusterUpdateSites.Direction.TAKE, ClusterUpdateSites.direction(99, AT_100), "checked elsewhere since");
-        assertEquals(ClusterUpdateSites.Direction.NONE, ClusterUpdateSites.direction(100, AT_100), "taken already (same modification time)");
-        assertEquals(ClusterUpdateSites.Direction.PUBLISH, ClusterUpdateSites.direction(101, AT_100), "checked here since");
+        assertEquals(
+                ClusterUpdateSites.Direction.TAKE, ClusterUpdateSites.direction(99, AT_100), "checked elsewhere since");
+        assertEquals(
+                ClusterUpdateSites.Direction.NONE,
+                ClusterUpdateSites.direction(100, AT_100),
+                "taken already (same modification time)");
+        assertEquals(
+                ClusterUpdateSites.Direction.PUBLISH, ClusterUpdateSites.direction(101, AT_100), "checked here since");
     }
 
     @Test
@@ -42,10 +49,18 @@ class ClusterUpdateSitesTest {
 
     @Test
     void requestsThatSeeOrRefreshTheData() {
-        assertTrue(ClusterUpdateSites.CHECK.matcher("/manage/pluginManager/checkUpdatesServer").matches());
-        assertTrue(ClusterUpdateSites.CHECK.matcher("/pluginManager/checkUpdatesServer/").matches());
-        assertTrue(ClusterUpdateSites.PAGES.matcher("/manage/pluginManager/available").matches());
-        assertTrue(ClusterUpdateSites.PAGES.matcher("/manage/pluginManager/pluginsSearch").matches());
+        assertTrue(ClusterUpdateSites.CHECK
+                .matcher("/manage/pluginManager/checkUpdatesServer")
+                .matches());
+        assertTrue(ClusterUpdateSites.CHECK
+                .matcher("/pluginManager/checkUpdatesServer/")
+                .matches());
+        assertTrue(ClusterUpdateSites.PAGES
+                .matcher("/manage/pluginManager/available")
+                .matches());
+        assertTrue(ClusterUpdateSites.PAGES
+                .matcher("/manage/pluginManager/pluginsSearch")
+                .matches());
         assertTrue(ClusterUpdateSites.PAGES.matcher("/updateCenter/api/json").matches());
         assertFalse(ClusterUpdateSites.PAGES.matcher("/job/pluginManager").matches());
         assertFalse(ClusterUpdateSites.PAGES.matcher("/manage/pluginManagerX").matches());

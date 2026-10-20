@@ -28,7 +28,8 @@ import software.amazon.awssdk.services.s3.model.S3Object;
 public class S3BlobStore implements ClusterBlobStore {
 
     /** Objects larger than this are uploaded in parts (a single PUT takes at most 5 GiB). */
-    static final long MULTIPART_THRESHOLD = Long.getLong(S3BlobStore.class.getName() + ".multipartThreshold", 64L * 1024 * 1024);
+    static final long MULTIPART_THRESHOLD =
+            Long.getLong(S3BlobStore.class.getName() + ".multipartThreshold", 64L * 1024 * 1024);
 
     static final int PART_SIZE = Integer.getInteger(S3BlobStore.class.getName() + ".partSize", 16 * 1024 * 1024);
 
@@ -46,7 +47,12 @@ public class S3BlobStore implements ClusterBlobStore {
         this(s3, bucket, prefix, MULTIPART_THRESHOLD, PART_SIZE);
     }
 
-    S3BlobStore(@NonNull S3Client s3, @NonNull String bucket, @NonNull String prefix, long multipartThreshold, int partSize) {
+    S3BlobStore(
+            @NonNull S3Client s3,
+            @NonNull String bucket,
+            @NonNull String prefix,
+            long multipartThreshold,
+            int partSize) {
         this.s3 = s3;
         this.bucket = bucket;
         this.prefix = prefix;
@@ -80,7 +86,8 @@ public class S3BlobStore implements ClusterBlobStore {
     }
 
     private void putInParts(String key, InputStream content, long length) throws IOException {
-        String upload = s3.createMultipartUpload(b -> b.bucket(bucket).key(object(key))).uploadId();
+        String upload =
+                s3.createMultipartUpload(b -> b.bucket(bucket).key(object(key))).uploadId();
         try {
             List<CompletedPart> parts = new ArrayList<>();
             byte[] buf = new byte[partSize];
@@ -91,13 +98,21 @@ public class S3BlobStore implements ClusterBlobStore {
                     throw new IOException("Stream of " + key + " ended at " + sent + " of " + length + " bytes");
                 }
                 int part = number;
-                String etag = s3.uploadPart(b -> b.bucket(bucket).key(object(key)).uploadId(upload).partNumber(part),
-                        RequestBody.fromBytes(java.util.Arrays.copyOf(buf, n))).eTag();
+                String etag = s3.uploadPart(
+                                b -> b.bucket(bucket)
+                                        .key(object(key))
+                                        .uploadId(upload)
+                                        .partNumber(part),
+                                RequestBody.fromBytes(java.util.Arrays.copyOf(buf, n)))
+                        .eTag();
                 parts.add(CompletedPart.builder().partNumber(part).eTag(etag).build());
                 sent += n;
             }
-            s3.completeMultipartUpload(b -> b.bucket(bucket).key(object(key)).uploadId(upload)
-                    .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build()));
+            s3.completeMultipartUpload(b -> b.bucket(bucket)
+                    .key(object(key))
+                    .uploadId(upload)
+                    .multipartUpload(
+                            CompletedMultipartUpload.builder().parts(parts).build()));
         } catch (IOException | SdkException e) {
             try {
                 s3.abortMultipartUpload(b -> b.bucket(bucket).key(object(key)).uploadId(upload));
@@ -149,7 +164,8 @@ public class S3BlobStore implements ClusterBlobStore {
     public List<String> list(@NonNull String key) throws IOException {
         List<String> keys = new ArrayList<>();
         try {
-            for (S3Object o : s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(object(key))).contents()) {
+            for (S3Object o : s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(object(key)))
+                    .contents()) {
                 String k = o.key().substring(prefix.length());
                 if (k.equals(key) || k.startsWith(key + "/")) {
                     keys.add(k);
@@ -166,7 +182,8 @@ public class S3BlobStore implements ClusterBlobStore {
     public java.util.Map<String, Long> sizes(@NonNull String key) throws IOException {
         java.util.Map<String, Long> sizes = new java.util.HashMap<>();
         try {
-            for (S3Object o : s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(object(key))).contents()) {
+            for (S3Object o : s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(object(key)))
+                    .contents()) {
                 String k = o.key().substring(prefix.length());
                 if (k.equals(key) || k.startsWith(key + "/")) {
                     sizes.put(k, o.size());
@@ -186,34 +203,11 @@ public class S3BlobStore implements ClusterBlobStore {
                 List<ObjectIdentifier> batch = keys.subList(i, Math.min(keys.size(), i + 1000)).stream()
                         .map(k -> ObjectIdentifier.builder().key(object(k)).build())
                         .toList();
-                s3.deleteObjects(b -> b.bucket(bucket).delete(Delete.builder().objects(batch).quiet(true).build()));
+                s3.deleteObjects(b -> b.bucket(bucket)
+                        .delete(Delete.builder().objects(batch).quiet(true).build()));
             }
         } catch (SdkException e) {
             throw wrap("delete", key, e);
-        }
-    }
-
-    @Override
-    public void move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
-        // copy then delete each object, so a repeated move after a partial failure finishes the job
-        for (String key : list(fromPrefix)) {
-            String target = toPrefix + key.substring(fromPrefix.length());
-            try {
-                if (size(key) > multipartThreshold) {
-                    try (InputStream in = get(key)) { // a single copy takes at most 5 GiB
-                        if (in != null) {
-                            putInParts(target, in, size(key));
-                        }
-                    }
-                } else {
-                    s3.copyObject(b -> b.sourceBucket(bucket).sourceKey(object(key)).destinationBucket(bucket).destinationKey(object(target)));
-                }
-                s3.deleteObject(b -> b.bucket(bucket).key(object(key)));
-            } catch (SdkException e) {
-                if (!notFound(e)) {
-                    throw wrap("move", key, e);
-                }
-            }
         }
     }
 

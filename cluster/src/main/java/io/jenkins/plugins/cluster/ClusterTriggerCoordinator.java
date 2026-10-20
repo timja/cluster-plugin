@@ -1,7 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
-import io.jenkins.plugins.cluster.spi.Membership;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
@@ -9,6 +7,8 @@ import hudson.ExtensionList;
 import hudson.init.InitMilestone;
 import hudson.model.PeriodicWork;
 import hudson.triggers.Trigger;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Membership;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -56,10 +56,12 @@ public class ClusterTriggerCoordinator implements TriggerCoordinator {
      * How long a tick left to another controller is remembered, to be run here if that controller turns out to be gone
      * ({@code -Dio.jenkins.plugins.cluster.ClusterTriggerCoordinator.catchUpMinutes}; 0 turns catching up off).
      */
-    static final long CATCH_UP_MINUTES = Long.getLong(ClusterTriggerCoordinator.class.getName() + ".catchUpMinutes", 15);
+    static final long CATCH_UP_MINUTES =
+            Long.getLong(ClusterTriggerCoordinator.class.getName() + ".catchUpMinutes", 15);
 
     /** Most ticks remembered at once; beyond that, ticks left to others are not caught up. */
-    static final int MAX_REMEMBERED = Integer.getInteger(ClusterTriggerCoordinator.class.getName() + ".maxRememberedTicks", 200_000);
+    static final int MAX_REMEMBERED =
+            Integer.getInteger(ClusterTriggerCoordinator.class.getName() + ".maxRememberedTicks", 200_000);
 
     private Set<String> members;
     private long membersFetched;
@@ -74,7 +76,8 @@ public class ClusterTriggerCoordinator implements TriggerCoordinator {
         if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return true;
         }
-        return shouldRun(store, item.getFullName(), trigger.getDescriptor().getId(), tick.getTimeInMillis() / 60_000, trigger);
+        return shouldRun(
+                store, item.getFullName(), trigger.getDescriptor().getId(), tick.getTimeInMillis() / 60_000, trigger);
     }
 
     boolean shouldRun(ClusterStore store, String fullName, String id, long minute, Object trigger) {
@@ -121,8 +124,12 @@ public class ClusterTriggerCoordinator implements TriggerCoordinator {
      * every live one.
      */
     @NonNull
-    static Set<String> readyMembers(@NonNull List<Membership.Member> all, @NonNull String self, boolean selfReady,
-            @NonNull IOSupplier<Set<String>> alive) throws IOException {
+    static Set<String> readyMembers(
+            @NonNull List<Membership.Member> all,
+            @NonNull String self,
+            boolean selfReady,
+            @NonNull IOSupplier<Set<String>> alive)
+            throws IOException {
         Set<String> ready = new TreeSet<>();
         for (Membership.Member m : all) {
             if (m.alive() && MemberStatus.isReady(m.info())) {
@@ -150,7 +157,10 @@ public class ClusterTriggerCoordinator implements TriggerCoordinator {
         catchUp(store, nowMinute, ClusterTriggerCoordinator::triggerOf);
     }
 
-    void catchUp(@NonNull ClusterStore store, long nowMinute, @NonNull java.util.function.BiFunction<String, String, Trigger<?>> triggers)
+    void catchUp(
+            @NonNull ClusterStore store,
+            long nowMinute,
+            @NonNull java.util.function.BiFunction<String, String, Trigger<?>> triggers)
             throws IOException {
         Set<String> ready = members(store);
         String self = store.getOrigin();
@@ -171,7 +181,8 @@ public class ClusterTriggerCoordinator implements TriggerCoordinator {
             }
             missed.handledHere(due.item(), due.trigger(), claimed.get(claimed.size() - 1));
             LOGGER.info(() -> "Running " + due.trigger() + " of " + due.item() + " for " + claimed.size()
-                    + " tick(s) its owner missed (gone before it ran them), the last at " + new java.util.Date(claimed.get(claimed.size() - 1) * 60_000));
+                    + " tick(s) its owner missed (gone before it ran them), the last at "
+                    + new java.util.Date(claimed.get(claimed.size() - 1) * 60_000));
             try {
                 trigger.run();
             } catch (RuntimeException e) {
@@ -247,7 +258,8 @@ public class ClusterTriggerCoordinator implements TriggerCoordinator {
         if (!(PersistenceStores.get() instanceof ClusterStore store)) {
             return null;
         }
-        return ownerOf(topLevel(fullName), readyMembers(store.members(), store.getOrigin(), readyHere(), store::aliveMembers));
+        return ownerOf(
+                topLevel(fullName), readyMembers(store.members(), store.getOrigin(), readyHere(), store::aliveMembers));
     }
 
     static String topLevel(String fullName) {

@@ -9,7 +9,7 @@ import jenkins.persistence.PersistenceStore;
 import jenkins.util.SystemProperties;
 
 /**
- * Refuses to start a controller that does not have the cluster's key material (Target 15).
+ * Refuses to start a controller that does not have the cluster's key material.
  *
  * <p>Every controller of a cluster must start with the same seeded keys ({@code secret.key}, {@code secrets/}): the
  * store holds secrets encrypted with them. A controller started without them would create keys of its own, could not
@@ -37,8 +37,12 @@ public final class KeyCheck {
         PersistenceStore.Entry e = store.read(KEY);
         if (e == null) {
             try {
-                store.write(KEY, Secret.fromString(VALUE).getEncryptedValue().getBytes(StandardCharsets.UTF_8), PersistenceStore.ABSENT);
-                LOGGER.info("Recorded the cluster's key check: controllers started without this controller's keys will refuse to start");
+                store.write(
+                        KEY,
+                        Secret.fromString(VALUE).getEncryptedValue().getBytes(StandardCharsets.UTF_8),
+                        PersistenceStore.ABSENT);
+                LOGGER.info(
+                        "Recorded the cluster's key check: controllers started without this controller's keys will refuse to start");
             } catch (ConflictException raced) {
                 verify(store); // another controller recorded it first: check against theirs
             }
@@ -55,10 +59,17 @@ public final class KeyCheck {
                     // best effort: failing to start is what matters
                 }
             }
-            throw new IllegalStateException("This controller does not have the key material of the cluster it shares a store with:"
-                    + " it cannot decrypt the cluster's secrets, and would write secrets the others cannot read. Start it with"
-                    + " the cluster's seeded keys (secret.key, secrets/; the chart's seed Secret), or set"
-                    + " -Dio.jenkins.plugins.cluster.KeyCheck.skip=true to start anyway.");
+            if (HomeImporter.IMPORT) {
+                throw new IllegalStateException("Not importing this home: its key material (secret.key, secrets/) is"
+                        + " not that of the cluster whose store it was asked to import into. The secrets it holds would"
+                        + " be encrypted with keys the cluster's controllers do not have. Import it into an empty store, or"
+                        + " start it with the cluster's seeded keys.");
+            }
+            throw new IllegalStateException(
+                    "This controller does not have the key material of the cluster it shares a store with:"
+                            + " it cannot decrypt the cluster's secrets, and would write secrets the others cannot read. Start it with"
+                            + " the cluster's seeded keys (secret.key, secrets/; the chart's seed Secret), or set"
+                            + " -Dio.jenkins.plugins.cluster.KeyCheck.skip=true to start anyway.");
         }
     }
 }

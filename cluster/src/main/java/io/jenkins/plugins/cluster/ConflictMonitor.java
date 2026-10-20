@@ -1,8 +1,8 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import hudson.Extension;
 import hudson.model.AdministrativeMonitor;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;

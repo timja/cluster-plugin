@@ -1,12 +1,12 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.Membership;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.jenkins.plugins.cluster.spi.Membership;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -14,19 +14,40 @@ import org.junit.jupiter.api.Test;
 class UpdateCenterRoutingTest {
 
     private static Membership.Member member(String name, boolean alive, MemberStatus.Info info) {
-        return new Membership.Member("o-" + name, name, "http://" + name + ":8080/", 0, 0, alive, "v", 1, null,
+        return new Membership.Member(
+                "o-" + name,
+                name,
+                "http://" + name + ":8080/",
+                0,
+                0,
+                alive,
+                "v",
+                1,
+                null,
                 info == null ? null : info.toJson());
     }
 
     @Test
     void progressPagesAreRecognized() {
-        for (String p : List.of("/manage/pluginManager/updates/", "/pluginManager/updates", "/manage/pluginManager/updates/body",
-                "/updateCenter/", "/updateCenter/body", "/updateCenter/installStatus", "/updateCenter/incompleteInstallStatus",
-                "/updateCenter/api/json", "/manage/pluginManager/updates/api/json")) {
+        for (String p : List.of(
+                "/manage/pluginManager/updates/",
+                "/pluginManager/updates",
+                "/manage/pluginManager/updates/body",
+                "/updateCenter/",
+                "/updateCenter/body",
+                "/updateCenter/installStatus",
+                "/updateCenter/incompleteInstallStatus",
+                "/updateCenter/api/json",
+                "/manage/pluginManager/updates/api/json")) {
             assertTrue(UpdateCenterRouting.PROGRESS.matcher(p).matches(), p);
         }
-        for (String p : List.of("/manage/pluginManager/available", "/manage/pluginManager/install", "/updateCenter/connectionStatus",
-                "/updateCenter/safeRestart", "/job/updateCenter/", "/manage/pluginManager/updatesX")) {
+        for (String p : List.of(
+                "/manage/pluginManager/available",
+                "/manage/pluginManager/install",
+                "/updateCenter/connectionStatus",
+                "/updateCenter/safeRestart",
+                "/job/updateCenter/",
+                "/manage/pluginManager/updatesX")) {
             assertFalse(UpdateCenterRouting.PROGRESS.matcher(p).matches(), p);
         }
     }
@@ -36,12 +57,22 @@ class UpdateCenterRoutingTest {
         MemberStatus.Info idle = new MemberStatus.Info(0, 2, Map.of(), 0, 0);
         MemberStatus.Info installing = new MemberStatus.Info(0, 2, Map.of(), 2, 1000);
         MemberStatus.Info installingLater = new MemberStatus.Info(0, 2, Map.of(), 1, 2000);
-        List<Membership.Member> members = List.of(member("a", true, idle), member("b", true, installing), member("c", true, installingLater));
-        assertEquals("a", UpdateCenterRouting.target(members, "a").name(), "the cookie wins, even before its heartbeat shows the install");
-        assertEquals("c", UpdateCenterRouting.target(members, null).name(), "no cookie: the most recent install running");
+        List<Membership.Member> members =
+                List.of(member("a", true, idle), member("b", true, installing), member("c", true, installingLater));
+        assertEquals(
+                "a",
+                UpdateCenterRouting.target(members, "a").name(),
+                "the cookie wins, even before its heartbeat shows the install");
+        assertEquals(
+                "c", UpdateCenterRouting.target(members, null).name(), "no cookie: the most recent install running");
         assertEquals("c", UpdateCenterRouting.target(members, "gone").name(), "a controller not alive any more");
-        assertEquals("c", UpdateCenterRouting.target(List.of(member("a", false, idle), member("c", true, installingLater)), "a").name());
-        assertNull(UpdateCenterRouting.target(List.of(member("a", true, idle), member("b", true, null)), null), "nothing running: answer here");
+        assertEquals(
+                "c",
+                UpdateCenterRouting.target(List.of(member("a", false, idle), member("c", true, installingLater)), "a")
+                        .name());
+        assertNull(
+                UpdateCenterRouting.target(List.of(member("a", true, idle), member("b", true, null)), null),
+                "nothing running: answer here");
     }
 
     @Test

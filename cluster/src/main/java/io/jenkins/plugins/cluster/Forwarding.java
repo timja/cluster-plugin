@@ -1,7 +1,8 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
+import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.ByteArrayOutputStream;
@@ -30,7 +31,7 @@ import jenkins.security.HMACConfidentialKey;
 
 /**
  * Relays a request to another controller's internal URL and its answer back, with the browser's cookies and credentials,
- * so that the other controller authenticates the user itself (Target 6 sessions and crumbs work on every controller).
+ * so that the other controller authenticates the user itself (sessions and crumbs work on every controller).
  */
 final class Forwarding {
 
@@ -38,8 +39,10 @@ final class Forwarding {
 
     /**
      * Set on forwarded requests, and on their answers (to the owner's name). On a request it is
-     * {@code <forwarding controller's name>;<time>;<MAC>}, authenticated with a key every controller of the cluster
-     * shares ({@link #KEY}): a client cannot set it, so it cannot stop its request from being forwarded to the owner.
+     * {@code <forwarding controller's name>;<time>;<MAC>}, the MAC covering the name, the time and the request it was
+     * set on (method, path and query), with a key every controller of the cluster shares ({@link #KEY}): a client cannot
+     * set it, so it cannot stop its request from being forwarded to the owner; nor can one seen on the network be used
+     * again for another request, or for long.
      * The client's own header of that name is never passed on.
      */
     static final String FORWARDED = "X-Jenkins-Cluster-Forwarded-From";
@@ -48,7 +51,7 @@ final class Forwarding {
     private static final HMACConfidentialKey KEY = new HMACConfidentialKey(Forwarding.class, "forwardedFrom", 32);
 
     /** How old a forwarded request's header may be (clocks differ a little; a hop takes milliseconds). */
-    static final long MAX_AGE_MILLIS = Long.getLong(Forwarding.class.getName() + ".maxAgeSeconds", 300) * 1000;
+    static final long MAX_AGE_MILLIS = Long.getLong(Forwarding.class.getName() + ".maxAgeSeconds", 30) * 1000;
 
     private static final Set<String> HOP_BY_HOP = Set.of(
             "connection",
@@ -79,6 +82,62 @@ final class Forwarding {
 
     private Forwarding() {}
 
+    /** Internal URLs already warned about. */
+    private static final Set<String> warned = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Forwarded requests carry the user's cookies and credentials: warns (once per URL) when they would travel over plain
+     * HTTP to a remote host, one neither on a private network nor named as part of the cluster's. Not refused: plain
+     * HTTP within a local network is fine.
+     */
+    static void warnIfExposed(@NonNull String url) {
+        if (isExposed(url) && warned.add(url)) {
+            LOGGER.warning(
+                    () -> "Requests forwarded to the controller at " + url + " carry users' cookies and"
+                            + " credentials over plain HTTP, and its host is neither on a private network (a private or"
+                            + " link-local address) nor a name of the cluster's own (a Kubernetes service, a single-label name)."
+                            + " A controller reached over another network should be given an https JENKINS_CLUSTER_INTERNAL_URL.");
+        }
+    }
+
+    /** Whether a URL is plain HTTP to a host that is neither private nor cluster-local (see {@link #warnIfExposed}). */
+    static boolean isExposed(@NonNull String url) {
+        URI uri;
+        try {
+            uri = URI.create(url);
+        } catch (IllegalArgumentException e) {
+            return false; // not a URL anything is forwarded to
+        }
+        String host = uri.getHost();
+        if (!"http".equalsIgnoreCase(uri.getScheme()) || host == null) {
+            return false;
+        }
+        host = host.toLowerCase(Locale.ROOT).replaceAll("\\.$", "");
+        return !(host.equals("localhost")
+                || host.indexOf('.') < 0 && host.indexOf(':') < 0 // a single-label name
+                || host.endsWith(".svc")
+                || host.endsWith(".cluster.local")
+                || isPrivateAddress(host));
+    }
+
+    /** Whether a host is an IP address literal of a private, link-local or loopback range (no name is looked up). */
+    static boolean isPrivateAddress(@NonNull String host) {
+        boolean v6 = host.startsWith("[") && host.endsWith("]");
+        if (!v6 && !host.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}")) {
+            return false;
+        }
+        try {
+            java.net.InetAddress a = java.net.InetAddress.getByName(v6 ? host.substring(1, host.length() - 1) : host);
+            byte[] b = a.getAddress();
+            return a.isSiteLocalAddress() // 10/8, 172.16/12, 192.168/16
+                    || a.isLinkLocalAddress()
+                    || a.isLoopbackAddress()
+                    || b.length == 16 && (b[0] & 0xfe) == 0xfc; // unique local fc00::/7
+        } catch (java.net.UnknownHostException e) {
+            return false;
+        }
+    }
+
     /** Whether this request was itself forwarded by another controller (never forward it again). */
     static boolean wasForwarded(@NonNull HttpServletRequest req) {
         java.util.Enumeration<String> values = req.getHeaders(FORWARDED);
@@ -86,29 +145,52 @@ final class Forwarding {
             return false;
         }
         long now = System.currentTimeMillis();
+        String request = requestOf(req);
         for (String v : Collections.list(values)) {
-            if (isAuthentic(v, now, KEY::checkMac)) {
+            if (isAuthentic(v, request, now, KEY::checkMac)) {
                 return true;
             }
-            LOGGER.fine(() -> "Ignoring an unauthenticated " + FORWARDED + " header: " + v);
+            LOGGER.fine(() -> "Ignoring an unauthenticated " + FORWARDED + " header on " + request);
         }
         return false;
     }
 
-    /** The header a controller sets on a request it forwards. */
+    /** What the header is bound to: the method, and the path below the context with its query, as received. */
     @NonNull
-    static String forwardedHeader() {
-        return forwardedHeader(ClusterMember.NAME, System.currentTimeMillis(), KEY::mac);
+    static String requestOf(@NonNull HttpServletRequest req) {
+        return requestOf(
+                req.getMethod(),
+                req.getRequestURI().substring(req.getContextPath().length()),
+                req.getQueryString());
     }
 
     @NonNull
-    static String forwardedHeader(@NonNull String name, long now, @NonNull java.util.function.UnaryOperator<String> mac) {
+    static String requestOf(@NonNull String method, @NonNull String path, @CheckForNull String query) {
+        return method + " " + path + (query == null ? "" : "?" + query);
+    }
+
+    /** The header a controller sets on a request it forwards ({@link #requestOf}). */
+    @NonNull
+    static String forwardedHeader(@NonNull String request) {
+        return forwardedHeader(ClusterMember.NAME, System.currentTimeMillis(), request, KEY::mac);
+    }
+
+    @NonNull
+    static String forwardedHeader(
+            @NonNull String name,
+            long now,
+            @NonNull String request,
+            @NonNull java.util.function.UnaryOperator<String> mac) {
         String signed = name.replace(";", "_") + ";" + now;
-        return signed + ";" + mac.apply(signed);
+        return signed + ";" + mac.apply(signed + ";" + request);
     }
 
-    /** Whether a {@link #FORWARDED} header was set by a controller of this cluster, recently. */
-    static boolean isAuthentic(@NonNull String header, long now, @NonNull java.util.function.BiPredicate<String, String> checkMac) {
+    /** Whether a {@link #FORWARDED} header was set by a controller of this cluster, recently, on this request. */
+    static boolean isAuthentic(
+            @NonNull String header,
+            @NonNull String request,
+            long now,
+            @NonNull java.util.function.BiPredicate<String, String> checkMac) {
         int last = header.lastIndexOf(';');
         int first = header.indexOf(';');
         if (first <= 0 || last <= first) {
@@ -120,7 +202,8 @@ final class Forwarding {
         } catch (NumberFormatException e) {
             return false;
         }
-        return Math.abs(now - at) <= MAX_AGE_MILLIS && checkMac.test(header.substring(0, last), header.substring(last + 1));
+        return Math.abs(now - at) <= MAX_AGE_MILLIS
+                && checkMac.test(header.substring(0, last) + ";" + request, header.substring(last + 1));
     }
 
     /**
@@ -129,13 +212,23 @@ final class Forwarding {
      * @return false if the owner could not be connected to (or, for a GET or HEAD, did not answer) and nothing was
      *     written, so the caller may serve it locally
      */
-    static boolean forward(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url)
+    static boolean forward(
+            @NonNull HttpServletRequest req,
+            @NonNull HttpServletResponse rsp,
+            @NonNull String owner,
+            @NonNull String url)
             throws IOException {
         return forward(req, rsp, owner, url, Duration.ofSeconds(TIMEOUT_SECONDS));
     }
 
-    static boolean forward(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url,
-            @NonNull Duration timeout) throws IOException {
+    static boolean forward(
+            @NonNull HttpServletRequest req,
+            @NonNull HttpServletResponse rsp,
+            @NonNull String owner,
+            @NonNull String url,
+            @NonNull Duration timeout)
+            throws IOException {
+        warnIfExposed(url);
         String path = req.getRequestURI().substring(req.getContextPath().length());
         String target = url.replaceAll("/+$", "")
                 + req.getContextPath()
@@ -149,9 +242,11 @@ final class Forwarding {
                 }
             }
         }
-        b.header(FORWARDED, forwardedHeader());
+        b.header(FORWARDED, forwardedHeader(requestOf(req.getMethod(), path, req.getQueryString())));
         byte[] body = body(req);
-        b.method(req.getMethod(), body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+        b.method(
+                req.getMethod(),
+                body.length == 0 ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
         HttpResponse<InputStream> r;
         try {
             r = HTTP.send(b.build(), HttpResponse.BodyHandlers.ofInputStream());
@@ -159,23 +254,30 @@ final class Forwarding {
             Thread.currentThread().interrupt();
             throw new IOException(e);
         } catch (IOException e) {
-            if (e instanceof ConnectException || e instanceof HttpConnectTimeoutException || SAFE.contains(req.getMethod())) {
+            if (e instanceof ConnectException
+                    || e instanceof HttpConnectTimeoutException
+                    || SAFE.contains(req.getMethod())) {
                 LOGGER.log(Level.FINE, e, () -> "Could not reach " + owner + " for " + path);
                 return false;
             }
-            // sent, but no answer: the owner may have acted on it (a replay, an input), so running it here could do it twice
+            // sent, but no answer: the owner may have acted on it (a replay, an input), so running it here could do it
+            // twice
             LOGGER.log(Level.WARNING, e, () -> "No answer from " + owner + " for " + req.getMethod() + " " + path);
-            rsp.sendError(HttpServletResponse.SC_GATEWAY_TIMEOUT, "The controller running this (" + owner
-                    + ") did not answer in time. It may have acted on the request: check before retrying.");
+            rsp.sendError(
+                    HttpServletResponse.SC_GATEWAY_TIMEOUT,
+                    "The controller running this (" + owner
+                            + ") did not answer in time. It may have acted on the request: check before retrying.");
             return true;
         }
         rsp.setStatus(r.statusCode());
         for (Map.Entry<String, List<String>> h : r.headers().map().entrySet()) {
-            if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT)) && !h.getKey().startsWith(":")) {
+            if (!HOP_BY_HOP.contains(h.getKey().toLowerCase(Locale.ROOT))
+                    && !h.getKey().startsWith(":")) {
                 boolean first = true;
                 for (String value : h.getValue()) {
                     if (first) {
-                        rsp.setHeader(h.getKey(), value); // the owner's answer replaces any set here (e.g. X-CNJ-Controller)
+                        rsp.setHeader(
+                                h.getKey(), value); // the owner's answer replaces any set here (e.g. X-CNJ-Controller)
                         first = false;
                     } else {
                         rsp.addHeader(h.getKey(), value);
@@ -207,7 +309,9 @@ final class Forwarding {
             raw = in.readAllBytes();
         }
         String type = req.getContentType();
-        if (raw.length > 0 || type == null || !type.toLowerCase(Locale.ROOT).startsWith("application/x-www-form-urlencoded")) {
+        if (raw.length > 0
+                || type == null
+                || !type.toLowerCase(Locale.ROOT).startsWith("application/x-www-form-urlencoded")) {
             return raw;
         }
         Map<String, Integer> inQuery = new HashMap<>();
@@ -230,7 +334,8 @@ final class Forwarding {
                 if (out.size() > 0) {
                     out.write('&');
                 }
-                out.writeBytes((URLEncoder.encode(p.getKey(), StandardCharsets.UTF_8) + "=" + URLEncoder.encode(value, StandardCharsets.UTF_8))
+                out.writeBytes((URLEncoder.encode(p.getKey(), StandardCharsets.UTF_8) + "="
+                                + URLEncoder.encode(value, StandardCharsets.UTF_8))
                         .getBytes(StandardCharsets.US_ASCII));
             }
         }

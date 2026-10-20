@@ -4,8 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.Test;
 
 /** The {@link ChunkedLogBlobs} of a blob store without appendable blobs. */
@@ -57,6 +63,34 @@ class ChunkedLogBlobsTest extends ClusterBlobStoreContract {
     }
 
     @Test
+    void aChunkThatCannotBeReadWhileCompactingIsKept() throws Exception {
+        Set<String> failing = ConcurrentHashMap.newKeySet();
+        InMemoryClusterBlobStore blobs = new InMemoryClusterBlobStore() {
+            @Override
+            public boolean download(@NonNull String key, @NonNull OutputStream out) throws IOException {
+                return !failing.contains(key) && super.download(key, out);
+            }
+        };
+        String log = "jobs/p/builds/1/log";
+        LogBlobs logs = new ChunkedLogBlobs(blobs);
+        logs.appendAt(log, b("one "), 0, 4, 0);
+        logs.appendAt(log, b("two "), 0, 4, 4);
+        logs.appendAt(log, b("three"), 0, 5, 8);
+        List<String> chunks = blobs.list(log + ".d");
+        assertEquals(3, chunks.size());
+        failing.add(chunks.get(1)); // a transient failure, or a stale listing
+        logs.complete(log);
+        failing.clear();
+        assertEquals(
+                "one two three",
+                new String(new ChunkedLogBlobs(blobs).readFrom(log, 0), StandardCharsets.UTF_8),
+                "nothing lost");
+        logs.complete(log); // again, as the next compaction
+        assertTrue(blobs.list(log + ".d").isEmpty());
+        assertEquals("one two three", new String(blobs.blobs.get(log), StandardCharsets.UTF_8));
+    }
+
+    @Test
     void aGapIsNeverReadPast() throws Exception {
         InMemoryClusterBlobStore blobs = new InMemoryClusterBlobStore();
         String log = "jobs/p/builds/1/log";
@@ -79,7 +113,10 @@ class ChunkedLogBlobsTest extends ClusterBlobStoreContract {
         assertFalse(a.appendAt(log, b("STALE OUTPUT"), 0, 12, 4), "fenced off still");
         // as if it had been written anyway
         blobs.put(log + ".d/" + String.format("%016d", 4) + ".e1.aaa", new ByteArrayInputStream(b("STALE OUTPUT")), 12);
-        assertEquals("one two three", new String(b.readFrom(log, 0), StandardCharsets.UTF_8), "a chunk across the end is not read");
+        assertEquals(
+                "one two three",
+                new String(b.readFrom(log, 0), StandardCharsets.UTF_8),
+                "a chunk across the end is not read");
         assertEquals(13, b.size(log));
         assertTrue(b.appendAt(log, b("!"), 0, 1, 13), "late output at the end still is");
         assertEquals("one two three!", new String(b.readFrom(log, 0), StandardCharsets.UTF_8));

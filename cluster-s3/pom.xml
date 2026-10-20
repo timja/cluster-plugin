@@ -15,8 +15,8 @@
   <description>Keeps the large files of a Jenkins cluster in Amazon S3 or an S3-compatible object store: build snapshots, Pipeline logs and save points, plugin archives.</description>
   <properties>
     <changelist>999999-SNAPSHOT</changelist>
-    <!-- Needs the jenkins.persistence SPI from the cnj/t* core branches, installed locally. -->
-    <jenkins.version>2.586-SNAPSHOT</jenkins.version>
+    <!-- as the cluster plugin (cluster/pom.xml): the core stack of timja/jenkins cnj2/all, installed locally -->
+    <jenkins.version>2.586-cnj2-all-SNAPSHOT</jenkins.version>
     <useBeta>true</useBeta>
     <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
     <spotbugs.failOnError>false</spotbugs.failOnError>

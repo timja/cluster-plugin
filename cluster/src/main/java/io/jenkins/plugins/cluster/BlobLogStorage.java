@@ -1,8 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
-import io.jenkins.plugins.cluster.spi.LogBlobs;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
@@ -14,6 +11,11 @@ import hudson.model.Queue;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.model.listeners.RunListener;
+import io.jenkins.plugins.cluster.builds.BuildRecords;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.LogBlobs;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -35,10 +37,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.model.TransientActionFactory;
-import jenkins.persistence.BuildRecords;
-import jenkins.persistence.PersistenceStore;
-import jenkins.persistence.PersistenceStores;
-import jenkins.persistence.RunningBuilds;
 import jenkins.util.Timer;
 import org.jenkinsci.plugins.workflow.flow.FlowExecutionOwner;
 import org.jenkinsci.plugins.workflow.log.FileLogStorage;
@@ -81,22 +79,17 @@ public final class BlobLogStorage {
     }
 
     /**
-     * The key of a build directory whose builds are shared, such as {@code jobs/p/builds/5}, or null.
+     * Where a build's blobs are ({@code items/<uuid>/builds/<N>}) if the builds of its job are shared, or null.
      */
     @CheckForNull
-    static String buildKey(@NonNull File buildDir) {
-        PersistenceStore store = PersistenceStores.get();
-        String key = PersistenceStores.keyFor(buildDir);
-        if (store == null || key == null || !key.matches("jobs/.+/builds/[0-9]+")) {
-            return null;
-        }
-        return store.storesBuildRecords(key.substring(0, key.lastIndexOf("/builds/"))) ? key : null;
+    static String buildKey(@NonNull Run<?, ?> run) {
+        return BuildRecords.buildBlobs(run.getParent(), run.getNumber());
     }
 
     @CheckForNull
     private static String buildKey(@NonNull FlowExecutionOwner owner) {
         try {
-            return buildKey(owner.getRootDir());
+            return owner.getExecutable() instanceof Run<?, ?> run ? buildKey(run) : null;
         } catch (IOException e) {
             return null;
         }
@@ -202,7 +195,7 @@ public final class BlobLogStorage {
             final Stream logStream;
             final Stream indexStream;
             long lapses;
-            /** The build completed: stop tracking once everything is shipped (Target 14). */
+            /** The build completed: stop tracking once everything is shipped. */
             volatile boolean finishing;
             /** Its record was published before the tail of its log was shipped. */
             volatile boolean publishedEarly;
@@ -245,17 +238,20 @@ public final class BlobLogStorage {
         }
 
         /**
-         * Fewer, larger appends (Target 14): a build's log is shipped once this much is pending, or
+         * Fewer, larger appends: a build's log is shipped once this much is pending, or
          * {@link #COALESCE_MILLIS} after the last shipment; save points and the end of a build ship at once.
          */
-        static final int COALESCE_BYTES = Integer.getInteger(BlobLogStorage.class.getName() + ".coalesceBytes", 32 * 1024);
+        static final int COALESCE_BYTES =
+                Integer.getInteger(BlobLogStorage.class.getName() + ".coalesceBytes", 32 * 1024);
+
         static final long COALESCE_MILLIS = Long.getLong(BlobLogStorage.class.getName() + ".coalesceMillis", 3_000);
 
         private static boolean due(Tracked t) {
             return t.finishing
                     || t.logStream.pending() >= COALESCE_BYTES
                     || System.currentTimeMillis() - t.logStream.lastShip >= COALESCE_MILLIS
-                    || t.indexStream.pending() > 0 && System.currentTimeMillis() - t.indexStream.lastShip >= COALESCE_MILLIS;
+                    || t.indexStream.pending() > 0
+                            && System.currentTimeMillis() - t.indexStream.lastShip >= COALESCE_MILLIS;
         }
 
         private static void shipAll() {
@@ -281,7 +277,7 @@ public final class BlobLogStorage {
             if (t.publishedEarly && t.run != null) {
                 LOGGER.info(() -> "Shipped the rest of the log of " + t.run + "; republishing it");
                 try {
-                    jenkins.persistence.BuildRecords.republishFiles(t.run);
+                    BuildRecords.republishFiles(t.run);
                 } catch (IOException | RuntimeException e) {
                     LOGGER.log(Level.WARNING, "Could not republish " + t.run + " after shipping its log", e);
                 }
@@ -385,7 +381,7 @@ public final class BlobLogStorage {
         /**
          * Ships the rest of a build's log and stops tracking it; if that cannot be done now (the store or the blob store
          * is unreachable), it is shipped later, and the build republished then, so that no controller keeps a log
-         * without its end (Target 14).
+         * without its end.
          */
         static void finish(String key) {
             Tracked t = tracked.get(key);
@@ -415,9 +411,9 @@ public final class BlobLogStorage {
             ClusterBlobStore blobs = blobs();
             String key = blobs == null || !(run instanceof FlowExecutionOwner.Executable || SHIP_OTHER_LOGS)
                     ? null
-                    : buildKey(run.getRootDir());
+                    : buildKey(run);
             if (key != null) {
-                // Pipelines: the log lives in blobs. Other builds (Target 15): shipped too while they run, so that a
+                // Pipelines: the log lives in blobs. Other builds: shipped too while they run, so that a
                 // build closed as aborted after its controller died keeps what it printed (LostLogs); their log still
                 // travels in the snapshot once they complete
                 Shipper.track(blobs, key, new File(run.getRootDir(), LOG), run);
@@ -427,7 +423,7 @@ public final class BlobLogStorage {
         @Override
         public void onFinalized(Run<?, ?> run) {
             if (!(run instanceof FlowExecutionOwner.Executable)) {
-                String key = buildKey(run.getRootDir());
+                String key = buildKey(run);
                 ClusterBlobStore blobs = blobs();
                 if (key != null && blobs != null) {
                     Shipper.drop(key); // complete in the snapshot: the shipped copy is not needed any more
@@ -441,7 +437,7 @@ public final class BlobLogStorage {
                 }
                 return;
             }
-            String key = buildKey(run.getRootDir());
+            String key = buildKey(run);
             if (key != null) {
                 if (!RunningBuilds.owns(run)) {
                     Shipper.drop(key); // taken over by another controller, which ships the log from now on
@@ -452,30 +448,36 @@ public final class BlobLogStorage {
         }
     }
 
-    /** Whether logs of builds other than Pipelines are shipped while they run (Target 15); on by default. */
-    static final boolean SHIP_OTHER_LOGS = !"false".equals(System.getProperty(BlobLogStorage.class.getName() + ".shipOtherLogs"));
+    /** Whether logs of builds other than Pipelines are shipped while they run; on by default. */
+    static final boolean SHIP_OTHER_LOGS =
+            !"false".equals(System.getProperty(BlobLogStorage.class.getName() + ".shipOtherLogs"));
 
-    /** What a build that cannot be resumed printed before its controller died (Target 15). */
+    /** What a build that cannot be resumed printed before its controller died. */
     @Extension
     public static final class LostLogs implements BuildRecords.LostLog {
         @Override
-        public java.io.InputStream shippedLog(@NonNull String base) throws IOException {
+        public java.io.InputStream shippedLog(@NonNull hudson.model.Job<?, ?> job, int number) throws IOException {
             ClusterBlobStore blobs = blobs();
-            if (blobs == null) {
+            String base = BuildRecords.buildBlobs(job, number);
+            if (blobs == null || base == null) {
                 return null;
             }
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            return blobs.logs().download(base + "/" + LOG, out) ? new java.io.ByteArrayInputStream(out.toByteArray()) : null;
+            return blobs.logs().download(base + "/" + LOG, out)
+                    ? new java.io.ByteArrayInputStream(out.toByteArray())
+                    : null;
         }
     }
 
-    /** The log of a build running on another controller, for the CLI (Target 15): from the blobs its owner ships it to. */
+    /** The log of a build running on another controller, for the CLI: from the blobs its owner ships it to. */
     @Extension
     public static final class RemoteLogs implements RunningBuilds.RemoteLog {
         @Override
-        public long copy(@NonNull hudson.model.Job<?, ?> job, int number, long offset, @NonNull java.io.OutputStream out) throws IOException {
+        public long copy(
+                @NonNull hudson.model.Job<?, ?> job, int number, long offset, @NonNull java.io.OutputStream out)
+                throws IOException {
             ClusterBlobStore blobs = blobs();
-            String key = blobs == null ? null : buildKey(new File(job.getBuildDir(), String.valueOf(number)));
+            String key = blobs == null ? null : BuildRecords.buildBlobs(job, number);
             if (key == null) {
                 return -1;
             }
@@ -526,7 +528,6 @@ public final class BlobLogStorage {
         public void doDynamic(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
             job.checkPermission(Item.READ);
             ClusterBlobStore blobs = blobs();
-            String jobKey = PersistenceStores.keyFor(job.getRootDir());
             int number;
             try {
                 number = Integer.parseInt(req.getRestOfPath().replaceAll("^/|/$", ""));
@@ -534,9 +535,8 @@ public final class BlobLogStorage {
                 rsp.sendError(404);
                 return;
             }
-            byte[] log = blobs == null || jobKey == null
-                    ? null
-                    : blobs.logs().readFrom(jobKey + "/builds/" + number + "/" + LOG, 0);
+            String key = BuildRecords.buildBlobs(job, number);
+            byte[] log = blobs == null || key == null ? null : blobs.logs().readFrom(key + "/" + LOG, 0);
             if (log == null) {
                 rsp.sendError(404);
                 return;

@@ -1,7 +1,5 @@
 package io.jenkins.plugins.cluster.azure;
 
-import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
-import io.jenkins.plugins.cluster.spi.LogBlobs;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
@@ -13,6 +11,8 @@ import com.azure.storage.blob.models.ListBlobsOptions;
 import com.azure.storage.blob.specialized.AppendBlobClient;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.LogBlobs;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -40,7 +40,8 @@ public class AzureBlobStore implements ClusterBlobStore {
     private final int maxSegmentBlocks;
 
     /** Per try of one blob request (large snapshots and artifacts included). */
-    static final int TRY_TIMEOUT_SECONDS = Integer.getInteger(AzureBlobStore.class.getName() + ".tryTimeoutSeconds", 120);
+    static final int TRY_TIMEOUT_SECONDS =
+            Integer.getInteger(AzureBlobStore.class.getName() + ".tryTimeoutSeconds", 120);
 
     public AzureBlobStore(@NonNull String connectionString, @NonNull String containerName) {
         this(connectionString, containerName, MAX_SEGMENT_BLOCKS);
@@ -51,10 +52,15 @@ public class AzureBlobStore implements ClusterBlobStore {
         // the SDK discovers its HTTP client through the context class loader
         this.container = withPluginClassLoader(() -> new BlobServiceClientBuilder()
                 .connectionString(connectionString)
-                // bounded tries (Target 14): a stalled blob store fails calls, retried by their callers, instead of
+                // bounded tries: a stalled blob store fails calls, retried by their callers, instead of
                 // hanging the threads that ship logs and save points
                 .retryOptions(new com.azure.storage.common.policy.RequestRetryOptions(
-                        com.azure.storage.common.policy.RetryPolicyType.EXPONENTIAL, 3, TRY_TIMEOUT_SECONDS, 500L, 4000L, null))
+                        com.azure.storage.common.policy.RetryPolicyType.EXPONENTIAL,
+                        3,
+                        TRY_TIMEOUT_SECONDS,
+                        500L,
+                        4000L,
+                        null))
                 .clientOptions(new com.azure.core.util.HttpClientOptions()
                         .setConnectTimeout(java.time.Duration.ofSeconds(10))
                         .setResponseTimeout(java.time.Duration.ofSeconds(TRY_TIMEOUT_SECONDS))
@@ -212,7 +218,7 @@ public class AzureBlobStore implements ClusterBlobStore {
         }
     }
 
-    // ------------------------------------------------------------------ segmented append blobs (Target 14)
+    // ------------------------------------------------------------------ segmented append blobs
 
     private final LogBlobs logs = new SegmentedLogs();
 
@@ -257,7 +263,8 @@ public class AzureBlobStore implements ClusterBlobStore {
         }
 
         @Override
-        public boolean appendAt(@NonNull String log, @NonNull byte[] bytes, int off, int len, long position) throws IOException {
+        public boolean appendAt(@NonNull String log, @NonNull byte[] bytes, int off, int len, long position)
+                throws IOException {
             Tail t = tails.get(log);
             if (t == null || t.end() != position) {
                 t = tail(log);
@@ -268,14 +275,16 @@ public class AzureBlobStore implements ClusterBlobStore {
             }
             if (len == 0) {
                 // nothing to append, but the log exists from now on, as it always has
-                return AzureBlobStore.this.appendAt(segment(log, t.segment()), bytes, off, 0, t.end() - t.segmentStart());
+                return AzureBlobStore.this.appendAt(
+                        segment(log, t.segment()), bytes, off, 0, t.end() - t.segmentStart());
             }
             for (int pos = off; pos < off + len; pos += MAX_APPEND_BLOCK) {
                 int n = Math.min(MAX_APPEND_BLOCK, off + len - pos);
                 if (t.blocks() >= maxSegmentBlocks) {
                     t = new Tail(t.segment() + 1, t.end(), 0, t.end()); // this one is full
                 }
-                if (!AzureBlobStore.this.appendAt(segment(log, t.segment()), bytes, pos, n, t.end() - t.segmentStart())) {
+                if (!AzureBlobStore.this.appendAt(
+                        segment(log, t.segment()), bytes, pos, n, t.end() - t.segmentStart())) {
                     tails.remove(log);
                     return false;
                 }
@@ -307,7 +316,8 @@ public class AzureBlobStore implements ClusterBlobStore {
      * Most blocks appended to one segment of a log before the next segment starts. An append blob takes at most
      * 50,000 blocks: a build logging steadily for half a day reaches that (one block per shipment).
      */
-    static final int MAX_SEGMENT_BLOCKS = Integer.getInteger(AzureBlobStore.class.getName() + ".maxSegmentBlocks", 49_000);
+    static final int MAX_SEGMENT_BLOCKS =
+            Integer.getInteger(AzureBlobStore.class.getName() + ".maxSegmentBlocks", 49_000);
 
     /** The blob holding segment {@code i} of a segmented blob: {@code base}, then {@code base.1}, {@code base.2}, … */
     static String segment(String base, int i) {
@@ -326,13 +336,15 @@ public class AzureBlobStore implements ClusterBlobStore {
                 String name = item.getName();
                 if (name.equals(base)) {
                     names.put(0, name);
-                } else if (name.startsWith(base + ".") && name.substring(base.length() + 1).matches("[0-9]+")) {
+                } else if (name.startsWith(base + ".")
+                        && name.substring(base.length() + 1).matches("[0-9]+")) {
                     names.put(Integer.parseInt(name.substring(base.length() + 1)), name);
                 }
             }
             List<Segment> result = new ArrayList<>();
             for (Map.Entry<Integer, String> e : names.entrySet()) {
-                com.azure.storage.blob.models.BlobProperties props = container.getBlobClient(e.getValue()).getProperties();
+                com.azure.storage.blob.models.BlobProperties props =
+                        container.getBlobClient(e.getValue()).getProperties();
                 Integer blocks = props.getCommittedBlockCount();
                 result.add(new Segment(e.getKey(), e.getValue(), props.getBlobSize(), blocks == null ? 0 : blocks));
             }
@@ -429,38 +441,10 @@ public class AzureBlobStore implements ClusterBlobStore {
         }
     }
 
-    @Override
-    public void move(@NonNull String fromPrefix, @NonNull String toPrefix) throws IOException {
-        // copy then delete each blob, so a repeated move after a partial failure finishes the job
-        for (String key : list(fromPrefix)) {
-            String target = toPrefix + key.substring(fromPrefix.length());
-            Path tmp = Files.createTempFile("blob-move", null);
-            try {
-                try (OutputStream out = Files.newOutputStream(tmp)) {
-                    if (!download(key, out)) {
-                        continue;
-                    }
-                }
-                if (isAppendBlob(key)) {
-                    // a running build's log stays appendable under its new name (Target 14)
-                    copyAsAppendBlob(tmp, target);
-                } else {
-                    try (InputStream in = Files.newInputStream(tmp)) {
-                        put(target, in, Files.size(tmp));
-                    }
-                }
-                container.getBlobClient(key).deleteIfExists();
-            } catch (RuntimeException e) {
-                throw wrap("move", key, e);
-            } finally {
-                Files.deleteIfExists(tmp);
-            }
-        }
-    }
-
     private boolean isAppendBlob(String key) {
         try {
-            return container.getBlobClient(key).getProperties().getBlobType() == com.azure.storage.blob.models.BlobType.APPEND_BLOB;
+            return container.getBlobClient(key).getProperties().getBlobType()
+                    == com.azure.storage.blob.models.BlobType.APPEND_BLOB;
         } catch (RuntimeException e) {
             return false;
         }

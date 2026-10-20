@@ -1,12 +1,12 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.util.PluginServletFilter;
 import hudson.util.VersionNumber;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -38,9 +38,14 @@ public final class ClusterPluginSet implements Filter {
 
     private static final Logger LOGGER = Logger.getLogger(ClusterPluginSet.class.getName());
 
-    enum Mode { cluster, fixed, local }
+    enum Mode {
+        cluster,
+        fixed,
+        local
+    }
 
-    static final Mode MODE = Mode.valueOf(System.getProperty(ClusterPluginSet.class.getName() + ".mode", "cluster").toLowerCase(Locale.ROOT));
+    static final Mode MODE = Mode.valueOf(System.getProperty(ClusterPluginSet.class.getName() + ".mode", "cluster")
+            .toLowerCase(Locale.ROOT));
 
     static final Pattern CHANGES = Pattern.compile("^(?:/manage)?/(?:"
             + "pluginManager/(?<install>install|installPlugins|installNecessaryPlugins|uploadPlugin)"
@@ -50,13 +55,16 @@ public final class ClusterPluginSet implements Filter {
             + ")/?$");
     static final String FIXED = "The plugin set of this Jenkins cluster is fixed: plugins are part of the controller"
             + " image, so that every controller runs the same ones. Add the plugin to the image and roll it out (helm upgrade) instead.";
-    static final String DOWNGRADE = "Downgrades are not applied across a Jenkins cluster (they restore a backup only this"
-            + " controller has). Uninstall the plugin, then install the older version.";
-    static final String CORE_UPGRADE = "Jenkins itself is part of the controller image: upgrade it by rolling out a new image (helm upgrade).";
+    static final String DOWNGRADE =
+            "Downgrades are not applied across a Jenkins cluster (they restore a backup only this"
+                    + " controller has). Uninstall the plugin, then install the older version.";
+    static final String CORE_UPGRADE =
+            "Jenkins itself is part of the controller image: upgrade it by rolling out a new image (helm upgrade).";
     static final String RESTART = "This Jenkins cluster restarts its controllers for plugin changes by itself, one at a"
             + " time, once each has the change (see Manage Jenkins > Cluster). Restarting a single controller from here is not needed.";
-    static final String PROTECTED_CHANGE = "The cluster plugins (" + String.join(", ", new java.util.TreeSet<>(ClusterPlugins.PROTECTED)) + ") are part of the controller image and"
-            + " cannot be changed at runtime.";
+    static final String PROTECTED_CHANGE =
+            "The cluster plugins (" + String.join(", ", new java.util.TreeSet<>(ClusterPlugins.PROTECTED))
+                    + ") are part of the controller image and" + " cannot be changed at runtime.";
 
     @Initializer(after = InitMilestone.PLUGINS_STARTED)
     public static void install() throws ServletException {
@@ -96,7 +104,7 @@ public final class ClusterPluginSet implements Filter {
             return null;
         }
         if (change.kind().equals("restart")) {
-            // the progress page's "restart when done": outside the cluster's one-at-a-time restarts (Target 15)
+            // the progress page's "restart when done": outside the cluster's one-at-a-time restarts
             return mode == Mode.cluster && clusterActive ? RESTART : null;
         }
         if (mode == Mode.fixed || !clusterActive) {
@@ -122,7 +130,11 @@ public final class ClusterPluginSet implements Filter {
      * @param newest the newest version known of that plugin: in the cluster's plugin set, or in {@code plugins/} here
      */
     @CheckForNull
-    static String archiveRefusal(Mode mode, @NonNull String name, @CheckForNull String version, @CheckForNull String newest,
+    static String archiveRefusal(
+            Mode mode,
+            @NonNull String name,
+            @CheckForNull String version,
+            @CheckForNull String newest,
             boolean clusterActive) {
         String refusal = refusal(mode, new Change("install", name), clusterActive);
         if (refusal != null || mode == Mode.local) {
@@ -159,15 +171,20 @@ public final class ClusterPluginSet implements Filter {
             chain.doFilter(request, response);
             return;
         }
-        Change change = changeOf(req.getMethod(), req.getRequestURI().substring(req.getContextPath().length()));
+        Change change = changeOf(
+                req.getMethod(),
+                req.getRequestURI().substring(req.getContextPath().length()));
         if (change == null) {
             chain.doFilter(request, response);
             return;
         }
         String refusal = refusal(MODE, change, ClusterPlugins.active());
-        if (refusal == null && change.kind().equals("install") && req.getRequestURI().endsWith("/install")
+        if (refusal == null
+                && change.kind().equals("install")
+                && req.getRequestURI().endsWith("/install")
                 && String.valueOf(req.getContentType()).startsWith("application/x-www-form-urlencoded")
-                && !protectedInForm(java.util.Collections.list(req.getParameterNames())).isEmpty()) {
+                && !protectedInForm(java.util.Collections.list(req.getParameterNames()))
+                        .isEmpty()) {
             // the plugin manager's form (others, uploads and dependencies are refused when downloaded, by
             // ClusterUpdateCenterConfiguration#postValidate)
             refusal = PROTECTED_CHANGE;

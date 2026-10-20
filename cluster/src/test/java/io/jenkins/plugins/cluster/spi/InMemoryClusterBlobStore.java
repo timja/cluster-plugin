@@ -7,7 +7,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /** A blob store in memory, with no appendable blobs (logs are {@link ChunkedLogBlobs}), as S3 is. */
@@ -36,6 +35,7 @@ public class InMemoryClusterBlobStore implements ClusterBlobStore {
 
     @Override
     public InputStream get(@NonNull String key) {
+        InMemoryClusterStore.hook("blob", key);
         byte[] b = blobs.get(key);
         return b == null ? null : new ByteArrayInputStream(b);
     }
@@ -44,13 +44,6 @@ public class InMemoryClusterBlobStore implements ClusterBlobStore {
     public void delete(@NonNull String prefix) {
         for (String key : list(prefix)) {
             blobs.remove(key);
-        }
-    }
-
-    @Override
-    public void move(@NonNull String fromPrefix, @NonNull String toPrefix) {
-        for (String key : list(fromPrefix)) {
-            blobs.put(toPrefix + key.substring(fromPrefix.length()), blobs.remove(key));
         }
     }
 

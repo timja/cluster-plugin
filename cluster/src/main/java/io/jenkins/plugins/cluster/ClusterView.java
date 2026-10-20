@@ -1,13 +1,13 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.model.Api;
 import hudson.model.ManagementLink;
 import hudson.security.Permission;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.io.StringReader;
@@ -26,14 +26,14 @@ import org.kohsuke.stapler.export.Exported;
 import org.kohsuke.stapler.export.ExportedBean;
 
 /**
- * The cluster as the store knows it (Target 8): controllers, running builds and their owners, agent channels and their
+ * The cluster as the store knows it: controllers, running builds and their owners, agent channels and their
  * holders. Any controller answers, at {@code /manage/cluster} and {@code /manage/cluster/api/json}.
  */
 @Extension
 @ExportedBean
 public final class ClusterView extends ManagementLink {
 
-    private static final Pattern RUNNING = Pattern.compile("jobs/(.+)/running/([0-9]+)\\.xml");
+    private static final Pattern RUNNING = Pattern.compile("_items/([^/]+)/running/([0-9]+)\\.xml");
 
     @Override
     public String getIconFileName() {
@@ -67,7 +67,7 @@ public final class ClusterView extends ManagementLink {
         return Category.STATUS;
     }
 
-    /** What this controller writes under its home that the cluster does not share (Target 11). */
+    /** What this controller writes under its home that the cluster does not share. */
     public HomeWrites getCompatibility() {
         Jenkins.get().checkPermission(Jenkins.SYSTEM_READ);
         return new HomeWrites();
@@ -115,7 +115,7 @@ public final class ClusterView extends ManagementLink {
         return result;
     }
 
-    /** Plugins installed, upgraded, uninstalled or disabled at runtime and applied to every controller (Target 13). */
+    /** Plugins installed, upgraded, uninstalled or disabled at runtime and applied to every controller. */
     @Exported
     public List<PluginChange> getPluginChanges() throws IOException {
         List<PluginChange> result = new ArrayList<>();
@@ -208,8 +208,15 @@ public final class ClusterView extends ManagementLink {
                 }
                 Properties p = new Properties();
                 p.load(new StringReader(new String(e.getValue(), StandardCharsets.UTF_8)));
-                result.add(new RunningBuild(m.group(1).replace("/jobs/", "/"), Integer.parseInt(m.group(2)),
-                        p.getProperty("controller", "?"), Long.parseLong(p.getProperty("startTime", "0"))));
+                hudson.model.Item item = jenkins.model.ItemUuids.get(m.group(1)); // as this user may see it
+                if (item == null) {
+                    continue;
+                }
+                result.add(new RunningBuild(
+                        item.getFullName(),
+                        Integer.parseInt(m.group(2)),
+                        p.getProperty("controller", "?"),
+                        Long.parseLong(p.getProperty("startTime", "0"))));
             }
         }
         return result;
@@ -224,15 +231,19 @@ public final class ClusterView extends ManagementLink {
             java.util.Map<String, int[]> executors = new java.util.HashMap<>();
             for (ClusterStore.Member m : store.members()) {
                 if (m.alive()) {
-                    MemberStatus.Info.parse(m.info()).agents().forEach((agent, counts) -> executors.put(m.name() + "/" + agent, counts));
+                    MemberStatus.Info.parse(m.info())
+                            .agents()
+                            .forEach((agent, counts) -> executors.put(m.name() + "/" + agent, counts));
                 }
             }
-            store.channels().forEach((agent, controller) -> result.add(new Channel(agent, controller, executors.get(controller + "/" + agent))));
+            store.channels()
+                    .forEach((agent, controller) ->
+                            result.add(new Channel(agent, controller, executors.get(controller + "/" + agent))));
         }
         return result;
     }
 
-    /** Background schema migrations and how far they got (Target 15). */
+    /** Background schema migrations and how far they got. */
     public List<ClusterStore.Migration> getMigrations() {
         ClusterStore store = store();
         try {
@@ -242,7 +253,7 @@ public final class ClusterView extends ManagementLink {
         }
     }
 
-    /** Shared-queue items waiting for a controller to start them, and claimed by one (Target 15). */
+    /** Shared-queue items waiting for a controller to start them, and claimed by one. */
     @Exported
     public java.util.Map<String, Integer> getQueue() throws IOException {
         ClusterStore store = store();
@@ -305,7 +316,7 @@ public final class ClusterView extends ManagementLink {
             return m.protocol();
         }
 
-        /** What this controller has applied of the cluster's plugin set (Target 13), as published: generation and flags. */
+        /** What this controller has applied of the cluster's plugin set, as published: generation and flags. */
         @Exported
         public String getPlugins() {
             return m.plugins();

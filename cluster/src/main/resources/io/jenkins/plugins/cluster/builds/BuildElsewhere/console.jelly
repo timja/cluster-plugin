@@ -1,0 +1,26 @@
+<?jelly escape-by-default='true'?>
+<!-- the console of a build running on another controller, as shipped so far -->
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:l="/lib/layout">
+  <l:layout title="${it.displayName}">
+    <l:header>
+      <!-- the rest as it is shipped, and once completed the build itself -->
+      <meta http-equiv="refresh" content="5" />
+    </l:header>
+    <st:include page="sidepanel.jelly" it="${it.job}" />
+    <l:main-panel>
+      <l:app-bar title="${%Console}">
+        <a class="jenkins-button jenkins-button--tertiary" href="consoleText">${%plainText}</a>
+      </l:app-bar>
+      <p>${%runningOn(it.location)}</p>
+      <j:set var="log" value="${it.log}" />
+      <j:choose>
+        <j:when test="${log != null}">
+          <pre class="console-output">${log}</pre>
+        </j:when>
+        <j:otherwise>
+          <p>${%notShipped}</p>
+        </j:otherwise>
+      </j:choose>
+    </l:main-panel>
+  </l:layout>
+</j:jelly>

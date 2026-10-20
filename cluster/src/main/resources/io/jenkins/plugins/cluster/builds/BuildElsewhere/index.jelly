@@ -1,0 +1,26 @@
+<?jelly escape-by-default='true'?>
+<!-- a build running on another controller, at its own URL here -->
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:l="/lib/layout" xmlns:i="jelly:fmt">
+  <l:layout title="${it.displayName}">
+    <l:header>
+      <!-- until its record arrives, when this URL shows the build itself -->
+      <meta http-equiv="refresh" content="5" />
+    </l:header>
+    <st:include page="sidepanel.jelly" it="${it.job}" />
+    <l:main-panel>
+      <l:app-bar title="${it.placeholder.displayName}">
+        <j:if test="${it.stoppable}">
+          <form method="post" action="stop">
+            <button class="jenkins-button jenkins-button--tertiary">${%Stop}</button>
+          </form>
+        </j:if>
+      </l:app-bar>
+      <p>
+        <l:icon src="symbol-status-nobuilt-anime" class="icon-sm" />
+        ${%runningOn(it.location)}
+        <i:formatDate value="${it.placeholder.startDate}" type="both" dateStyle="medium" timeStyle="short" />
+      </p>
+      <p><a href="console">${%Console}</a></p>
+    </l:main-panel>
+  </l:layout>
+</j:jelly>

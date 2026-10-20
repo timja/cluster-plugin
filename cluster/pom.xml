@@ -15,8 +15,10 @@
   <description>Runs several Jenkins controllers as one cluster: shared items, builds, queue and plugins, and adoption of running builds. Backends come from store and blob store plugins.</description>
   <properties>
     <changelist>999999-SNAPSHOT</changelist>
-    <!-- Needs the jenkins.persistence SPI from the cnj/t* core branches, installed locally. -->
-    <jenkins.version>2.586-SNAPSHOT</jenkins.version>
+    <!-- Builds against the core stack of timja/jenkins cnj2/all (A*, B*, C*), installed locally as
+         2.586-cnj2-all-SNAPSHOT: mvn -pl war,bom -am install -Dchangelist=-cnj2-all-SNAPSHOT -DskipTests there.
+         Moves to the cnj2/all incrementals once they are published. -->
+    <jenkins.version>2.586-cnj2-all-SNAPSHOT</jenkins.version>
     <useBeta>true</useBeta>
     <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
     <spotbugs.failOnError>false</spotbugs.failOnError>
@@ -34,6 +36,13 @@
   </dependencyManagement>
   <dependencies>
     <dependency>
+      <!-- Target 9: cluster-wide cloud agent caps (kubernetes-plugin cnj/t9-m2-cluster-cap, installed locally) -->
+      <groupId>org.csanchez.jenkins.plugins</groupId>
+      <artifactId>kubernetes</artifactId>
+      <version>999999-SNAPSHOT</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
       <!-- MilestoneStorage, for milestone across controllers -->
       <groupId>org.jenkins-ci.plugins</groupId>
       <artifactId>pipeline-milestone-step</artifactId>
@@ -44,17 +53,20 @@
       <artifactId>workflow-api</artifactId>
     </dependency>
     <dependency>
-      <!-- ProgramSavedListener, from the cnj/t4-m1-program-saved-listener branch, installed locally -->
+      <!-- ProgramSavedListener and CpsFlowExecution.halt, from the cnj/t4-m1-program-saved-listener branch, installed locally -->
       <groupId>org.jenkins-ci.plugins.workflow</groupId>
       <artifactId>workflow-cps</artifactId>
-      <version>999999-SNAPSHOT</version>
+      <version>999999-cnj2-h-SNAPSHOT</version>
     </dependency>
     <dependency>
-      <!-- Target 9: cluster-wide cloud agent caps (kubernetes-plugin cnj/t9-m2-cluster-cap, installed locally) -->
-      <groupId>org.csanchez.jenkins.plugins</groupId>
-      <artifactId>kubernetes</artifactId>
-      <version>999999-SNAPSHOT</version>
-      <optional>true</optional>
+      <groupId>org.jenkins-ci.plugins.workflow</groupId>
+      <artifactId>workflow-durable-task-step</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jenkins-ci.plugins.workflow</groupId>
+      <artifactId>workflow-job</artifactId>
+      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.mockito</groupId>

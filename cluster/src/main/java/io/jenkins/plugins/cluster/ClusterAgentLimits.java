@@ -1,10 +1,10 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import hudson.Extension;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.model.Node;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,7 +19,7 @@ import org.csanchez.jenkins.plugins.kubernetes.KubernetesSlave;
 import org.csanchez.jenkins.plugins.kubernetes.PodTemplate;
 
 /**
- * Kubernetes container and instance caps for the whole cluster (Target 9): each controller's share is a counter in the
+ * Kubernetes container and instance caps for the whole cluster: each controller's share is a counter in the
  * store, and an agent is admitted only if the shares of the live controllers stay within the caps. A dead controller's
  * share stops counting with its membership. A controller restarting with its home keeps its agents (pods that are
  * still running): they count again, under its new membership, as it starts ({@link #countSurvivors}).
@@ -48,7 +48,10 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
         try {
             return store.addWithinCaps(caps, numExecutors);
         } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Cannot count agents of " + cloudName + " against the cluster caps; not provisioning", e);
+            LOGGER.log(
+                    Level.WARNING,
+                    "Cannot count agents of " + cloudName + " against the cluster caps; not provisioning",
+                    e);
             return false;
         }
     }
@@ -67,10 +70,14 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
             }
             try {
                 store.addWithinCaps(uncapped, e.getValue());
-                LOGGER.info(() -> "Counted " + e.getValue() + " executor(s) of Kubernetes agents kept from before this start in " + e.getKey());
+                LOGGER.info(() -> "Counted " + e.getValue()
+                        + " executor(s) of Kubernetes agents kept from before this start in " + e.getKey());
             } catch (IOException x) {
-                LOGGER.log(Level.WARNING, "Cannot count the Kubernetes agents kept from before this start in " + e.getKey()
-                        + "; the cluster caps undercount them until they go", x);
+                LOGGER.log(
+                        Level.WARNING,
+                        "Cannot count the Kubernetes agents kept from before this start in " + e.getKey()
+                                + "; the cluster caps undercount them until they go",
+                        x);
             }
         }
     }
@@ -89,8 +96,12 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
                 if (template == null) {
                     continue; // never released either (the plugin releases agents by their template)
                 }
-                result.merge(List.of(cloudScope(agent.getCloudName()), templateScope(agent.getCloudName(), templateKey(template))),
-                        agent.getNumExecutors(), Integer::sum);
+                result.merge(
+                        List.of(
+                                cloudScope(agent.getCloudName()),
+                                templateScope(agent.getCloudName(), templateKey(template))),
+                        agent.getNumExecutors(),
+                        Integer::sum);
             }
         }
         return result;
@@ -102,7 +113,9 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
      */
     static String templateKey(PodTemplate template) {
         try {
-            return (String) ClusterProvisioningLimits.class.getMethod("templateKey", PodTemplate.class).invoke(null, template);
+            return (String) ClusterProvisioningLimits.class
+                    .getMethod("templateKey", PodTemplate.class)
+                    .invoke(null, template);
         } catch (ReflectiveOperationException | RuntimeException e) {
             return template.getId();
         }
@@ -112,7 +125,8 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
     public static final class Survivors {
         @Initializer(after = InitMilestone.SYSTEM_CONFIG_LOADED, before = InitMilestone.JOB_LOADED)
         public static void count() {
-            if (PersistenceStores.get() instanceof ClusterStore store && Jenkins.get().getPlugin("kubernetes") != null) {
+            if (PersistenceStores.get() instanceof ClusterStore store
+                    && Jenkins.get().getPlugin("kubernetes") != null) {
                 countSurvivors(store, Jenkins.get().getNodes());
             }
         }
@@ -124,7 +138,8 @@ public final class ClusterAgentLimits implements ClusterProvisioningLimits {
     public void unregister(String cloudName, String templateId, int numExecutors) {
         if (PersistenceStores.get() instanceof ClusterStore store) {
             try {
-                store.subtractFromCounters(Set.of(cloudScope(cloudName), templateScope(cloudName, templateId)), numExecutors);
+                store.subtractFromCounters(
+                        Set.of(cloudScope(cloudName), templateScope(cloudName, templateId)), numExecutors);
             } catch (IOException e) {
                 LOGGER.log(Level.WARNING, "Cannot release agents of " + cloudName + " in the cluster caps", e);
             }

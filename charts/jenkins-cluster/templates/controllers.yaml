@@ -28,11 +28,20 @@ spec:
             - {name: KUBERNETES_JENKINS_URL, value: "$(JENKINS_CLUSTER_INTERNAL_URL)"}
             - {name: CASC_JENKINS_CONFIG, value: /casc}
             - {name: CNJ_SEED_TGZ, value: /seed/seed.tgz}
+            {{- if and (ne .Values.blob.type "s3") (not .Values.blob.inChart) .Values.artifactManager.accountName }}
+            {{- if not .Values.store.existingSecret }}
+            {{- fail "artifactManager.accountName needs store.existingSecret, a Secret with the account's key as CNJ_BLOB_ACCOUNT_KEY" }}
+            {{- end }}
+            # the artifact manager's storage account; its key, CNJ_BLOB_ACCOUNT_KEY, comes from store.existingSecret
+            - {name: CNJ_BLOB_ACCOUNT_NAME, value: {{ .Values.artifactManager.accountName | quote }}}
+            - {name: CNJ_BLOB_ENDPOINT, value: {{ .Values.artifactManager.blobEndpoint | quote }}}
+            {{- end }}
             - name: JAVA_OPTS
               value: >-
                 -Djenkins.install.runSetupWizard=false -Djava.awt.headless=true
                 -Dio.jenkins.plugins.casc.core.JenkinsConfigurator.keepUndeclaredNodes=true
                 -Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.poolSize={{ .Values.store.poolSize }}
+                -Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.memberTimeoutMillis={{ mul .Values.store.memberTimeoutSeconds 1000 }}
                 -Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.sessionLocks={{ .Values.store.sessionLocks }}
                 -Djenkins.persistence.ItemFiles.enabled={{ .Values.store.sharePluginFiles }}
                 {{- if not .Values.updateSites.fetch }} -Dhudson.model.UpdateCenter.never=true -Dhudson.model.DownloadService.never=true{{ end }}

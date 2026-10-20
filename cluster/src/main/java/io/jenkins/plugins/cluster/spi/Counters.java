@@ -1,9 +1,7 @@
 package io.jenkins.plugins.cluster.spi;
 
-import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 

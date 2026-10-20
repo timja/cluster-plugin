@@ -1,0 +1,41 @@
+package io.jenkins.plugins.cluster.builds;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import hudson.model.FreeStyleBuild;
+import hudson.model.FreeStyleProject;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import java.io.File;
+import java.util.List;
+import jenkins.model.ExternalBuilds;
+import org.junit.jupiter.api.Test;
+import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
+
+/** Installed without a cluster store, the plugin leaves builds as they are upstream. */
+@WithJenkins
+class NoStoreTest {
+
+    @Test
+    void buildsAreLocalOnly(JenkinsRule r) throws Exception {
+        assertNull(ClusterStore.get());
+        FreeStyleProject p = r.createFreeStyleProject("p");
+        FreeStyleBuild b = r.buildAndAssertSuccess(p);
+        b.setDescription("edited");
+        assertFalse(BuildRecords.isShared(p));
+        assertEquals(List.of(), ExternalBuilds.get().running(p));
+        assertFalse(ExternalBuilds.get().isBuilding(p));
+        assertTrue(p.getActions(RunningElsewhereAction.class).isEmpty(), "no action, so no field in the REST API");
+        assertEquals(2, p.getNextBuildNumber());
+        r.jenkins.reload();
+        p = r.jenkins.getItemByFullName("p", FreeStyleProject.class);
+        assertEquals("edited", p.getBuildByNumber(1).getDescription());
+        assertFalse(
+                new File(p.getBuildByNumber(1).getRootDir(), BuildRecords.Manifest.NAME).exists(),
+                "nothing of the plugin's in it");
+        assertFalse(new File(p.getBuildByNumber(1).getRootDir(), BuildRecords.RecordVersion.NAME).exists());
+    }
+}
