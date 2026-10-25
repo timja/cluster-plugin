@@ -9,6 +9,9 @@ High availability is the main benefit. The design is described in JEP-250 to JEP
 
 This is a prototype. It needs a Jenkins core built from the `cnj/t*` branches of [timja/jenkins](https://github.com/timja/jenkins), and the forked plugins listed under [Building](#building).
 
+> [!NOTE]
+> This branch is the earlier prototype, built on the `cnj/t*` core branches. The current version is in the stack of pull requests [#1](https://github.com/timja/cluster-plugin/pull/1) to [#7](https://github.com/timja/cluster-plugin/pull/7); its top, [`cnj2/harness`](https://github.com/timja/cluster-plugin/tree/cnj2/harness), builds against core from the [`cnj2/all`](https://github.com/timja/jenkins/tree/cnj2/all) branch of timja/jenkins, which combines the core pull requests. The JEPs are in [jenkinsci/jep#426](https://github.com/jenkinsci/jep/pull/426).
+
 ## The plugins
 | Plugin | What it holds | Depends on |
 |---|---|---|
