@@ -1,7 +1,7 @@
 <?jelly escape-by-default='true'?>
 <!-- the console of a build running on another controller, as shipped so far -->
 <j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:l="/lib/layout">
-  <l:layout title="${it.displayName}">
+  <l:layout title="${it.fullDisplayName}">
     <l:header>
       <!-- the rest as it is shipped, and once completed the build itself -->
       <meta http-equiv="refresh" content="5" />

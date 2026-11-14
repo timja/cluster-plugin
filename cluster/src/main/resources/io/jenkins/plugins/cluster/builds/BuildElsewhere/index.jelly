@@ -1,7 +1,7 @@
 <?jelly escape-by-default='true'?>
 <!-- a build running on another controller, at its own URL here -->
 <j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:l="/lib/layout" xmlns:i="jelly:fmt">
-  <l:layout title="${it.displayName}">
+  <l:layout title="${it.fullDisplayName}">
     <l:header>
       <!-- until its record arrives, when this URL shows the build itself -->
       <meta http-equiv="refresh" content="5" />

@@ -82,6 +82,15 @@ public final class StoredBuildNumberAssigner implements Job.BuildNumberAssigner 
                 "Could not assign a build number for " + job.getFullName() + " after " + MAX_ATTEMPTS + " attempts");
     }
 
+    /**
+     * Whether the job draws its numbers from the stored sequence: a build numbered here may then be added after a build
+     * with a higher number, made elsewhere, is already indexed here.
+     */
+    @Override
+    public boolean sharesNumbers(@NonNull Job<?, ?> job) {
+        return BuildRecords.isShared(job);
+    }
+
     /** Raises a job's stored sequence to at least {@code next} (never lowers it), as when a home is imported. */
     public static void raiseTo(@NonNull Job<?, ?> job, int next) throws IOException {
         String prefix = BuildRecords.prefix(job);

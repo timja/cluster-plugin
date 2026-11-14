@@ -78,9 +78,4 @@ public final class ClusterBuildRecordSource implements BuildRecordSource {
         RunMap<?> runs = BuildRecords.runsOf(job);
         return runs == null ? null : (R) runs.getLoadedBuilds().get(Integer.parseInt(dir.getName()));
     }
-
-    @Override
-    public boolean sharesNumbers(@NonNull Job<?, ?> job) {
-        return BuildRecords.isShared(job);
-    }
 }

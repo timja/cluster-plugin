@@ -3,6 +3,8 @@ package io.jenkins.plugins.cluster.builds;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.ExtensionList;
+import hudson.model.BallColor;
+import hudson.model.BuildBadgeAction;
 import hudson.model.Item;
 import hudson.model.Job;
 import hudson.model.Queue;
@@ -15,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import jenkins.model.ExternalBuild;
 import jenkins.model.Jenkins;
@@ -28,8 +31,9 @@ import org.kohsuke.stapler.export.ExportedBean;
 import org.kohsuke.stapler.interceptor.RequirePOST;
 
 /**
- * A build running on another controller, at its own URL here ({@code job/x/N/}): {@code index}, {@code console} and the
- * build history entry. A cluster routing such requests to the controller running the build answers them first;
+ * A build running on another controller, at its own URL here ({@code job/x/N/}): {@code index} and {@code console}, and
+ * an entry of the job's build history, where core lists it among the job's own builds ({@link ExternalBuild} is a
+ * {@link jenkins.model.HistoricalBuild}) with a badge naming the controller running it. A cluster routing such requests to the controller running the build answers them first;
  * without one, this shows the build as running there, until its record arrives and the build itself is shown.
  * Also the start value of a queue item another controller took ({@link Queue.HandOff#started}): it does not run here.
  */
@@ -53,10 +57,32 @@ public final class BuildElsewhere implements ExternalBuild, Queue.Executable {
         return placeholder;
     }
 
+    /** As a build's: {@code #N}. */
     @Exported
     @Override
     public String getDisplayName() {
-        return job.getFullDisplayName() + " " + placeholder.getDisplayName();
+        return placeholder.getDisplayName();
+    }
+
+    @Exported
+    @Override
+    public String getFullDisplayName() {
+        return job.getFullDisplayName() + " " + getDisplayName();
+    }
+
+    /** As a running build's: the color of the job's last completed build, animated. */
+    @NonNull
+    @Override
+    public BallColor getIconColor() {
+        Run<?, ?> last = job.getLastCompletedBuild();
+        return last == null ? BallColor.NOTBUILT_ANIME : last.getIconColor().anime();
+    }
+
+    /** One, naming the controller running it. */
+    @NonNull
+    @Override
+    public List<BuildBadgeAction> getBadgeActions() {
+        return List.of(new RunningElsewhereBadge(getLocation()));
     }
 
     @Exported
@@ -100,6 +126,12 @@ public final class BuildElsewhere implements ExternalBuild, Queue.Executable {
     @Override
     public String getUrl() {
         return job.getUrl() + placeholder.getNumber() + "/";
+    }
+
+    /** Its {@code console} view here. */
+    @Override
+    public String getConsoleUrl() {
+        return getUrl() + "console";
     }
 
     public boolean isStoppable() {
