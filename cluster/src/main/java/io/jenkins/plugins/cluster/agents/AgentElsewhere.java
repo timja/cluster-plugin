@@ -181,12 +181,13 @@ public final class AgentElsewhere implements IComputer {
 
         @CheckForNull
         private Job<?, ?> job() {
-            if (busy == null || busy.job() == null) {
+            String name = busy == null ? null : busy.job();
+            if (name == null) {
                 return null;
             }
             try (ACLContext ignored = ACL.as2(ACL.SYSTEM2)) {
                 // the widget checks the current user's permission on it (ITask#hasReadPermission), as for local ones
-                return Jenkins.get().getItemByFullName(busy.job(), Job.class);
+                return Jenkins.get().getItemByFullName(name, Job.class);
             }
         }
 
@@ -203,8 +204,9 @@ public final class AgentElsewhere implements IComputer {
         @CheckForNull
         @Override
         public Queue.Executable getCurrentExecutable() {
-            Job<?, ?> job = job();
-            return job instanceof SubTask task && busy.build() > 0 ? new BuildThere(job, task, busy.build()) : null;
+            int build = busy == null ? 0 : busy.build();
+            Job<?, ?> job = build > 0 ? job() : null;
+            return job instanceof SubTask task ? new BuildThere(job, task, build) : null;
         }
 
         @CheckForNull
