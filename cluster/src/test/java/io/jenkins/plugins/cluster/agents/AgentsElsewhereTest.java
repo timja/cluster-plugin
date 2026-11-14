@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import jenkins.model.ComputersElsewhere;
+import jenkins.model.IComputer;
 import jenkins.persistence.PersistenceStore;
 import net.sf.json.JSONObject;
 import org.junit.jupiter.api.AfterAll;
@@ -192,32 +192,46 @@ class AgentsElsewhereTest {
                 Keys.agentStatus("remote"),
                 status("other", 2, "p", 7).getBytes(StandardCharsets.UTF_8),
                 PersistenceStore.ANY);
-        ClusterFixture.await("known here", () -> c.getConnectedElsewhere() != null);
-        ComputersElsewhere.Connection e = c.getConnectedElsewhere();
-        assertEquals("other", e.getWhere());
-        assertEquals(2, e.getExecutors());
+        ClusterFixture.await("known here", () -> AgentsElsewhereSource.connectedElsewhere(c) != null);
+        AgentsElsewhere.Connection e = AgentsElsewhereSource.connectedElsewhere(c);
+        assertEquals("other", e.where());
+        assertEquals(2, e.executors());
         assertEquals(1, e.countBusy());
-        assertEquals(p, e.getBusy().get(0).getJob());
-        assertEquals(7, e.getBusy().get(0).getBuild());
+        assertEquals("p", e.busy().get(0).job());
+        assertEquals(7, e.busy().get(0).build());
         assertTrue(c.isOffline(), "still offline for scheduling");
-        assertEquals("symbol-computer", c.getIcon());
-        assertThat(c.getTooltip(), not(containsString("offline")));
+        IComputer shown = shown("remote");
+        assertTrue(shown instanceof AgentElsewhere, "shown as connected elsewhere: " + shown);
+        assertFalse(shown.isOffline());
+        assertEquals("symbol-computer", shown.getIcon());
+        assertEquals("[online]", shown.getIconAltText());
+        assertEquals("Online, connected to other", shown.getTooltip());
+        assertEquals(1, shown.countBusy());
+        assertEquals(2, shown.countExecutors());
 
-        String widget = j.createWebClient().goTo("").getElementById("executors").asNormalizedText();
+        JenkinsRule.WebClient wc = j.createWebClient();
+        org.htmlunit.html.DomElement executors = wc.goTo("").getElementById("executors");
+        String widget = executors.asNormalizedText();
         assertThat(widget, containsString("remote"));
         assertThat(widget, containsString("1/2"));
         assertThat(widget, not(containsString("offline")));
+        assertThat(executors.asXml(), containsString("job/p/7/"));
+        assertThat(wc.goTo("computer/").asNormalizedText(), not(containsString("offline")));
+        assertTrue(
+                j.jenkins.getLabel("remote").getComputers().stream().allMatch(AgentElsewhere.class::isInstance),
+                "shown online on its label's page too");
 
         // it finished there
         other.write(
                 Keys.agentStatus("remote"),
                 status("other", 2, null, 0).getBytes(StandardCharsets.UTF_8),
                 PersistenceStore.ANY);
-        ClusterFixture.await("idle", () -> c.getConnectedElsewhere().countBusy() == 0);
+        ClusterFixture.await(
+                "idle", () -> AgentsElsewhereSource.connectedElsewhere(c).countBusy() == 0);
 
         // and disconnected there
         other.delete(Keys.agentStatus("remote"), PersistenceStore.ANY);
-        ClusterFixture.await("offline", () -> c.getConnectedElsewhere() == null);
+        ClusterFixture.await("offline", () -> AgentsElsewhereSource.connectedElsewhere(c) == null);
         assertNotNull(c.getOfflineCause());
     }
 
@@ -231,10 +245,10 @@ class AgentsElsewhereTest {
                 Keys.agentStatus("remote"),
                 status("other", 1, null, 0).getBytes(StandardCharsets.UTF_8),
                 PersistenceStore.ANY);
-        ClusterFixture.await("known here", () -> c.getConnectedElsewhere() != null);
+        ClusterFixture.await("known here", () -> AgentsElsewhereSource.connectedElsewhere(c) != null);
         store.gone("other", true);
         try {
-            ClusterFixture.await("offline", () -> c.getConnectedElsewhere() == null);
+            ClusterFixture.await("offline", () -> AgentsElsewhereSource.connectedElsewhere(c) == null);
             assertFalse(c.isConnected());
         } finally {
             store.gone("other", false);
@@ -249,7 +263,7 @@ class AgentsElsewhereTest {
                 Keys.agentStatus("remote"),
                 status("other", 1, null, 0).getBytes(StandardCharsets.UTF_8),
                 PersistenceStore.ANY);
-        ClusterFixture.await("shown online", () -> c.getConnectedElsewhere() != null);
+        ClusterFixture.await("shown online", () -> AgentsElsewhereSource.connectedElsewhere(c) != null);
         FreeStyleProject p = j.createFreeStyleProject("q");
         p.setAssignedLabel(Label.get("remote"));
         AtomicInteger started = new AtomicInteger();
@@ -270,16 +284,48 @@ class AgentsElsewhereTest {
             Thread.sleep(100);
         }
         assertEquals(0, started.get());
-        assertNotNull(c.getConnectedElsewhere(), "shown online throughout");
+        assertNotNull(AgentsElsewhereSource.connectedElsewhere(c), "shown online throughout");
     }
 
     @Test
     void aStatusPublishedHereIsNotShownElsewhereOnlyHere() throws Exception {
         DumbSlave agent = j.createOnlineSlave();
         ClusterFixture.await("published", () -> published(agent.getNodeName()) != null);
-        assertNull(agent.toComputer().getConnectedElsewhere(), "connected here: shown as it is");
+        assertNull(AgentsElsewhereSource.connectedElsewhere(agent.toComputer()), "connected here: shown as it is");
+        assertTrue(shown(agent.getNodeName()) instanceof Computer, "shown as it is");
         assertNull(AgentsElsewhere.get().connectedElsewhere(agent.toComputer()), "its own status is not elsewhere");
         assertFalse(AgentsElsewhere.published(j.jenkins.toComputer()));
+    }
+
+    /** How a computer is shown: the computer list's entry of that name. */
+    private IComputer shown(String name) {
+        return j.jenkins.getComputer().getComputers().stream()
+                .filter(c -> c.getName().equals(name))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    @Test
+    void aJobTheUserMayNotReadIsNotNamed() throws Exception {
+        FreeStyleProject p = j.createFreeStyleProject("secret");
+        Computer c = connectedOnOther("remote", "remote");
+        other.write(
+                Keys.agentStatus("remote"),
+                status("other", 1, "secret", 3).getBytes(StandardCharsets.UTF_8),
+                PersistenceStore.ANY);
+        ClusterFixture.await("known here", () -> AgentsElsewhereSource.connectedElsewhere(c) != null);
+        j.jenkins.setSecurityRealm(j.createDummySecurityRealm());
+        j.jenkins.setAuthorizationStrategy(new org.jvnet.hudson.test.MockAuthorizationStrategy()
+                .grant(jenkins.model.Jenkins.READ, hudson.model.Computer.EXTENDED_READ)
+                .everywhere()
+                .to("bob"));
+        String widget = j.createWebClient()
+                .login("bob")
+                .goTo("")
+                .getElementById("executors")
+                .asXml();
+        assertThat(widget, containsString("Unknown Task"));
+        assertThat(widget, not(containsString("job/secret/")));
     }
 
     @Test

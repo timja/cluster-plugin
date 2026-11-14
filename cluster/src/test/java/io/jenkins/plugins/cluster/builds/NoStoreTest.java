@@ -5,12 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import hudson.ExtensionList;
 import hudson.model.FreeStyleBuild;
 import hudson.model.FreeStyleProject;
 import hudson.slaves.DumbSlave;
 import hudson.slaves.JNLPLauncher;
-import io.jenkins.plugins.cluster.agents.AgentsElsewhere;
 import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
 import java.util.List;
@@ -74,7 +72,8 @@ class NoStoreTest {
     void anAgentNotConnectedIsShownOffline(JenkinsRule r) throws Exception {
         DumbSlave agent = new DumbSlave("inbound", r.createTmpDir().getPath(), new JNLPLauncher());
         r.jenkins.addNode(agent);
-        assertNull(agent.toComputer().getConnectedElsewhere());
-        assertNull(ExtensionList.lookupSingleton(AgentsElsewhere.class).connectedElsewhere(agent.toComputer()));
+        // without a store, the computer list shows the computers themselves
+        assertTrue(r.jenkins.getComputer().getComputers().contains(agent.toComputer()));
+        assertTrue(agent.toComputer().isOffline());
     }
 }

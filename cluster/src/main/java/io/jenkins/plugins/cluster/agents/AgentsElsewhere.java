@@ -37,7 +37,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.model.ComputersElsewhere;
 import jenkins.model.Jenkins;
 import jenkins.model.NodeListener;
 import jenkins.persistence.ConflictException;
@@ -49,10 +48,10 @@ import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
- * Shows an agent connected to another controller of the cluster as online, with its executors as they are there,
- * rather than as offline: which controller connects an agent does not matter to the user. For display only: the agent
- * stays offline here, so this controller never schedules on it (its work goes to that controller through the shared
- * queue).
+ * Knows which agents are connected to another controller of the cluster, and what their executors do there, so that
+ * they are shown online ({@link AgentsElsewhereSource}) rather than offline: which controller connects an agent does not
+ * matter to the user. For display only: the agent stays offline here, so this controller never schedules on it (its
+ * work goes to that controller through the shared queue).
  *
  * <p>The controller an agent is connected to publishes what it is doing, {@link Keys#agentStatus}: its executors and,
  * for each busy one, the job and build it runs. That is written only when it changes, at most every
@@ -62,7 +61,7 @@ import org.kohsuke.accmod.restrictions.NoExternalUse;
  */
 @Extension
 @Restricted(NoExternalUse.class)
-public final class AgentsElsewhere implements ComputersElsewhere {
+public final class AgentsElsewhere {
 
     private static final Logger LOGGER = Logger.getLogger(AgentsElsewhere.class.getName());
 
@@ -218,9 +217,38 @@ public final class AgentsElsewhere implements ComputersElsewhere {
 
     private volatile Map.Entry<Long, Map<String, Membership.Member>> members;
 
-    @Override
+    /**
+     * How an agent is connected to another controller.
+     *
+     * @param where the name of the controller it is connected to
+     * @param executors its number of executors there
+     * @param busy what its busy executors run there
+     */
+    record Connection(
+            @NonNull String where, int executors, @NonNull List<Busy> busy) {
+        int countBusy() {
+            return busy.size();
+        }
+    }
+
+    /**
+     * What a busy executor of an agent connected elsewhere runs.
+     *
+     * @param job the full name of the job, or null if not known
+     * @param build the build number, or 0 if not started yet
+     * @param startedAt when the build started
+     * @param estimatedDuration how long the build is expected to take, or -1 if not known
+     */
+    record Busy(@CheckForNull String job, int build, long startedAt, long estimatedDuration) {}
+
+    /**
+     * How the agent of a computer is doing on another controller, if it is connected there and not here: asked whenever
+     * the agent is shown, so answered from memory.
+     *
+     * @return null if it is connected here, or not known to be connected to a live controller
+     */
     @CheckForNull
-    public Connection connectedElsewhere(@NonNull Computer computer) {
+    Connection connectedElsewhere(@NonNull Computer computer) {
         ClusterStore store = ClusterStore.get();
         if (store == null) {
             return null;
@@ -234,7 +262,7 @@ public final class AgentsElsewhere implements ComputersElsewhere {
             return null; // gone: offline, as it is
         }
         Connection c = s.connection;
-        return m.name() == null ? c : new Connection(m.name(), c.getExecutors(), c.getBusy());
+        return m.name() == null ? c : new Connection(m.name(), c.executors(), c.busy());
     }
 
     /** The live controllers by origin, read at most every {@link #MEMBERS_MS}: this is asked for each agent shown. */
