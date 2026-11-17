@@ -349,14 +349,15 @@ for j in f1 f2; do
   python3 - "$OUT_DIR/$j.xml" <<'PY'
 import sys
 open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
-<project><properties><org.jenkins.plugins.lockableresources.RequiredResourcesProperty plugin="lockable-resources"><resourceNames>fres</resourceNames></org.jenkins.plugins.lockableresources.RequiredResourcesProperty></properties>
+<project><properties><org.jenkins.plugins.lockableresources.RequiredResourcesProperty plugin="lockable-resources"><resourceNames>fres</resourceNames></org.jenkins.plugins.lockableresources.RequiredResourcesProperty><hudson.model.ParametersDefinitionProperty><parameterDefinitions><hudson.model.StringParameterDefinition><name>ROUND</name><defaultValue>0</defaultValue></hudson.model.StringParameterDefinition></parameterDefinitions></hudson.model.ParametersDefinitionProperty></properties>
 <concurrentBuild>true</concurrentBuild>
 <builders><hudson.tasks.Shell><command>echo "HOLD fres $(date +%s%3N)"; sleep 6; echo "FREE fres $(date +%s%3N)"</command></hudson.tasks.Shell></builders></project>""")
 PY
   create_both $j
 done
+# a parameter per round: identical requests for a job already queued would be folded into one
 for round in 1 2 3 4; do
-  go $A f1 & go $B f2 & wait
+  post $A "/job/f1/buildWithParameters?ROUND=$round&delay=0sec" >/dev/null & post $B "/job/f2/buildWithParameters?ROUND=$round&delay=0sec" >/dev/null & wait
   sleep 1
 done
 C9="f1#1 f1#2 f1#3 f1#4 f2#1 f2#2 f2#3 f2#4"
@@ -364,6 +365,7 @@ check "9 all 8 freestyle builds finish" eventually 300 all_finished $C9
 check "9 all 8 succeed" succeeded $C9
 check "9 no two freestyle builds held fres at once" no_overlap $C9
 for b in $C9; do console "${b%#*}" "${b#*#}" 2>/dev/null | grep -q 'failed to lock' && info "9 $b ran although it failed to lock fres"; done
+for b in $C9; do console "${b%#*}" "${b#*#}" 2>/dev/null | grep -q 'taken by another controller' && info "9 $b waited for fres taken by another controller"; done
 info "9 fres events: $(lock_events fres)"
 check "9 everything is free afterwards on both" eventually 60 free_on_both
 dump_state
