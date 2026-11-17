@@ -13,9 +13,9 @@ import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
 import java.util.List;
 import jenkins.model.ExternalBuilds;
-import org.jenkins.plugins.lockableresources.LockCoordinator;
 import org.jenkins.plugins.lockableresources.LockableResource;
 import org.jenkins.plugins.lockableresources.LockableResourcesManager;
+import org.jenkins.plugins.lockableresources.ResourceStateStore;
 import org.jenkinsci.plugins.workflow.support.steps.build.BuildTriggerRelay;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
@@ -51,7 +51,7 @@ class NoStoreTest {
         lrm.addResource(new LockableResource("res"), true);
         LockableResource res = lrm.fromName("res");
         assertTrue(lrm.reserve(List.of(res), "bob", null));
-        assertFalse(LockCoordinator.get().isHeldElsewhere(res));
+        assertFalse(ResourceStateStore.get().isShared(), "the default store: no cluster store");
         lrm.unreserve(List.of(res));
         assertFalse(res.isReserved());
     }

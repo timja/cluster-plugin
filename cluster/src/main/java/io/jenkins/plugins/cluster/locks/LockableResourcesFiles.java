@@ -9,8 +9,9 @@ import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 
 /**
- * The state of lockable-resources (who holds what, who waits) belongs to each controller: shared, one controller's
- * save would replace another's view. What is shared goes through {@link ClusterLocks} instead.
+ * lockable-resources' file (resources, and the default store's state) belongs to each controller: shared, one
+ * controller's save would replace another's. Who holds each resource is shared through {@link ClusterResourceStates}
+ * instead.
  */
 @Extension
 @Restricted(NoExternalUse.class)
