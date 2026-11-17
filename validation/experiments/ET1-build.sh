@@ -77,7 +77,7 @@ fi
 
 # lockable-resources with the LockCoordinator extension point the cluster plugin implements (skipped if the checkout is absent)
 LR=${LR:-/Users/timja/code/jenkins/lockable-resources-cnj2}
-LR_REF=${LR_REF:-cnj2/lock-coordinator}
+LR_REF=${LR_REF:-cnj2/cluster-locks}
 if [[ -d "$LR" ]]; then
   echo "lockable-resources $LR_REF ($(git -C "$LR" rev-parse --short "$LR_REF"))"
   at_ref "$LR" "$LR_REF"
