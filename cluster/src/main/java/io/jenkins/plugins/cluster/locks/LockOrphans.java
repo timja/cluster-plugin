@@ -38,6 +38,9 @@ public final class LockOrphans extends AsyncPeriodicWork {
 
     @Override
     protected void execute(TaskListener listener) throws IOException {
+        if (!LockableResourcesPlugin.isInstalled()) {
+            return;
+        }
         ClusterStore store = ClusterLocks.store();
         if (store == null || !store.canJudgeLiveness()) {
             return;

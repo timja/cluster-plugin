@@ -659,7 +659,9 @@ public final class ClusterLocks implements LockCoordinator, RemoteChangeHandler 
     public static final class CatchUp extends Resync {
         @Override
         public void catchUp() throws IOException {
-            get().catchUp();
+            if (LockableResourcesPlugin.isInstalled()) {
+                get().catchUp();
+            }
         }
     }
 

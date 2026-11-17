@@ -31,6 +31,9 @@ public final class LockAdoption extends FlowExecutionListener {
 
     @Override
     public void onResumed(@NonNull FlowExecution execution) {
+        if (!LockableResourcesPlugin.isInstalled()) {
+            return;
+        }
         ClusterStore store = ClusterLocks.store();
         if (store == null) {
             return;
