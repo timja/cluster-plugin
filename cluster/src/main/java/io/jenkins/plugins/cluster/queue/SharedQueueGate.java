@@ -5,6 +5,7 @@ import hudson.Extension;
 import hudson.model.Job;
 import hudson.model.Queue;
 import hudson.model.queue.CauseOfBlockage;
+import io.jenkins.plugins.cluster.agents.LaunchLease;
 import io.jenkins.plugins.cluster.builds.ExclusiveLeases;
 import io.jenkins.plugins.cluster.queue.SharedQueue.Blocked;
 import io.jenkins.plugins.cluster.spi.ClusterQueue;
@@ -41,7 +42,7 @@ public final class SharedQueueGate implements QueueStartGate {
         try {
             ClusterQueue cq = SharedQueue.queue();
             ClusterQueue.Record r = cq == null ? null : cq.get(item.getId());
-            answer = r == null || SharedQueue.provisionsHere(r, now);
+            answer = r == null || SharedQueue.provisionsHere(r, now, LaunchLease.holdersOf(item.getAssignedLabel()));
         } catch (IOException | RuntimeException e) {
             LOGGER.log(Level.FINE, e, () -> "Cannot tell who provisions for " + item);
             answer = true;
