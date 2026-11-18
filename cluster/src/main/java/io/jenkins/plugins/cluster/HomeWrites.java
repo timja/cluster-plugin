@@ -43,7 +43,7 @@ public final class HomeWrites {
             "(plugins|war|logs|caches|workspace|tmp|updates|\\.cache|\\.groovy|\\.java|\\.m2|secrets)(/.*)?",
             "secret\\.key(\\.not-so-secret)?|identity\\.key\\.enc|cluster-import-report\\.txt|\\.lastStarted|\\.owner",
             "jenkins\\.install\\..*|queue\\.xml|nodeMonitors\\.xml|hudson\\.model\\.UpdateCenter\\.xml|.*FlowExecutionList\\.xml",
-            "org\\.jenkins\\.plugins\\.lockableresources\\.LockableResourcesManager\\.xml",
+            "org\\.jenkins\\.plugins\\.lockableresources\\.LockableResources(Manager|State)\\.xml",
             "users/users\\.xml",
             "users/[^/]+/apiTokenStats\\.xml", // each controller's own usage statistics of API tokens
             "userContent/readme\\.txt", // written by core at every boot

@@ -22,6 +22,7 @@ class HomeWritesTest {
             "users/users.xml",
             "secret.key",
             "org.jenkins.plugins.lockableresources.LockableResourcesManager.xml",
+            "org.jenkins.plugins.lockableresources.LockableResourcesState.xml",
             "users/alice_1/apiTokenStats.xml",
             "userContent/readme.txt",
             "jobs/p/nextBuildNumber",

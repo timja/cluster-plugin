@@ -8,7 +8,7 @@ import org.kohsuke.accmod.restrictions.NoExternalUse;
 /**
  * Whether lockable-resources is installed. The extensions of this package that it does not name in their signature (a
  * listener, a periodic task) are loaded without it; they must check this before they touch a class that names one of
- * its, or every call fails with {@link NoClassDefFoundError}: for {@link LockAdoption}, the resumption of every Pipeline.
+ * its, or every call fails with {@link NoClassDefFoundError}.
  */
 @Restricted(NoExternalUse.class)
 final class LockableResourcesPlugin {
