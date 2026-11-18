@@ -27,6 +27,8 @@ import java.util.Objects;
  *     {@code items/<uuid>/files/<rel>}; users {@code users/<id>/files/<rel>}</td></tr>
  * <tr><td>locks</td><td>{@code _locks/<resource>}, {@code _locks-meta/<name>}</td></tr>
  * <tr><td>launch lease</td><td>{@code _nodes/<name>/launch}</td></tr>
+ * <tr><td>signed-out login, deleted user</td><td>{@code _logins/revoked/<login id>},
+ *     {@code _logins/deleted-users/<user>}</td></tr>
  * <tr><td>queue reservation</td><td>{@code _queue/reserved/<id>}</td></tr>
  * </table>
  *
@@ -168,6 +170,18 @@ public final class Keys {
     @NonNull
     public static String launchLease(@NonNull String node) {
         return "_nodes/" + node + "/launch";
+    }
+
+    /** A login signed out of (see {@code jenkins.security.LoginRevocation}), by its id. */
+    @NonNull
+    public static String revokedLogin(@NonNull String loginId) {
+        return "_logins/revoked/" + loginId;
+    }
+
+    /** A user deleted recently, by the key of its id (encoded as a key segment): its sessions end everywhere. */
+    @NonNull
+    public static String deletedUser(@NonNull String user) {
+        return "_logins/deleted-users/" + user;
     }
 
     /** A controller's reservation of a queue item it is starting an agent for. */
