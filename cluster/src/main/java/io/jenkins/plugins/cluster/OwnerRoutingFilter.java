@@ -30,6 +30,7 @@ import jenkins.persistence.PersistenceStores;
  * <ul>
  * <li>a build running elsewhere ({@code /job/a/job/b/<N>/…}: its page, live console, {@code input}, stop, replay, REST API);
  * <li>a bound object of another controller ({@link BoundRequestForwarder});
+ * <li>a remote lock of another controller ({@link RemoteLockForwarder});
  * <li>the install progress pages ({@link UpdateCenterRouting});
  * <li>an agent whose channel another controller holds ({@code /computer/<name>/…}: its page, log, script console);
  * <li>a job's {@code lastBuild} while its newest build runs elsewhere (redirected to that build), and its SCM polling log
@@ -94,6 +95,7 @@ public final class OwnerRoutingFilter implements Filter {
     private static final List<Rule> RULES = List.of(
             OwnerRoutingFilter::build,
             BoundRequestForwarder::route,
+            RemoteLockForwarder::route,
             UpdateCenterRouting::route,
             OwnerRoutingFilter::computer,
             OwnerRoutingFilter::lastBuild,

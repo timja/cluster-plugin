@@ -11,6 +11,10 @@ import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.File;
 import java.util.List;
 import jenkins.model.ExternalBuilds;
+import org.jenkins.plugins.lockableresources.LockCoordinator;
+import org.jenkins.plugins.lockableresources.LockableResource;
+import org.jenkins.plugins.lockableresources.LockableResourcesManager;
+import org.jenkinsci.plugins.workflow.support.steps.build.BuildTriggerRelay;
 import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
@@ -37,5 +41,22 @@ class NoStoreTest {
                 new File(p.getBuildByNumber(1).getRootDir(), BuildRecords.Manifest.NAME).exists(),
                 "nothing of the plugin's in it");
         assertFalse(new File(p.getBuildByNumber(1).getRootDir(), BuildRecords.RecordVersion.NAME).exists());
+    }
+
+    @Test
+    void locksAreLocalOnly(JenkinsRule r) {
+        LockableResourcesManager lrm = LockableResourcesManager.get();
+        lrm.addResource(new LockableResource("res"), true);
+        LockableResource res = lrm.fromName("res");
+        assertTrue(lrm.reserve(List.of(res), "bob", null));
+        assertFalse(LockCoordinator.get().isHeldElsewhere(res));
+        lrm.unreserve(List.of(res));
+        assertFalse(res.isReserved());
+    }
+
+    @Test
+    void buildStepEventsAreNotRelayed(JenkinsRule r) throws Exception {
+        FreeStyleBuild b = r.buildAndAssertSuccess(r.createFreeStyleProject("p"));
+        assertNull(BuildTriggerRelay.get().returnAddress(b, "3"), "a build step's events stay on this controller");
     }
 }
