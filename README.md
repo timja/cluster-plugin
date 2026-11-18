@@ -5,9 +5,10 @@ Run several Jenkins controllers as one cluster:
 - a build keeps running when its controller dies, because another controller adopts it
 - `JENKINS_HOME` can be ephemeral
 
-High availability is the main benefit. The design is described in JEP-250 to JEP-257 (draft JEPs).
+High availability is the main benefit. The design is described in JEP-250 to JEP-257 (draft JEPs). How to install,
+scale, upgrade, back up and restore a cluster is in [Operating a cluster](docs/operating-a-cluster.md).
 
-This is a prototype. It needs a Jenkins core built from the `cnj/t*` branches of [timja/jenkins](https://github.com/timja/jenkins), and the forked plugins listed under [Building](#building).
+This is a prototype. It needs a Jenkins core built from the `cnj2/all` branch of [timja/jenkins](https://github.com/timja/jenkins), which combines the core pull requests it needs, and the forked plugins listed under [Building](#building). `validation/experiments/ET1-build.sh` builds all of them (see [Acceptance experiments](#acceptance-experiments)).
 
 > [!NOTE]
 > This branch is the earlier prototype, built on the `cnj/t*` core branches. The current version is in the stack of pull requests [#1](https://github.com/timja/cluster-plugin/pull/1) to [#7](https://github.com/timja/cluster-plugin/pull/7); its top, [`cnj2/harness`](https://github.com/timja/cluster-plugin/tree/cnj2/harness), builds against core from the [`cnj2/all`](https://github.com/timja/jenkins/tree/cnj2/all) branch of timja/jenkins, which combines the core pull requests. The JEPs are in [jenkinsci/jep#426](https://github.com/jenkinsci/jep/pull/426).
@@ -47,13 +48,16 @@ mvn install
 This builds the four plugins and runs their tests, including Testcontainers tests against PostgreSQL, Azurite and Garage.
 
 It needs, installed locally:
-- Jenkins core `2.586-SNAPSHOT`, from the `cnj/t*` branches of timja/jenkins
+- Jenkins core `2.586-cnj2-all-SNAPSHOT`, from the `cnj2/all` branch of timja/jenkins (`mvn install -Dchangelist=-cnj2-all-SNAPSHOT`)
 - workflow-cps and kubernetes at `999999-SNAPSHOT`, from their `cnj/*` branches on the timja forks
 
 ## The Helm chart
 [`charts/jenkins-cluster`](charts/jenkins-cluster) runs a cluster of controllers on Kubernetes. It includes PostgreSQL, and blob storage set by `blob.type`:
 - `azure`: in-chart Azurite
 - `s3`: an external bucket
+
+[Operating a cluster](docs/operating-a-cluster.md) describes its values, managed services, upgrades, backups and
+restores.
 
 ## Acceptance experiments
 [`validation/`](validation) holds the experiments (ET1 to ET22) that check a cluster end to end, on Docker Compose and on kind.

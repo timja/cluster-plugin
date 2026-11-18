@@ -3,10 +3,10 @@
 # ET setup (two tmpfs controllers, S0, Postgres, Azurite, token auth); an inbound agent `lin` connected to B only.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t12-m1-remainder experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
-export CNJ_JAVA_OPTS="-Djenkins.persistence.BuildRecords.lateFilesPeriodSeconds=5"
+export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.builds.BuildRecords.lateFilesPeriodSeconds=5"
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET12" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
 rm -rf "$OUT"; mkdir -p "$OUT" "$OUT_DIR"
@@ -23,7 +23,7 @@ exists() { [[ "$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" "http://loca
 result_is() { [[ "$(json "$1" "$2/api/json?tree=result" 2>/dev/null | jq_ 'd["result"]')" == "$3" ]]; }
 console_has() { json "$1" "$2/consoleText" 2>/dev/null | grep -q -- "$3"; }
 psql_q() { et1 exec -T postgres psql -U jenkins -At -c "$1"; }
-writer_of() { psql_q "select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = 'jobs/$1/builds/$2/build.xml' and e.kind = 'WRITTEN' order by seq desc limit 1"; }
+writer_of() { psql_q "select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = '$(item_key $B "$1")/builds/$2/build.xml' and e.kind = 'WRITTEN' order by seq desc limit 1"; }
 pipeline() { # name script
   python3 - "$OUT_DIR/$1.xml" "$2" <<'PY'
 import sys
@@ -43,14 +43,15 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 r "## ET12 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -68,7 +69,7 @@ pipeline lab2 'node("built-in") { echo "first, on the controller" }; node("lin")
 post $A "/job/lab1/build?delay=0sec" >/dev/null
 post $A "/job/lab2/build?delay=0sec" >/dev/null
 check "1 lab1 completes" eventually 180 result_is $B /job/lab1/1 SUCCESS
-check "1 on lin, by B (handed over from A)" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = 'jobs/lab1/builds/1/build.xml' and e.kind = 'WRITTEN' order by seq desc limit 1\") == jenkins-b ]] && curl -gsf -u '$AUTH' http://localhost:$B/job/lab1/1/consoleText | grep -q on-agent-"
+check "1 on lin, by B (handed over from A)" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = '$(item_key $B lab1)/builds/1/build.xml' and e.kind = 'WRITTEN' order by seq desc limit 1\") == jenkins-b ]] && curl -gsf -u '$AUTH' http://localhost:$B/job/lab1/1/consoleText | grep -q on-agent-"
 check "1 lab2 (first on A's controller, then on lin) completes with both parts" eventually 180 bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/lab2/1/consoleText | grep -q 'first, on the controller' && curl -gsf -u '$AUTH' http://localhost:$B/job/lab2/1/consoleText | grep -q then-on-agent && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/lab2/1/api/json?tree=result') == *SUCCESS* ]]"
 info "1 A logged: $(et1 logs jenkins-a 2>&1 | grep -o 'Handing [^:]* over' | sort -u | tr '\n' ';')"
 
@@ -77,7 +78,7 @@ log "scenario 1b: parallel branches, one on A's built-in node, one on lin (B onl
 pipeline lab3 'parallel here: { node("built-in") { sleep 25; echo "here-done" } }, there: { node("lin") { sh "echo there-done" } }'
 post $A "/job/lab3/build?delay=0sec" >/dev/null
 check "1b lab3 completes, with both branches" eventually 240 bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/lab3/1/consoleText | grep -q here-done && curl -gsf -u '$AUTH' http://localhost:$B/job/lab3/1/consoleText | grep -q there-done && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/lab3/1/api/json?tree=result') == *SUCCESS* ]]"
-hand=$(et1 logs jenkins-a 2>&1 | grep -c 'Handing jobs/lab3\|Handing lab3' || true)
+hand=$(et1 logs jenkins-a 2>&1 | grep -c 'Handing lab3 #' || true)
 info "1b A handed lab3 over $hand time(s)"
 check "1b handed over once, after the branch on A's node finished (not back and forth)" test "$hand" -le 1
 
@@ -91,7 +92,7 @@ create_job $A down "$OUT_DIR/down.xml"; eventually 15 exists $B /job/down
 pipeline up1 'pipeline { agent none; stages { stage("call") { steps { script { def b = build job: "down", wait: true; echo "down result ${b.result} #${b.number}" } } } } }'
 post $A "/job/up1/build?delay=0sec" >/dev/null
 check "1c up1 completes with the downstream result" eventually 240 bash -c "curl -gsf -u '$AUTH' http://localhost:$A/job/up1/1/consoleText | grep -q 'down result SUCCESS' && [[ \$(curl -gsf -u '$AUTH' 'http://localhost:$A/job/up1/1/api/json?tree=result') == *SUCCESS* ]]"
-check "1c ... the downstream build ran on B, not pinned to A" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = 'jobs/down/builds/1/build.xml' and e.kind = 'WRITTEN' order by seq desc limit 1\") == jenkins-b ]]"
+check "1c ... the downstream build ran on B, not pinned to A" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml exec -T postgres psql -U jenkins -At -c \"select m.name from jenkins_store_events e join jenkins_members m on m.origin = e.origin where e.key = '$(item_key $B down)/builds/1/build.xml' and e.kind = 'WRITTEN' order by seq desc limit 1\") == jenkins-b ]]"
 log "scenario 1d: ... and A is killed while it waits"
 pipeline up2 'pipeline { agent none; stages { stage("call") { steps { script { def b = build job: "down", wait: true; echo "down result ${b.result} #${b.number}" } } } } }'
 post $A "/job/up2/build?delay=0sec" >/dev/null
@@ -129,7 +130,7 @@ sleep 5 # a save point
 docker kill -s KILL ${P}jenkins-a-1 ${P}jenkins-b-1 >/dev/null
 et1 rm -sf jenkins-a jenkins-b >/dev/null 2>&1
 sleep 25 # past the membership timeout
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1; wait_up $A; wait_up $B
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A; et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 code=$(curl -gs -o /dev/null -w '%{http_code}' -u "$AUTH" "http://localhost:$B/job/sleeper/1/api/json")
 check "4 a request for a build of the old controller is answered (not forwarded to its namesake: $code)" bash -c "[[ '$code' != 000 && '$code' != 502 ]]"
 check "3 the Pipeline is resumed and completes" eventually 240 bash -c "for p in $A $B; do curl -gsf -u '$AUTH' http://localhost:\$p/job/sleeper/1/api/json?tree=result | grep -q SUCCESS && curl -gsf -u '$AUTH' http://localhost:\$p/job/sleeper/1/consoleText | grep -q 'after its controller was gone' && exit 0; done; exit 1"

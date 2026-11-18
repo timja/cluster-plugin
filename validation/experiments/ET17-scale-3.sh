@@ -5,7 +5,7 @@
 # ET setup (three tmpfs controllers, S0, Postgres, Azurite, token auth; compose.et17.yaml).
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 # three controllers in one Docker VM (8 GB, shared with whatever else runs): bounded heaps (it uses about 200 MB)
 export CNJ_JAVA_OPTS="${CNJ_JAVA_OPTS:-} -Xmx768m"
@@ -39,14 +39,16 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b jenkins-c >/dev/null 2>&1
-wait_up $A; wait_up $B; wait_up $C
+# one after the other (ET1 checks starting controllers at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
+et1 up -d jenkins-c >/dev/null 2>&1; wait_up $C
 psql_q "create extension if not exists pg_stat_statements" >/dev/null
 r "## ET17 results ($(date -u +%Y-%m-%dT%H:%MZ)): 3 controllers, $HJOBS jobs x $PER builds, $PROJECTS multibranch projects x $BRANCHES branches"
 r ""
@@ -67,29 +69,31 @@ for i in $(seq 1 $HJOBS); do eventually 120 bash -c "[[ \$(curl -gsf -u '$AUTH' 
 sleep 5
 et1 stop jenkins-a jenkins-b jenkins-c >/dev/null 2>&1
 start=$SECONDS
+# the jobs' entry prefixes (_items/<uuid>), from the identity in their stored configuration
+H_PREFIXES="(select '_items/' || substring(convert_from(content, 'UTF8') from '<itemUuid>([^<]+)</itemUuid>') p from jenkins_store where key ~ '^jobs/h[0-9]+/config[.]xml\$')"
 psql_q "insert into jenkins_store (key, content, sha256, version, updated_by, size)
   select replace(s.key, '/builds/1/', '/builds/' || n || '/'), s.content, s.sha256, nextval('jenkins_store_version'), 'synthetic', s.size
-  from jenkins_store s, generate_series(2, $PER) n where s.key ~ '^jobs/h[0-9]+/builds/1/build.xml\$'" >/dev/null
+  from jenkins_store s, generate_series(2, $PER) n where s.key in (select p || '/builds/1/build.xml' from $H_PREFIXES h)" >/dev/null
 psql_q "update jenkins_store set content = convert_to('$((PER + 1))', 'UTF8'), size = length('$((PER + 1))'), version = nextval('jenkins_store_version')
-  where key ~ '^jobs/h[0-9]+/nextBuildNumber\$'" >/dev/null
+  where key in (select p || '/nextBuildNumber' from $H_PREFIXES h)" >/dev/null
 # their permalinks, as the controllers completing them would have stored them (Target 15: StoredPermalinks)
 psql_q "insert into jenkins_store (key, content, sha256, version, updated_by, size)
   select k, c, sha256(c), nextval('jenkins_store_version'), 'synthetic', length(c) from (
     select regexp_replace(key, '/nextBuildNumber\$', '/builds/permalinks') k,
       convert_to('lastCompletedBuild $PER' || chr(10) || 'lastFailedBuild -1' || chr(10) || 'lastStableBuild $PER' || chr(10)
         || 'lastSuccessfulBuild $PER' || chr(10) || 'lastUnstableBuild -1' || chr(10) || 'lastUnsuccessfulBuild -1' || chr(10), 'UTF8') c
-    from jenkins_store where key ~ '^jobs/h[0-9]+/nextBuildNumber\$') p
+    from jenkins_store where key in (select p || '/nextBuildNumber' from $H_PREFIXES h)) p
   on conflict (key) do update set content = excluded.content, sha256 = excluded.sha256, version = excluded.version, size = excluded.size" >/dev/null
-info "1 build records inserted in $((SECONDS - start)) s: $(psql_q "select count(*) from jenkins_store where key like 'jobs/h%/builds/%'") records"
+info "1 build records inserted in $((SECONDS - start)) s: $(psql_q "select count(*) from jenkins_store where key ~ '^_items/[^/]+/builds/[0-9]+/build[.]xml$'") records"
 # the newest builds' snapshots (what job pages show), copied in blob storage
 et1 start jenkins-a >/dev/null 2>&1; wait_up $A 600
 groovy $A "
-def blobs = jenkins.persistence.PersistenceStores.getBlobStore()
+def blobs = $BLOBS_GROOVY
 for (int i = 1; i <= $HJOBS; i++) {
-  def src = 'jobs/h' + i + '/builds/1/files.tgz'
-  def bytes; blobs.get(src).withCloseable { bytes = it.bytes }
+  def prefix = 'items/' + Jenkins.get().getItemByFullName('h' + i).getItemUuid()
+  def bytes; blobs.get(prefix + '/builds/1/files.tgz').withCloseable { bytes = it.bytes }
   for (int n = $PER - $SNAPSHOTS + 1; n <= $PER; n++) {
-    blobs.put('jobs/h' + i + '/builds/' + n + '/files.tgz', new ByteArrayInputStream(bytes), bytes.length)
+    blobs.put(prefix + '/builds/' + n + '/files.tgz', new ByteArrayInputStream(bytes), bytes.length)
   }
 }" >/dev/null
 et1 stop jenkins-a >/dev/null 2>&1
@@ -110,13 +114,15 @@ for p in $A $B $C; do
   check "2 $p: the warm job page with $PER builds under 2 s" under "$warm" 2
 done
 check "2 the job lists its newest build" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$C/job/h1/api/json?tree=lastBuild%5Bnumber%5D') == *'\"number\":$PER'* ]]"
+deleted=$(item_key $A h$HJOBS)
 start=$SECONDS
 curl -gsf -u "$AUTH" -X POST "http://localhost:$A/job/h$HJOBS/doDelete" -o /dev/null
 info "2 deleting a job with $PER builds took $((SECONDS - start)) s"
 check "2 ... and the others drop it within 60 s" eventually 60 bash -c "! curl -gsf -u '$AUTH' http://localhost:$B/job/h$HJOBS/api/json -o /dev/null && ! curl -gsf -u '$AUTH' http://localhost:$C/job/h$HJOBS/api/json -o /dev/null"
-left=$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c "select key from jenkins_store where key like 'jobs/h$HJOBS/%' and key <> 'jobs/h$HJOBS/nextBuildNumber' order by key limit 10")
-[[ -n "$left" ]] && info "2 stored under the deleted job: $(echo $left)"
-check "2 ... with its records (its build numbers are kept, so a recreated job never reuses one)" bash -c "[[ \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like 'jobs/h$HJOBS/%' and key <> 'jobs/h$HJOBS/nextBuildNumber'\") == 0 ]]"
+# its entries are deleted after the job (a job made again under its name is a new item: it inherits nothing)
+deleted_entries() { psql_q "select count(*) from jenkins_store where key like '$deleted/%' or key like 'jobs/h$HJOBS/%'"; }
+check "2 ... with all its $PER records, within 120 s" eventually 120 bash -c "[[ -n '$deleted' && \$(cd $VALIDATION_DIR && docker compose -f compose.et1.yaml -f compose.et17.yaml exec -T postgres psql -U jenkins -At -c \"select count(*) from jenkins_store where key like '$deleted/%' or key like 'jobs/h$HJOBS/%'\") == 0 ]]"
+info "2 entries left of the deleted job: $(deleted_entries)"
 
 # ------------------------------------------------------------------ 3. a branch-indexing storm
 log "scenario 3: $PROJECTS multibranch projects of $BRANCHES branches, scanned from all three controllers at once"
@@ -137,7 +143,7 @@ for (int i = 1; i <= $PROJECTS; i++) {
   p.save()
 }" >/dev/null
 sleep 10
-c0=$(for p in $A $B $C; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
+c0=$(for p in $A $B $C; do groovy $p 'def m = io.jenkins.plugins.cluster.config.ConflictCounts.merged(); println "${m + jenkins.persistence.PersistenceStores.getRefusedCount()} ${m}"'; done | tr '\n' ';')
 start=$SECONDS
 for i in $(seq 1 $PROJECTS); do for p in $A $B $C; do curl -gs -u "$AUTH" -X POST "http://localhost:$p/job/mb$i/build?delay=0" -o /dev/null & done; done; wait
 sleep "${KILL_AFTER:-20}" # later kills catch more builds in flight
@@ -150,32 +156,40 @@ check "3 every branch job ($want) on A and B" eventually 600 all_branches
 info "3 storm settled $((SECONDS - start)) s after the scans"
 # per branch, its published records; a number C took just before it was killed may never become a build (as after a
 # crash on one controller), and the next scan builds the branch then: count builds, not #1
-branch_builds="select count(*) from (select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/') b, count(*) n,
-  count(*) filter (where convert_from(content, 'UTF8') like '%<result>SUCCESS</result>%') ok
-  from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' group by 1) t"
+# branch jobs (their configuration's path) and their entry prefixes (_items/<uuid>, from the identity in it); their build
+# records, by branch
+BRANCHES_SQL="(select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/config[.]xml\$') b,
+  '_items/' || substring(encode(content, 'escape') from '<itemUuid>([^<]+)</itemUuid>') p
+  from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/config[.]xml\$')"
+# (records compared as escaped bytes: not every stored record decodes as UTF-8)
+RECORDS_SQL="(select br.b, s.key, s.content from $BRANCHES_SQL br join jenkins_store s
+  on substring(s.key from '^(_items/[^/]+)/builds/[0-9]+/build[.]xml\$') = br.p)"
+branch_builds="select count(*) from (select b, count(*) n,
+  count(*) filter (where encode(content, 'escape') like '%<result>SUCCESS</result>%') ok
+  from $RECORDS_SQL r group by 1) t"
 # every branch has a published build: successful, or (those C ran, killed before their first save point) closed as
 # aborted, saying why (JEP-252: what nothing can resume is closed, not lost)
 branch_records() { psql_q "$branch_builds where n >= 1"; }
 built_once() { [[ $(branch_records) == $want ]]; }
 check "3 every branch built (a published record each: none lost)" eventually 600 built_once
 lost_branches() { # branch jobs with no published build record, and what the store, the queue and the controllers say of each
-  psql_q "select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/config.xml\$') from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/config.xml\$'
-    except select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/') from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$'"
+  psql_q "select b from $BRANCHES_SQL br except select b from $RECORDS_SQL r"
 }
 if ! built_once; then
   mkdir -p "$OUT"; f="$OUT/lost-branches.txt"; : > "$f"
   for b in $(lost_branches); do
     m=${b#jobs/}; m=${m%%/*}; br=${b##*/}
-    { echo "== $b"
-      echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like '$b/%' order by key"
+    bp=$(psql_q "select p from $BRANCHES_SQL br where b = '$b'")
+    { echo "== $b ($bp)"
+      echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like '$b/%' or key like '$bp/%' order by key"
       echo "-- queue rows"; psql_q "select id || ' ' || state || ' origin=' || origin || ' claimed_by=' || coalesce(claimed_by, '-') || ' build=' || build_number || ' ' || updated_at from jenkins_queue where task like '%$m%$br%' order by id"
-      echo "-- events"; psql_q "select seq || ' ' || kind || ' ' || key || ' ' || origin || ' ' || at from jenkins_store_events where key like '$b/%' order by seq"
+      echo "-- events"; psql_q "select seq || ' ' || kind || ' ' || key || ' ' || origin || ' ' || at from jenkins_store_events where key like '$b/%' or key like '$bp/%' order by seq"
       for c in a b c; do echo "-- jenkins-$c log"; docker logs ${P}jenkins-$c-1 2>&1 | grep -F "$m » $br" | head -20 || true; done
     } >> "$f"
   done
   for m in $(lost_branches | sed 's#^jobs/##; s#/.*##' | sort -u); do # the projects' scans, from each controller
     { echo "== jobs/$m"
-      echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like 'jobs/$m/%' and key not like 'jobs/$m/branches/%/builds/%' order by key"
+      echo "-- store keys"; psql_q "select key || ' v' || version || ' ' || length(content) from jenkins_store where key like 'jobs/$m/%' order by key"
       echo "-- queue rows"; psql_q "select id || ' ' || state || ' origin=' || origin || ' claimed_by=' || coalesce(claimed_by, '-') || ' build=' || coalesce(build_number::text, '-') || ' ' || task || ' ' || updated_at from jenkins_queue where task like '%$m%' order by id"
       for p in $A $B; do echo "-- indexing log on $p"; curl -gsf -m 60 -u "$AUTH" "http://localhost:$p/job/$m/indexing/consoleText" || true; done
       for c in a b c; do echo "-- jenkins-$c log"; docker logs ${P}jenkins-$c-1 2>&1 | grep -F "$m" | head -40 || true; done
@@ -183,22 +197,22 @@ if ! built_once; then
   done
   info "3 lost branches: $(lost_branches | tr '\n' ' ') (details in $f)"
 fi
-aborted=$(psql_q "select count(*) from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' and convert_from(content, 'UTF8') like '%<result>ABORTED</result>%'")
+aborted=$(psql_q "select count(*) from $RECORDS_SQL r where encode(content, 'escape') like '%<result>ABORTED</result>%'")
 info "3 successful: $(psql_q "$branch_builds where ok >= 1"); closed as aborted (were running on C when it was killed): $aborted"
 closed_by_c() { # up to 5 of the aborted builds: their console says C was gone
   local k
-  for k in $(psql_q "select substring(key from '^jobs/(mb[0-9]+)/branches/([^/]+)/builds/([0-9]+)/') || '|' || substring(key from '^jobs/mb[0-9]+/branches/([^/]+)/') || '|' || substring(key from '/builds/([0-9]+)/') from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' and convert_from(content, 'UTF8') like '%<result>ABORTED</result>%' limit 5"); do
+  for k in $(psql_q "select substring(b from '^jobs/(mb[0-9]+)/') || '|' || substring(b from '/branches/([^/]+)\$') || '|' || substring(key from '/builds/([0-9]+)/') from $RECORDS_SQL r where encode(content, 'escape') like '%<result>ABORTED</result>%' limit 5"); do
     IFS='|' read -r mb br n <<<"$k"
     curl -gsf -u "$AUTH" "http://localhost:$A/job/$mb/job/$br/$n/consoleText" | grep -q 'running on jenkins-c, which is gone' || return 1
   done
 }
 check "3 ... each aborted one closed because C was gone (5 consoles)" closed_by_c
-info "3 records by result: $(psql_q "select r || '=' || count(*) from (select coalesce(substring(convert_from(content, 'UTF8') from '<result>([A-Z_]+)</result>'), 'none') r from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$') t group by r order by r" | tr '\n' ' ')"
+info "3 records by result: $(psql_q "select r || '=' || count(*) from (select coalesce(substring(encode(content, 'escape') from '<result>([A-Z_]+)</result>'), 'none') r from $RECORDS_SQL x) t group by r order by r" | tr '\n' ' ')"
 info "3 branches with more than one build: $(psql_q "$branch_builds where n > 1")"
-twice=$(psql_q "select b from (select substring(key from '^(jobs/mb[0-9]+/branches/[^/]+)/') b, count(*) filter (where convert_from(content, 'UTF8') like '%<result>SUCCESS</result>%') ok from jenkins_store where key ~ '^jobs/mb[0-9]+/branches/[^/]+/builds/[0-9]+/build.xml\$' group by 1) t where ok > 1")
+twice=$(psql_q "select b from (select b, count(*) filter (where encode(content, 'escape') like '%<result>SUCCESS</result>%') ok from $RECORDS_SQL r group by 1) t where ok > 1")
 [[ -n $twice ]] && info "3 built successfully more than once: $(echo $twice)"
 check "3 ... exactly once: no branch built successfully twice (concurrent scans of a project)" test "$(psql_q "$branch_builds where ok > 1")" = 0
-c1=$(for p in $A $B; do groovy $p 'println jenkins.persistence.PersistenceStores.getConflictCount() + " " + jenkins.persistence.PersistenceStores.getMergeCount()'; done | tr '\n' ';')
+c1=$(for p in $A $B; do groovy $p 'def m = io.jenkins.plugins.cluster.config.ConflictCounts.merged(); println "${m + jenkins.persistence.PersistenceStores.getRefusedCount()} ${m}"'; done | tr '\n' ';')
 info "3 conflicts and merges (A;B;C) before: $c0 after (A;B): $c1"
 info "3 heap: A $(heap ${P}jenkins-a-1), B $(heap ${P}jenkins-b-1); VM swap used $(vmswap)"
 psql_q "select round(total_exec_time) || ' ms, ' || calls || ' calls: ' || left(regexp_replace(query, '\s+', ' ', 'g'), 120) from pg_stat_statements order by total_exec_time desc limit 8" > "$OUT/top-statements.txt" 2>&1 || true

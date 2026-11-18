@@ -6,7 +6,7 @@
 # ET setup (two tmpfs controllers, S0, Postgres, Azurite, token auth) plus `rr`; needs updates.jenkins.io.
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 A=$PORT_A B=$PORT_B RR=$PORT_RR OUT="$RAW_DIR/ET19" ET1="$ET1_DIR"
 et1() { docker compose --project-directory "$VALIDATION_DIR" -f "$VALIDATION_DIR/compose.et1.yaml" "$@"; }
@@ -29,14 +29,15 @@ rm -rf "$ET1/seed"; mkdir -p "$ET1/seed"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d rr >/dev/null 2>&1
 r "## ET19 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""

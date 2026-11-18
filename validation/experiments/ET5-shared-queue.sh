@@ -3,7 +3,7 @@
 # ET4 setup (two tmpfs controllers, S0, Postgres, Azurite, token auth, agent1 through the failover URL),
 # plus lockable-resources with cluster locks and the resource "res" declared on both. Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t5-m3-cluster-periodic-work experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET5" ET1="$ET1_DIR"
@@ -66,15 +66,16 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 agent_secret $PORT_SEED agent1 > "$ET1/agent1.secret"
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 et1 up -d lb agent1 >/dev/null 2>&1
 r "## ET5 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
@@ -84,7 +85,7 @@ check "agent1 is connected to A" eventually 60 agent_online_on $A
 # the lockable resource "res", declared (not ephemeral) on a controller, as configuration as code would
 declare_res() { groovy "$1" 'def m = org.jenkins.plugins.lockableresources.LockableResourcesManager.get(); if (m.fromName("res") == null) { m.addResource(new org.jenkins.plugins.lockableresources.LockableResource("res")) }' >/dev/null; }
 declare_res $A; declare_res $B
-check "both controllers share the queue" bash -c "for p in $A $B; do [[ \$(cd $VALIDATION_DIR && source lib.sh && groovy \$p 'println jenkins.persistence.PersistenceStores.get().queue() != null') == true ]] || exit 1; done"
+check "both controllers share the queue" bash -c "for p in $A $B; do [[ \$(cd $VALIDATION_DIR && source lib.sh && groovy \$p 'println io.jenkins.plugins.cluster.spi.ClusterStore.getMethod(\"get\").invoke(null)?.queue() != null') == true ]] || exit 1; done"
 
 # ------------------------------------------------------------------ 1. fold once
 log "scenario 1: Build Now on A and B within the quiet period"
@@ -152,8 +153,10 @@ pipeline_job longrun 'echo "running"; sleep 120'
 create_both longrun
 schedule $A "/job/longrun/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/longrun/1 "running"
-sleep 2
-post $B "/job/longrun/running-elsewhere/stop?number=1" >/dev/null
+# B offers to stop it once it knows the build runs elsewhere
+elsewhere_on_b() { json $B "/job/longrun/api/json?tree=actions[buildsElsewhere[number]]" | grep -q '"buildsElsewhere":\[{'; }
+check "5 B lists #1 as running elsewhere" eventually 30 elsewhere_on_b
+post $B "/job/longrun/running-elsewhere/stop?number=1" >/dev/null || true
 check "5 aborted on A" eventually 60 result_is $A /job/longrun/1 ABORTED
 check "5 the log says who stopped it" console_has $A /job/longrun/1 "Stopped from jenkins-b"
 
@@ -198,7 +201,7 @@ schedule $B "/job/lk2/build?delay=0sec" >/dev/null &
 wait
 check "9 both complete" eventually 120 bash -c "cd $VALIDATION_DIR && source lib.sh && for j in lk1 lk2; do for p in $A $B; do curl -gsf -u \"\$AUTH\" http://localhost:\$p/job/\$j/1/api/json?tree=result | grep -q SUCCESS && continue 2; done; exit 1; done"
 # the store's record of who held res: holds must strictly alternate (acquired, released, acquired, released)
-psql_q "select kind || ' ' || extract(epoch from at) from jenkins_store_events where key = 'lockable-resources/res' order by seq" > "$OUT/res-events.txt"
+psql_q "select kind || ' ' || extract(epoch from at) from jenkins_store_events where key = '_locks/res' order by seq" > "$OUT/res-events.txt"
 info "9 res holds: $(awk '{printf "%s@%.1f ", $1, $2}' "$OUT/res-events.txt")"
 check "9 res was held by one build at a time (store events alternate, two holds)" test "$(awk '{print $1}' "$OUT/res-events.txt" | tr '\n' ' ')" = "WRITTEN DELETED WRITTEN DELETED "
 info "9 the waiter got res $(awk 'NR==2 {r=$2} NR==3 {printf "%.1f", $2 - r}' "$OUT/res-events.txt") s after its release"

@@ -4,7 +4,7 @@
 # ET setup (two tmpfs controllers, S0, Postgres, Azurite, token auth); segments of 20 blocks (instead of 49,000).
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t14-m1-resilience experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 export CNJ_JAVA_OPTS="-Dio.jenkins.plugins.cluster.azure.AzureBlobStore.maxSegmentBlocks=20 -Dio.jenkins.plugins.cluster.BlobLogStorage.coalesceMillis=500"
@@ -33,7 +33,8 @@ open(sys.argv[1], "w").write("""<?xml version='1.1' encoding='UTF-8'?>
 PY
   create_job "$1" "$2" "$OUT_DIR/$2.xml"; eventually 15 exists $B "/job/$2"; eventually 15 exists $A "/job/$2"
 }
-segments_of() { groovy $A "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/$1/builds/$2').findAll { it ==~ /.*\\/log(\\.[0-9]+)?/ }.size()" | tr -d '\r\n '; }
+# segments_of <port> <job> <number>: how many segments the build's log has (log, log.1, …)
+segments_of() { blob_list "$1" "$(item_blobs "$1" "$2")/builds/$3" | grep -cE '/log(\.[0-9]+)?$' || true; }
 # every "line N" for N in 1..count present, in nondecreasing order (a resumed Pipeline may repeat lines since its save point)
 lines_in_order() { # file count
   python3 - "$1" "$2" <<'PY'
@@ -65,14 +66,15 @@ rm -rf "$ET1/seed" "$ET1/repo"; mkdir -p "$ET1/seed" "$ET1/repo"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 r "## ET15 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -83,7 +85,7 @@ log "scenario 1: a chatty Pipeline (300 lines, ~1 minute)"
 pipeline $A chatty "${CHATTY//COUNT/300}"
 post $A "/job/chatty/build?delay=0sec" >/dev/null
 eventually 60 console_has $A /job/chatty/1 "line 100"
-check "1 while it runs, B's API lists it among the builds running elsewhere (buildsElsewhere)" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=buildsElsewhere[number]') == *'\"buildsElsewhere\":[{'*'\"number\":1}'* ]]"
+check "1 while it runs, B's API lists it among the builds running elsewhere (the job's action, buildsElsewhere)" bash -c "[[ \$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=actions[buildsElsewhere[number]]') == *'\"buildsElsewhere\":[{'*'\"number\":1}'* ]]"
 check "1 ... and not among B's own runs (builds and lastBuild keep their types: Run)" bash -c "j=\$(curl -gsf -u '$AUTH' 'http://localhost:$B/job/chatty/api/json?tree=lastBuild[number],builds[number]'); [[ \$j == *'\"builds\":[]'* && \$j == *'\"lastBuild\":null'* ]]"
 check "1 ... and B's /lastBuild/api/json is the running build (redirected and forwarded to A)" bash -c "[[ \$(curl -gsfL -u '$AUTH' 'http://localhost:$B/job/chatty/lastBuild/api/json?tree=number,building') == *'\"building\":true'*'\"number\":1'* ]]"
 check "1 completes" eventually 180 is_result $A /job/chatty/1 SUCCESS
@@ -91,12 +93,12 @@ if [[ $BLOB_CLASS == S3BlobStore ]]; then
   # S3 cannot append: the log was shipped as chunks (log.d/<offset>.<length>), put together into one object once the
   # build completed
   # compacted when the build is finalized, a moment after its result shows
-  chunks_of() { groovy $A "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/chatty/builds/1/log.d').size()" | tr -d '\r\n '; }
-  compacted() { [[ "$(segments_of chatty 1)" == 1 && "$(chunks_of)" == 0 ]]; }
+  chunks_of() { blob_list $A "$(item_blobs $A chatty)/builds/1/log.d" | wc -l | tr -d ' '; }
+  compacted() { [[ "$(segments_of $A chatty 1)" == 1 && "$(chunks_of)" == 0 ]]; }
   check "1 the log was compacted into one object once complete" eventually 60 compacted
   info "1 log chunks left after completion: $(chunks_of)"
 else
-  n=$(segments_of chatty 1)
+  n=$(segments_of $A chatty 1)
   info "1 log segments: $n"
   check "1 the log was rolled over into several segments" bash -c "[[ '$n' -gt 2 ]]"
 fi
@@ -115,12 +117,12 @@ check "2 B adopts within 30 s" eventually 30 bash -c "[[ \$(docker logs ${P}jenk
 info "2 adopted $((SECONDS - killed)) s after the kill"
 check "2 completes on B" eventually 240 is_result $B /job/adopted/1 SUCCESS
 check "2 the whole log, in order, across the segments of both owners" eventually 60 console_whole_on $B /job/adopted/1 adopted-b 400
-info "2 log segments: $(groovy $B "println jenkins.persistence.PersistenceStores.getBlobStore().list('jobs/adopted/builds/1').findAll { it ==~ /.*\\/log(\\.[0-9]+)?/ }.size()" | tr -d '\r\n ')"
+info "2 log segments: $(segments_of $B adopted 1)"
 restart_a
 
 # ------------------------------------------------------------------ 3. no rename while a build runs elsewhere
-# (a job, or a folder holding it, cannot be renamed while it builds: also not from the controller that is not running it,
-# which would move the running build's blobs underneath its owner)
+# (a job, or a folder holding it, cannot be renamed while it builds, as on one controller: also not from the controller
+# that is not running it)
 log "scenario 3: renaming a job and its folder from B while the job builds on A"
 groovy $A 'Jenkins.get().createProject(com.cloudbees.hudson.plugins.folder.Folder, "before")' >/dev/null
 eventually 15 exists $B /job/before

@@ -7,7 +7,7 @@
 # ET setup (two tmpfs controllers, S0, token auth); Postgres and Azurite with volumes (compose.et18.yaml).
 # Exits non-zero if any check fails.
 #
-# Prerequisite: CORE_REF=cnj/t15-remaining experiments/ET1-build.sh
+# Prerequisite: experiments/ET1-build.sh
 source "$(dirname "$0")/../lib.sh"
 A=$PORT_A B=$PORT_B OUT="$RAW_DIR/ET18" ET1="$ET1_DIR"
 FILES=(-f "$VALIDATION_DIR/compose.et1.yaml" -f "$VALIDATION_DIR/compose.et18.yaml")
@@ -40,8 +40,8 @@ PY
 }
 fresh_controllers() {
   et1 rm -sf jenkins-a jenkins-b >/dev/null 2>&1
-  et1 up -d --no-deps jenkins-a jenkins-b >/dev/null 2>&1
-  wait_up $A 240; wait_up $B 240
+  et1 up -d --no-deps jenkins-a >/dev/null 2>&1; wait_up $A 240
+  et1 up -d --no-deps jenkins-b >/dev/null 2>&1; wait_up $B 240
 }
 
 [[ -f "$ET1/war/jenkins.war" ]] || { echo "run ET1-build.sh first" >&2; exit 2; }
@@ -53,14 +53,15 @@ rm -rf "$ET1/seed"; mkdir -p "$ET1/seed"
 docker rm -fv ${P}seed >/dev/null 2>&1 || true
 docker run -d --name ${P}seed -p $PORT_SEED:8080 --tmpfs /var/jenkins_home:uid=1000,gid=1000 \
   -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" -e CASC_JENKINS_CONFIG=/casc -v "$VALIDATION_DIR/jenkins/casc-et1:/casc:ro" \
-  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" cnj/jenkins:dev >/dev/null
+  -v "$ET1/war:/war-override:ro" -v "$ET1/plugins:/extra-plugins:ro" "$DEV_IMAGE" >/dev/null
 wait_up $PORT_SEED
 groovy $PORT_SEED 'hudson.util.Secret.fromString("x").getEncryptedValue(); org.jenkinsci.main.modules.instance_identity.InstanceIdentity.get()' >/dev/null
 docker exec ${P}seed tar -C /var/jenkins_home -cf - secret.key secret.key.not-so-secret identity.key.enc secrets | tar -C "$ET1/seed" -xf -
 docker rm -fv ${P}seed >/dev/null
 et1 up -d postgres $BLOB_SERVICE >/dev/null 2>&1; wait_postgres
-et1 up -d jenkins-a jenkins-b >/dev/null 2>&1
-wait_up $A; wait_up $B
+# one after the other (ET1 checks starting them at once)
+et1 up -d jenkins-a >/dev/null 2>&1; wait_up $A
+et1 up -d jenkins-b >/dev/null 2>&1; wait_up $B
 r "## ET18 results ($(date -u +%Y-%m-%dT%H:%MZ))"
 r ""
 r "| | Check |"
@@ -116,6 +117,8 @@ if ! grep -q 'recovery stopping at restore point "T"' <<<"$pglog"; then
 fi
 fresh_controllers
 check "2 doomed is back (its configuration and records, as at T)" eventually 60 exists $B /job/doomed
+info "2 /job/doomed/api/json on B answers $(curl -gs -o "$OUT/doomed-api-b.txt" -w '%{http_code}' -u "$AUTH" "http://localhost:$B/job/doomed/api/json")"
+et1 logs jenkins-a > "$OUT/jenkins-a-restored-store.log" 2>&1; et1 logs jenkins-b > "$OUT/jenkins-b-restored-store.log" 2>&1
 check "2 created is not there (made after T)" bash -c "! curl -gsf -u '$AUTH' http://localhost:$B/job/created/api/json -o /dev/null"
 check "2 edited has its configuration as at T" bash -c "curl -gsf -u '$AUTH' http://localhost:$B/job/edited/config.xml | grep -q 'edited as built'"
 check "2 kept #1 is there, with its console" eventually 60 console_has $B /job/kept/1 kept-build-ran

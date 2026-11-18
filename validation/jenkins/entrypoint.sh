@@ -42,7 +42,7 @@ fi
 
 # Target 6: each controller prefixes its bound object ids with its name, so requests for them can be forwarded to it
 if [[ -n "${JENKINS_CLUSTER_NAME:-}" ]]; then
-  export JAVA_OPTS="${JAVA_OPTS:-} -Dorg.kohsuke.stapler.bind.BoundObjectTable.idPrefix=${JENKINS_CLUSTER_NAME} -Djenkins.persistence.RunningBuilds.controllerName=${JENKINS_CLUSTER_NAME}"
+  export JAVA_OPTS="${JAVA_OPTS:-} -Dorg.kohsuke.stapler.bind.BoundObjectTable.idPrefix=${JENKINS_CLUSTER_NAME}"
 fi
 
 if [[ -f /war-override/jenkins.war ]]; then
