@@ -39,22 +39,18 @@ public final class SharedQueueMaintenance {
 
         @Override
         protected void execute(TaskListener listener) throws IOException {
-            if (PersistenceStores.get() instanceof ClusterStore store && store.queue() != null) {
+            ClusterStore store = ClusterStore.get();
+            if (store != null) {
                 int n = store.reclaimAndPrune();
                 if (n > 0) {
                     LOGGER.info(() -> "Put " + n + " queue item(s) claimed by gone controllers back into the queue");
                 }
                 // started by a controller that died before the build's placeholder was written: the build never began
                 for (ClusterStore.StartedItem item : store.startedByGone()) {
-                    hudson.model.Job<?, ?> job =
-                            jenkins.model.Jenkins.get().getItemByFullName(item.task(), hudson.model.Job.class);
-                    String jobKey = job == null ? null : PersistenceStores.keyFor(job.getRootDir());
-                    if (jobKey == null) {
-                        continue;
-                    }
+                    String prefix = io.jenkins.plugins.cluster.spi.Keys.itemByUuid(item.itemUuid());
                     int number = item.buildNumber();
-                    if (store.read(jobKey + "/running/" + number + ".xml") == null
-                            && store.read(jobKey + "/builds/" + number + "/build.xml") == null) {
+                    if (store.read(io.jenkins.plugins.cluster.spi.Keys.placeholder(prefix, number)) == null
+                            && store.read(io.jenkins.plugins.cluster.spi.Keys.buildRecord(prefix, number)) == null) {
                         LOGGER.info(() -> item.task() + " #" + number
                                 + " was started by a gone controller and never began; queued again");
                         store.requeueStarted(item.id());
@@ -70,29 +66,25 @@ public final class SharedQueueMaintenance {
     }
 
     /**
-     * Forgets the started items of a deleted or renamed item, which {@link Reclaim} would otherwise requeue on an item
-     * created later under the same name.
+     * Forgets the started items of a deleted item, which {@link Reclaim} would otherwise requeue. Only where the deletion
+     * was made; a rename or move changes nothing (records are kept by the item's identity).
      */
     @Extension
     public static final class Forget extends ItemListener {
         @Override
         public void onDeleted(Item item) {
-            cancel(item.getFullName());
-        }
-
-        @Override
-        public void onLocationChanged(Item item, String oldFullName, String newFullName) {
-            cancel(oldFullName);
-        }
-
-        private static void cancel(String fullName) {
-            if (PersistenceStores.get() instanceof ClusterStore store && store.queue() != null) {
-                try {
-                    store.cancelStartedOf(fullName);
-                } catch (IOException e) {
-                    LOGGER.log(Level.WARNING, "Cannot forget the started queue items of " + fullName, e);
-                }
+            ClusterStore store = ClusterStore.get();
+            String uuid = item.getItemUuid();
+            if (store == null || uuid == null || PersistenceStores.isApplyingRemoteChange()) {
+                return;
             }
+            jenkins.util.Timer.get().submit(() -> {
+                try {
+                    store.cancelStartedOf(uuid);
+                } catch (IOException | RuntimeException e) {
+                    LOGGER.log(Level.WARNING, "Cannot forget the started queue items of " + item.getFullName(), e);
+                }
+            });
         }
     }
 
@@ -103,7 +95,8 @@ public final class SharedQueueMaintenance {
     public static final class Coordinator implements PeriodicWorkCoordinator {
         @Override
         public boolean shouldRun(PeriodicWork work, long period) {
-            if (!(PersistenceStores.get() instanceof ClusterStore store)) {
+            ClusterStore store = ClusterStore.get();
+            if (store == null) {
                 return true;
             }
             try {

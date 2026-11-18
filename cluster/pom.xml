@@ -43,6 +43,13 @@
       <optional>true</optional>
     </dependency>
     <dependency>
+      <!-- BuildTriggerRelay (pipeline-build-step cnj2/build-trigger-relay, installed locally) -->
+      <groupId>org.jenkins-ci.plugins</groupId>
+      <artifactId>pipeline-build-step</artifactId>
+      <version>-cnj2-i-SNAPSHOT</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
       <!-- MilestoneStorage, for milestone across controllers -->
       <groupId>org.jenkins-ci.plugins</groupId>
       <artifactId>pipeline-milestone-step</artifactId>

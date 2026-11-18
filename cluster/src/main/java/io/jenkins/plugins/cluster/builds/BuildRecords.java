@@ -1213,6 +1213,13 @@ public final class BuildRecords {
         }
         followNumber(job, number);
         StoredPermalinks.changedElsewhere(job);
+        for (RecordListener l : ExtensionList.lookup(RecordListener.class)) {
+            try {
+                l.recordedElsewhere(job, number);
+            } catch (RuntimeException e) {
+                LOGGER.log(Level.WARNING, l + " failed on " + job.getFullName() + " #" + number, e);
+            }
+        }
     }
 
     /**
@@ -1225,6 +1232,11 @@ public final class BuildRecords {
                 job.fastUpdateNextBuildNumber(number + 1);
             }
         }
+    }
+
+    /** Told when the record of a build completed (or changed) elsewhere arrives here. */
+    public interface RecordListener extends ExtensionPoint {
+        void recordedElsewhere(@NonNull Job<?, ?> job, int number);
     }
 
     /** Whether a record of the build is stored. */
