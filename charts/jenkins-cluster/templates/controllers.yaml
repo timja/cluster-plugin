@@ -43,7 +43,7 @@ spec:
                 -Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.poolSize={{ .Values.store.poolSize }}
                 -Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.memberTimeoutMillis={{ mul .Values.store.memberTimeoutSeconds 1000 }}
                 -Dio.jenkins.plugins.cluster.postgresql.PostgresPersistenceStore.sessionLocks={{ .Values.store.sessionLocks }}
-                -Djenkins.persistence.ItemFiles.enabled={{ .Values.store.sharePluginFiles }}
+                -Dio.jenkins.plugins.cluster.files.ItemFiles.enabled={{ .Values.store.sharePluginFiles }}
                 {{- if not .Values.updateSites.fetch }} -Dhudson.model.UpdateCenter.never=true -Dhudson.model.DownloadService.never=true{{ end }}
                 -Dhudson.security.TokenBasedRememberMeServices2.alwaysRemember=true {{ .Values.javaOpts }}
           readinessProbe:
