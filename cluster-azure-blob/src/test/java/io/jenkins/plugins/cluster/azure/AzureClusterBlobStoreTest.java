@@ -21,7 +21,8 @@ class AzureClusterBlobStoreTest extends ClusterBlobStoreContract {
     private static String connectionString() {
         return "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;"
                 + "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
-                + "BlobEndpoint=http://" + AZURITE.getHost() + ":" + AZURITE.getMappedPort(10000) + "/devstoreaccount1;";
+                + "BlobEndpoint=http://" + AZURITE.getHost() + ":" + AZURITE.getMappedPort(10000)
+                + "/devstoreaccount1;";
     }
 
     @Override

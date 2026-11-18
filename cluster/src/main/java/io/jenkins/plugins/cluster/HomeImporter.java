@@ -1,19 +1,24 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
-import io.jenkins.plugins.cluster.spi.ClusterStore;
+import hudson.ExtensionList;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
 import hudson.model.Job;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.builds.BuildRecords;
+import io.jenkins.plugins.cluster.spi.ClusterBlobStore;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -23,13 +28,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import jenkins.model.Jenkins;
-import jenkins.persistence.BuildRecords;
 import jenkins.persistence.ConflictException;
+import jenkins.persistence.LocalFiles;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
+import jenkins.persistence.SharedFiles;
 
 /**
- * Imports an existing, file-based Jenkins home into the store (Target 10): start one controller on the old home with
+ * Imports an existing, file-based Jenkins home into the store: start one controller on the old home with
  * {@code -Dio.jenkins.plugins.cluster.importHome=true}. It uploads every file the store owns but lacks (jobs and folders,
  * users, nodes, global and descriptor configuration, credentials), the fingerprints, and, once jobs are loaded, the
  * completed builds with their logs. Keys the store already has are left alone, so running it again changes nothing.
@@ -41,18 +47,65 @@ import jenkins.persistence.PersistenceStores;
 public final class HomeImporter {
 
     private static final Logger LOGGER = Logger.getLogger(HomeImporter.class.getName());
-    static final boolean IMPORT = Boolean.getBoolean(HomeImporter.class.getPackageName() + ".importHome");
+    static /* non-final for tests */ boolean IMPORT =
+            Boolean.getBoolean(HomeImporter.class.getPackageName() + ".importHome");
     /** Never imported: caches, workspaces, the plugins and war, logs, build directories (imported as builds). */
     private static final Pattern SKIP = Pattern.compile(
             "(plugins|war|workspace|caches|logs|updates|userContent|fingerprints|secrets|\\.cache|\\.groovy|\\.java|\\.m2|tmp)(/.*)?"
                     + "|.*/(builds|workspace|lastStable|lastSuccessful|indexing)(/.*)?|.*\\.(tmp|log|bak|lock)");
-    private static final Pattern FINGERPRINT = Pattern.compile("fingerprints/[0-9a-f]{2}/[0-9a-f]{2}/([0-9a-f]{28})\\.xml");
+
+    private static final Pattern FINGERPRINT =
+            Pattern.compile("fingerprints/[0-9a-f]{2}/[0-9a-f]{2}/([0-9a-f]{28})\\.xml");
 
     private static final List<String> report = new ArrayList<>();
     private static int imported;
     private static int kept;
 
     private HomeImporter() {}
+
+    /** The {@link LocalFiles} and {@link SharedFiles} patterns, looked up before the store is created. */
+    private static volatile List<PathMatcher> local;
+
+    private static volatile List<PathMatcher> shared;
+
+    /**
+     * Looks up what files plugins keep local or share, for {@link #importFiles}: that runs as the store is created, with
+     * the store's resolution under way, where looking up extensions could wait for a thread that waits for the store.
+     */
+    @Initializer(after = InitMilestone.PLUGINS_STARTED, before = InitMilestone.EXTENSIONS_AUGMENTED)
+    public static void lookUpPatterns() {
+        if (IMPORT) {
+            local = matchers(ExtensionList.lookup(LocalFiles.class).stream()
+                    .flatMap(l -> l.patterns().stream())
+                    .toList());
+            shared = matchers(ExtensionList.lookup(SharedFiles.class).stream()
+                    .flatMap(l -> l.patterns().stream())
+                    .toList());
+        }
+    }
+
+    private static List<PathMatcher> matchers(List<String> patterns) {
+        return patterns.stream()
+                .map(p -> FileSystems.getDefault().getPathMatcher("glob:" + p))
+                .toList();
+    }
+
+    /**
+     * Whether the store serves a file of the home, as core's routing decides once a store is active (which it is not
+     * yet: {@link PersistenceStores#get} answers null until {@link #importFiles} returns).
+     */
+    static boolean isRouted(String key, PersistenceStore store) {
+        if (key.startsWith("_") || !Keys.isSafeKey(key)) {
+            return false;
+        }
+        Path path = Path.of(key);
+        List<PathMatcher> l = local;
+        List<PathMatcher> s = shared;
+        if (l == null || s == null || l.stream().anyMatch(m -> m.matches(path))) {
+            return false;
+        }
+        return ClusterRouting.inDefaultSet(key, store) || s.stream().anyMatch(m -> m.matches(path));
+    }
 
     /**
      * Configuration and fingerprints: as the store is created, before anything can read from it, so that Jenkins loads
@@ -73,9 +126,10 @@ public final class HomeImporter {
             Matcher fp = FINGERPRINT.matcher(key);
             if (fp.matches()) {
                 String md5 = key.substring("fingerprints/".length(), "fingerprints/".length() + 2)
-                        + key.substring("fingerprints/xx/".length(), "fingerprints/xx/".length() + 2) + fp.group(1);
+                        + key.substring("fingerprints/xx/".length(), "fingerprints/xx/".length() + 2)
+                        + fp.group(1);
                 put(store, ClusterFingerprintStorage.key(md5), f);
-            } else if (!SKIP.matcher(key).matches() && store.owns(key)) {
+            } else if (!SKIP.matcher(key).matches() && isRouted(key, store)) {
                 put(store, key, f);
             }
         }
@@ -106,16 +160,35 @@ public final class HomeImporter {
         }
         int builds = 0;
         int skipped = 0;
+        // every item gets its identity saved with it, which its builds are kept by from now on
+        for (hudson.model.Item item : Jenkins.get().getAllItems()) {
+            try {
+                jenkins.model.ItemUuids.pin(item);
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not record the identity of " + item.getFullName(), e);
+                report.add("FAILED " + item.getFullName() + ": its identity could not be recorded: " + e);
+            }
+        }
         for (Job<?, ?> job : Jenkins.get().getAllItems(Job.class)) {
             if (!BuildRecords.isShared(job)) {
                 continue;
+            }
+            try {
+                // the cluster's sequence goes on from this home's
+                io.jenkins.plugins.cluster.builds.StoredBuildNumberAssigner.raiseTo(job, job.getNextBuildNumber());
+            } catch (IOException | RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Could not record the next build number of " + job.getFullName(), e);
+                report.add("FAILED " + job.getFullName() + ": its next build number could not be recorded: " + e);
             }
             Set<Integer> stored;
             try {
                 stored = BuildRecords.listStoredNumbers(job);
             } catch (IOException | java.io.UncheckedIOException e) {
                 // not known what is stored: publishing would overwrite what is (an empty listing would mean all of it)
-                LOGGER.log(Level.WARNING, "Could not list the stored builds of " + job.getFullName() + "; not importing its builds", e);
+                LOGGER.log(
+                        Level.WARNING,
+                        "Could not list the stored builds of " + job.getFullName() + "; not importing its builds",
+                        e);
                 report.add("FAILED " + job.getFullName() + ": its stored builds could not be listed: " + e);
                 continue;
             }
@@ -148,7 +221,7 @@ public final class HomeImporter {
     /** A Pipeline log kept in append blobs (T3): upload the old log and its index if the blobs are not there. */
     private static void importLog(Run<?, ?> run) throws IOException {
         ClusterBlobStore blobs = BlobLogStorage.blobs();
-        String key = BlobLogStorage.buildKey(run.getRootDir());
+        String key = BlobLogStorage.buildKey(run);
         if (blobs == null || key == null) {
             return;
         }

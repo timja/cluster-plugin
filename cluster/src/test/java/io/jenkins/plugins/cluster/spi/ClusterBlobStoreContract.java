@@ -57,16 +57,16 @@ public abstract class ClusterBlobStoreContract {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         assertTrue(blobs.download("jobs/p/builds/1/files.tgz", out));
         assertEquals("two", out.toString(StandardCharsets.UTF_8));
-        assertEquals(List.of("jobs/p/builds/1/files.tgz"), blobs.list("jobs/p/builds/1"), "below the key, not beside it (builds/10)");
+        assertEquals(
+                List.of("jobs/p/builds/1/files.tgz"),
+                blobs.list("jobs/p/builds/1"),
+                "below the key, not beside it (builds/10)");
         assertEquals(3, blobs.list("jobs/p").size());
-        blobs.move("jobs/p", "jobs/q");
+        blobs.delete("jobs/p/builds/1");
+        assertEquals(2, blobs.list("jobs/p").size());
+        assertEquals("three", get(blobs, "jobs/p/builds/2/files.tgz"));
+        blobs.delete("jobs/p");
         assertTrue(blobs.list("jobs/p").isEmpty());
-        assertEquals("three", get(blobs, "jobs/q/builds/2/files.tgz"));
-        blobs.move("jobs/p", "jobs/q"); // repeated after a partial failure: nothing left to do
-        blobs.delete("jobs/q/builds/1");
-        assertEquals(2, blobs.list("jobs/q").size());
-        blobs.delete("jobs/q");
-        assertTrue(blobs.list("jobs/q").isEmpty());
     }
 
     @Test
@@ -127,7 +127,9 @@ public abstract class ClusterBlobStoreContract {
         put(blobs, "jobs/p/builds/1/log.d/x", "one");
         put(blobs, "jobs/p/builds/1/log.d/y", "three");
         put(blobs, "jobs/p/builds/1/log.dx", "beside");
-        assertEquals(java.util.Map.of("jobs/p/builds/1/log.d/x", 3L, "jobs/p/builds/1/log.d/y", 5L), blobs.sizes("jobs/p/builds/1/log.d"));
+        assertEquals(
+                java.util.Map.of("jobs/p/builds/1/log.d/x", 3L, "jobs/p/builds/1/log.d/y", 5L),
+                blobs.sizes("jobs/p/builds/1/log.d"));
     }
 
     @Test

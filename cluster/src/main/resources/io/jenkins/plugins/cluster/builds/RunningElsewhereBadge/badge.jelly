@@ -1,0 +1,7 @@
+<?jelly escape-by-default='true'?>
+<!-- the controller running a build of the job elsewhere, in its build history entry -->
+<j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout">
+  <span tooltip="${%runningOn(it.location)}" data-tooltip-append-to-parent="true">
+    <l:icon src="symbol-computer" class="icon-sm" alt="${%runningOn(it.location)}" />
+  </span>
+</j:jelly>

@@ -3,9 +3,6 @@ package io.jenkins.plugins.cluster.spi;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import java.io.IOException;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 /** Work done by one controller only: the first to claim a tick of an item's trigger runs it. */
 public interface Claims {

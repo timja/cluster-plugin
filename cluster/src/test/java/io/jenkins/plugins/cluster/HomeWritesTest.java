@@ -11,9 +11,21 @@ class HomeWritesTest {
     @Test
     void localByDesign() {
         for (String key : new String[] {
-            "plugins/git.jpi", "jobs/p/builds/1/build.xml", "jobs/f/jobs/p/workspace/x", "jobs/p/running/3.xml", "queue.xml",
-            "secrets/master.key", "logs/tasks/x.log", "caches/git-1/HEAD", "users/users.xml", "secret.key",
-            "org.jenkins.plugins.lockableresources.LockableResourcesManager.xml", "users/alice_1/apiTokenStats.xml", "userContent/readme.txt"
+            "plugins/git.jpi",
+            "jobs/p/builds/1/build.xml",
+            "jobs/f/jobs/p/workspace/x",
+            "jobs/p/running/3.xml",
+            "queue.xml",
+            "secrets/master.key",
+            "logs/tasks/x.log",
+            "caches/git-1/HEAD",
+            "users/users.xml",
+            "secret.key",
+            "org.jenkins.plugins.lockableresources.LockableResourcesManager.xml",
+            "users/alice_1/apiTokenStats.xml",
+            "userContent/readme.txt",
+            "jobs/p/nextBuildNumber",
+            "jobs/f/jobs/p/nextBuildNumber"
         }) {
             assertFalse(HomeWrites.reportable(key, null), key);
         }

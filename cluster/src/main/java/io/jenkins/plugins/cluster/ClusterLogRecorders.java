@@ -41,7 +41,7 @@ public final class ClusterLogRecorders {
         }
         try {
             for (String child : store.children(PREFIX)) {
-                if (child.endsWith(".xml") && store.owns(PREFIX + "/" + child)) {
+                if (child.endsWith(".xml") && ClusterRouting.isShared(PREFIX + "/" + child)) {
                     String name = child.substring(0, child.length() - ".xml".length());
                     if (find(name) == null) {
                         apply(name, false);

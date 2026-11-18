@@ -15,8 +15,8 @@
   <description>Keeps the large files of a Jenkins cluster in Azure Blob Storage: build snapshots, Pipeline logs (append blobs) and save points, plugin archives.</description>
   <properties>
     <changelist>999999-SNAPSHOT</changelist>
-    <!-- Needs the jenkins.persistence SPI from the cnj/t* core branches, installed locally. -->
-    <jenkins.version>2.586-SNAPSHOT</jenkins.version>
+    <!-- as the cluster plugin (cluster/pom.xml): the core stack of timja/jenkins cnj2/all, installed locally -->
+    <jenkins.version>2.586-cnj2-all-SNAPSHOT</jenkins.version>
     <useBeta>true</useBeta>
     <ban-junit4-imports.skip>false</ban-junit4-imports.skip>
     <spotbugs.failOnError>false</spotbugs.failOnError>
@@ -40,14 +40,14 @@
   </dependencyManagement>
   <dependencies>
     <dependency>
-      <groupId>io.jenkins.plugins</groupId>
-      <artifactId>cluster</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
       <!-- Azure Blob Storage client (the harness uses Azurite) -->
       <groupId>io.jenkins.plugins</groupId>
       <artifactId>azure-sdk</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.jenkins.plugins</groupId>
+      <artifactId>cluster</artifactId>
+      <version>${project.version}</version>
     </dependency>
     <dependency>
       <!-- the shared contract tests (ClusterBlobStoreContract) -->

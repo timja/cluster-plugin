@@ -1,10 +1,10 @@
 package io.jenkins.plugins.cluster.postgresql;
 
-import io.jenkins.plugins.cluster.spi.ClusterMember;
-import io.jenkins.plugins.cluster.spi.EarlyStoreReader;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
+import io.jenkins.plugins.cluster.spi.ClusterMember;
+import io.jenkins.plugins.cluster.spi.EarlyStoreReader;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.sql.SQLException;
@@ -28,9 +28,11 @@ public class PostgresEarlyStoreReader implements EarlyStoreReader {
         long delay = 1000;
         while (true) {
             try {
-                return PostgresPersistenceStore.readEarly(url,
+                return PostgresPersistenceStore.readEarly(
+                        url,
                         PostgresPersistenceStoreProvider.setting("user", "CLUSTER_POSTGRES_USER"),
-                        PostgresPersistenceStoreProvider.setting("password", "CLUSTER_POSTGRES_PASSWORD"), key);
+                        PostgresPersistenceStoreProvider.setting("password", "CLUSTER_POSTGRES_PASSWORD"),
+                        key);
             } catch (SQLException e) {
                 if (!PostgresPersistenceStore.isConnectionFailure(e) || System.nanoTime() > deadline) {
                     throw new IOException("Could not read " + key + " from " + url, e);

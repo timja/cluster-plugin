@@ -13,9 +13,6 @@ import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -56,26 +53,8 @@ public final class ItemCatchUpFilter implements Filter {
     /** The full names of the items a path goes through, outermost first: {@code /job/f/job/p/…} gives {@code f, f/p}. */
     @NonNull
     static List<String> itemNames(@NonNull String path) {
-        String[] segments = path.split("/");
-        int i = 0;
-        while (i < segments.length && segments[i].isEmpty()) {
-            i++;
-        }
-        while (i + 1 < segments.length && segments[i].equals("view")) {
-            i += 2;
-        }
-        List<String> names = new ArrayList<>();
-        String prefix = "";
-        while (i + 1 < segments.length && segments[i].equals("job")) {
-            String name = URLDecoder.decode(segments[i + 1].replace("+", "%2B"), StandardCharsets.UTF_8);
-            if (name.isEmpty() || name.contains("/")) {
-                break;
-            }
-            prefix = prefix.isEmpty() ? name : prefix + "/" + name;
-            names.add(prefix);
-            i += 2;
-        }
-        return names;
+        JobPath p = JobPath.parse(path);
+        return p == null ? List.of() : p.fullNames();
     }
 
     /** The store key of an item's configuration: {@code f/p} is {@code jobs/f/jobs/p/config.xml}. */
@@ -85,10 +64,12 @@ public final class ItemCatchUpFilter implements Filter {
     }
 
     @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
         if (request instanceof HttpServletRequest req && PersistenceStores.get() != null) {
             // outermost first: a folder and a job in it made together are applied in that order
-            for (String name : itemNames(req.getRequestURI().substring(req.getContextPath().length()))) {
+            for (String name :
+                    itemNames(req.getRequestURI().substring(req.getContextPath().length()))) {
                 if (!existsHere(name) && !awaitApplied(name)) {
                     break;
                 }

@@ -1,6 +1,5 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import edu.umd.cs.findbugs.annotations.CheckForNull;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
@@ -10,41 +9,52 @@ import hudson.model.Label;
 import hudson.model.Node;
 import hudson.model.Queue;
 import hudson.model.Run;
+import hudson.model.queue.QueueListener;
+import io.jenkins.plugins.cluster.builds.BuildRecords;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
+import io.jenkins.plugins.cluster.spi.Keys;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import jenkins.model.ItemUuids;
 import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStore;
-import jenkins.persistence.PersistenceStores;
-import jenkins.persistence.RunningBuilds;
 import jenkins.util.Timer;
 
 /**
- * Moves a Pipeline to the controller holding the agent it waits for (Target 12). A {@code node('label')} step whose label
+ * Moves a Pipeline to the controller holding the agent it waits for. A {@code node('label')} step whose label
  * no executor or cloud of this controller can serve, while an agent with that label is connected to another live
- * controller, waits forever where it is; after {@link #WAIT_SECONDS} the build is handed over: its latest save point is
- * shipped, a request {@code .../running/<N>.handover} naming the target is written, and its lease released
- * ({@link RunningBuilds#handOver}). The target takes it over ({@link RunningBuilds#takeOver}) and resumes it from that
- * save point, where the {@code node} step asks for an executor again, now one it has.
+ * controller, waits forever where it is; {@link #WAIT_SECONDS} after it entered the queue (for the other {@code node}
+ * blocks of a {@code parallel} to enter it too) the build is handed over: its latest save point is shipped, a request
+ * {@code .../running/<N>.handover} naming the target is written, and its lease released
+ * ({@link RunningBuilds#handOver}). That is looked at when the step enters the queue, and again every few seconds for
+ * steps still waiting (an agent with the label may connect to another controller later). The target takes it over
+ * ({@link RunningBuilds#takeOver}) and resumes it from that save point, where the {@code node} step asks for an executor
+ * again, now one it has.
  */
 public final class Handover {
 
     private static final Logger LOGGER = Logger.getLogger(Handover.class.getName());
     static final String SUFFIX = ".handover";
-    static final long WAIT_SECONDS = Long.getLong(Handover.class.getName() + ".waitSeconds", 15);
-    private static final String PLACEHOLDER_TASK = "org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution$PlaceholderTask";
+    static final long WAIT_SECONDS = Long.getLong(Handover.class.getName() + ".waitSeconds", 2);
+    private static final String PLACEHOLDER_TASK =
+            "org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution$PlaceholderTask";
 
     private Handover() {}
 
     @Initializer(after = InitMilestone.JOB_LOADED)
     public static void start() {
-        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
+        ClusterStore store = ClusterStore.get();
+        if (store == null) {
             return;
         }
         store.subscribe(e -> {
-            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN && e.key().endsWith(SUFFIX) && !store.getOrigin().equals(e.origin())) {
+            if (e.kind() == PersistenceStore.ChangeEvent.Kind.WRITTEN
+                    && e.key().endsWith(SUFFIX)
+                    && !store.getOrigin().equals(e.origin())) {
                 Timer.get().submit(() -> takeOver(store, e.key()));
             }
         });
@@ -53,52 +63,92 @@ public final class Handover {
 
     /** Hands over builds waiting for a label only another controller has. */
     static void offer() {
-        if (!(PersistenceStores.get() instanceof ClusterStore store)) {
+        ClusterStore store = ClusterStore.get();
+        if (store == null) {
             return;
         }
-        long now = System.currentTimeMillis();
         for (Queue.Item item : Queue.getInstance().getItems()) {
-            if (!item.task.getClass().getName().equals(PLACEHOLDER_TASK) || now - item.getInQueueSince() < TimeUnit.SECONDS.toMillis(WAIT_SECONDS)) {
-                continue;
+            offer(store, item);
+        }
+    }
+
+    /** Hands over the build of a {@code node} step waiting in the queue, if it waits for a label only another controller has. */
+    private static synchronized void offer(ClusterStore store, Queue.Item item) {
+        if (!isPlaceholder(item)
+                || System.currentTimeMillis() - item.getInQueueSince() < TimeUnit.SECONDS.toMillis(WAIT_SECONDS)) {
+            return;
+        }
+        Label label = item.getAssignedLabel();
+        if (label == null || servableHere(label) || !(item.task.getOwnerExecutable() instanceof Run<?, ?> run)) {
+            return;
+        }
+        try {
+            String target = holderOf(store, label);
+            if (target == null || RunningBuilds.ownedPlaceholder(run) == null) {
+                return; // nobody to hand it to, or handed over already (by the sweep or the queue listener)
             }
-            Label label = item.getAssignedLabel();
-            if (label == null || servableHere(label) || !(item.task.getOwnerExecutable() instanceof Run<?, ?> run)) {
-                continue;
+            String reason = staysHere(run, item);
+            if (reason != null) {
+                LOGGER.fine(() -> "Not handing " + run + " over for '" + label + "': " + reason);
+                return;
             }
-            try {
-                String target = holderOf(store, label);
-                if (target == null || RunningBuilds.ownedPlaceholder(run) == null) {
-                    continue;
-                }
-                String reason = staysHere(run, item);
-                if (reason != null) {
-                    LOGGER.fine(() -> "Not handing " + run + " over for '" + label + "': " + reason);
-                    continue;
-                }
-                String base = PersistenceStores.keyFor(run.getParent().getRootDir()) + "/running/" + run.getNumber();
-                if (!countHop(store, base + HOPS)) {
-                    LOGGER.warning(() -> run + " waits for '" + label + "', which only another controller has, but it was handed over "
-                            + MAX_HOPS + " times already (node blocks needing agents of different controllers); it waits here");
-                    continue;
-                }
-                String key = base + SUFFIX;
-                LOGGER.info(() -> "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
-                SavePoints.flush(run);
-                store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
-                RunningBuilds.handOver(run);
-            } catch (IOException | RuntimeException e) {
-                LOGGER.log(Level.WARNING, "Could not hand " + run + " over", e);
+            String base = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber();
+            if (hops(store, base + HOPS) >= MAX_HOPS) {
+                LOGGER.warning(() -> run + " waits for '" + label
+                        + "', which only another controller has, but it was handed over " + MAX_HOPS
+                        + " times already (node blocks needing agents of different controllers); it waits here");
+                return;
             }
+            String key = base + SUFFIX;
+            LOGGER.info(
+                    () -> "Handing " + run + " over: it waits for '" + label + "', which only another controller has");
+            SavePoints.flush(run);
+            store.write(key, target.getBytes(StandardCharsets.UTF_8), PersistenceStore.ANY);
+            RunningBuilds.handOver(run);
+            // once handed over: an attempt that failed (a save point committed meanwhile, say) is not counted
+            countHop(store, base + HOPS);
+        } catch (IOException | RuntimeException e) {
+            LOGGER.log(Level.WARNING, "Could not hand " + run + " over", e);
+        }
+    }
+
+    private static boolean isPlaceholder(Queue.Item item) {
+        return item.task.getClass().getName().equals(PLACEHOLDER_TASK);
+    }
+
+    /**
+     * Looks at a {@code node} step as soon as it has waited {@link #WAIT_SECONDS} in the queue, rather than at the next
+     * sweep: a build waiting for an agent of another controller is handed over at once.
+     */
+    @hudson.Extension
+    public static final class Waiting extends QueueListener {
+        @Override
+        public void onEnterWaiting(Queue.WaitingItem wi) {
+            ClusterStore store = ClusterStore.get();
+            if (store == null || !isPlaceholder(wi)) {
+                return;
+            }
+            long id = wi.getId();
+            Timer.get()
+                    .schedule(
+                            () -> {
+                                Queue.Item item = Queue.getInstance().getItem(id);
+                                if (item != null) {
+                                    offer(store, item);
+                                }
+                            },
+                            TimeUnit.SECONDS.toMillis(WAIT_SECONDS) + 1,
+                            TimeUnit.MILLISECONDS);
         }
     }
 
     /** Stored count of a build's handovers. */
     static final String HOPS = ".hops";
-    /** How many times one build may be handed over (Target 15): bounded, so it never moves back and forth forever. */
+    /** How many times one build may be handed over: bounded, so it never moves back and forth forever. */
     static final int MAX_HOPS = Integer.getInteger(Handover.class.getName() + ".maxHops", 4);
 
     /**
-     * Why a build waiting for a label only another controller has must stay here anyway (Target 15), or null: it runs
+     * Why a build waiting for a label only another controller has must stay here anyway, or null: it runs
      * other {@code node} blocks on this controller's agents (handing it over would interrupt them), or waits for
      * another one this controller can serve (nested or parallel blocks needing agents of different controllers would
      * otherwise send it back and forth).
@@ -124,22 +174,27 @@ public final class Handover {
         return null;
     }
 
-    /** Counts a handover of a build; false if it was handed over {@link #MAX_HOPS} times already. */
-    private static boolean countHop(ClusterStore store, String key) throws IOException {
+    /** How many times a build was handed over, by the key of its count. */
+    private static int hops(ClusterStore store, String key) throws IOException {
+        PersistenceStore.Entry e = store.read(key);
+        return e == null ? 0 : Integer.parseInt(new String(e.content(), StandardCharsets.UTF_8).trim());
+    }
+
+    /** Counts a handover of a build. */
+    private static void countHop(ClusterStore store, String key) throws IOException {
         for (int attempt = 0; attempt < 10; attempt++) {
             PersistenceStore.Entry e = store.read(key);
             int hops = e == null ? 0 : Integer.parseInt(new String(e.content(), StandardCharsets.UTF_8).trim());
-            if (hops >= MAX_HOPS) {
-                return false;
-            }
             try {
-                store.write(key, String.valueOf(hops + 1).getBytes(StandardCharsets.UTF_8), e == null ? PersistenceStore.ABSENT : e.version());
-                return true;
+                store.write(
+                        key,
+                        String.valueOf(hops + 1).getBytes(StandardCharsets.UTF_8),
+                        e == null ? PersistenceStore.ABSENT : e.version());
+                return;
             } catch (jenkins.persistence.ConflictException again) {
                 // counted by another at the same moment: count again
             }
         }
-        return false;
     }
 
     /** Forgets a build's handover count once it is done. */
@@ -147,12 +202,14 @@ public final class Handover {
     public static final class Done extends hudson.model.listeners.RunListener<Run<?, ?>> {
         @Override
         public void onFinalized(Run<?, ?> run) {
-            if (PersistenceStores.get() instanceof ClusterStore store) {
-                String job = PersistenceStores.keyFor(run.getParent().getRootDir());
-                if (job != null) {
+            ClusterStore store = ClusterStore.get();
+            // not for a copy stopped here because another controller took the build over: that one counts on
+            if (store != null && BuildRecords.isShared(run.getParent()) && RunningBuilds.owns(run)) {
+                String hops = Keys.running(Keys.item(run.getParent())) + "/" + run.getNumber() + HOPS;
+                {
                     try {
-                        if (store.read(job + "/running/" + run.getNumber() + HOPS) != null) {
-                            store.delete(job + "/running/" + run.getNumber() + HOPS, PersistenceStore.ANY);
+                        if (store.read(hops) != null) {
+                            store.delete(hops, PersistenceStore.ANY);
                         }
                     } catch (IOException | RuntimeException e) {
                         LOGGER.log(Level.FINE, "Could not forget the handovers of " + run, e);
@@ -188,8 +245,18 @@ public final class Handover {
         return null;
     }
 
+    /** How many times the target side tries to take over a build handed over to it, a second apart. */
+    static final int TAKE_OVER_ATTEMPTS = 30;
+
     /** The target side: take over a build handed over to this controller, retrying until its lease is free. */
     static void takeOver(ClusterStore store, String key) {
+        takeOver(store, key, 0);
+    }
+
+    /**
+     * One attempt; the next is scheduled a second later, rather than waited for on this thread (a shared timer's).
+     */
+    private static void takeOver(ClusterStore store, String key, int attempt) {
         try {
             PersistenceStore.Entry e = store.read(key);
             if (e == null || !store.getOrigin().equals(new String(e.content(), StandardCharsets.UTF_8))) {
@@ -198,23 +265,24 @@ public final class Handover {
             String path = key.substring(0, key.length() - SUFFIX.length());
             int slash = path.lastIndexOf('/');
             int number = Integer.parseInt(path.substring(slash + 1));
-            String jobKey = path.substring(0, path.lastIndexOf("/running/"));
-            String fullName = jobKey.replaceFirst("^jobs/", "").replace("/jobs/", "/");
-            Job<?, ?> job = Jenkins.get().getItemByFullName(fullName, Job.class);
+            Keys.ItemKey item = Keys.parse(path);
+            Job<?, ?> job;
+            try (hudson.security.ACLContext ignored = hudson.security.ACL.as2(hudson.security.ACL.SYSTEM2)) {
+                job = item == null ? null : ItemUuids.get(item.uuid()) instanceof Job<?, ?> j ? j : null;
+            }
             if (job == null) {
                 return;
             }
-            for (int attempt = 0; attempt < 30; attempt++) {
-                if (RunningBuilds.takeOver(job, number)) {
-                    LOGGER.info(() -> "Took over " + fullName + " #" + number);
-                    store.delete(key, PersistenceStore.ANY);
-                    return;
-                }
-                Thread.sleep(1000);
+            String fullName = job.getFullName();
+            if (RunningBuilds.takeOver(job, number)) {
+                LOGGER.info(() -> "Took over " + fullName + " #" + number);
+                store.delete(key, PersistenceStore.ANY);
+            } else if (attempt + 1 < TAKE_OVER_ATTEMPTS) {
+                Timer.get().schedule(() -> takeOver(store, key, attempt + 1), 1, TimeUnit.SECONDS);
+            } else {
+                LOGGER.warning(
+                        () -> "Could not take over " + fullName + " #" + number + " handed over to this controller");
             }
-            LOGGER.warning(() -> "Could not take over " + fullName + " #" + number + " handed over to this controller");
-        } catch (InterruptedException x) {
-            Thread.currentThread().interrupt();
         } catch (IOException | RuntimeException x) {
             LOGGER.log(Level.WARNING, "Could not take over " + key, x);
         }

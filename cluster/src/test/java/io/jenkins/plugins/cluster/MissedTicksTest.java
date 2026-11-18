@@ -22,7 +22,9 @@ class MissedTicksTest {
         // b is still ready: nothing to catch up
         assertTrue(m.due(103, Set.of(A, B, C), A, name -> A).isEmpty());
         // b is gone: both its ticks at once; c's stay with c
-        assertEquals(List.of(new MissedTicks.Due("job", "timer", List.of(100L, 101L))), m.due(103, Set.of(A, C), A, name -> A));
+        assertEquals(
+                List.of(new MissedTicks.Due("job", "timer", List.of(100L, 101L))),
+                m.due(103, Set.of(A, C), A, name -> A));
         assertTrue(m.due(104, Set.of(A, C), A, name -> A).isEmpty(), "never twice");
         assertEquals(1, m.size(), "c's tick is kept until the window ends");
     }
@@ -58,7 +60,8 @@ class MissedTicksTest {
 
         m.leftTo("job3", "timer", 100, C);
         m.leftTo("job3", "timer", 101, B); // a tick left to c, then the later one to b which is gone
-        assertEquals(List.of(new MissedTicks.Due("job3", "timer", List.of(101L))), m.due(103, Set.of(A, C), A, name -> A));
+        assertEquals(
+                List.of(new MissedTicks.Due("job3", "timer", List.of(101L))), m.due(103, Set.of(A, C), A, name -> A));
     }
 
     @Test

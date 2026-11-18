@@ -23,21 +23,30 @@ import jenkins.websocket.WebSockets;
 
 /**
  * Relays a WebSocket request for something only another controller has (a build running there, an agent connected
- * there) to that controller (Target 15), as {@link Forwarding} does for plain HTTP: the client's connection is accepted
+ * there) to that controller, as {@link Forwarding} does for plain HTTP: the client's connection is accepted
  * here, a second one is opened to the owner, and frames are copied both ways until either side closes.
  *
- * <p>Inbound agents are not relayed: an agent connects to whichever controller its URL reaches and stays there
- * (Target 7); this is for WebSocket endpoints under a build's or an agent's URL.
+ * <p>Inbound agents are not relayed: an agent connects to whichever controller its URL reaches and stays there;
+ * this is for WebSocket endpoints under a build's or an agent's URL.
  */
 final class WebSocketProxy {
 
     private static final Logger LOGGER = Logger.getLogger(WebSocketProxy.class.getName());
 
     /** Request headers not passed on: the WebSocket handshake's own, and hop-by-hop ones. */
-    private static final Set<String> NOT_PASSED = Set.of("connection", "upgrade", "host", "content-length", "sec-websocket-key",
-            "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-accept", "sec-websocket-protocol");
+    private static final Set<String> NOT_PASSED = Set.of(
+            "connection",
+            "upgrade",
+            "host",
+            "content-length",
+            "sec-websocket-key",
+            "sec-websocket-version",
+            "sec-websocket-extensions",
+            "sec-websocket-accept",
+            "sec-websocket-protocol");
 
-    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    private static final HttpClient HTTP =
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     private WebSocketProxy() {}
 
@@ -49,13 +58,20 @@ final class WebSocketProxy {
     /**
      * @return false if the owner could not be reached and nothing was written, so the caller may serve it locally
      */
-    static boolean proxy(@NonNull HttpServletRequest req, @NonNull HttpServletResponse rsp, @NonNull String owner, @NonNull String url)
+    static boolean proxy(
+            @NonNull HttpServletRequest req,
+            @NonNull HttpServletResponse rsp,
+            @NonNull String owner,
+            @NonNull String url)
             throws IOException, ServletException {
         if (!WebSockets.isSupported()) {
             return false;
         }
+        Forwarding.warnIfExposed(url);
         String path = req.getRequestURI().substring(req.getContextPath().length());
-        String target = url.replaceAll("/+$", "").replaceFirst("^http", "ws") + req.getContextPath() + path
+        String target = url.replaceAll("/+$", "").replaceFirst("^http", "ws")
+                + req.getContextPath()
+                + path
                 + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
         Front front = new Front();
         WebSocket.Builder b = HTTP.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10));
@@ -70,7 +86,9 @@ final class WebSocketProxy {
                 }
             }
         }
-        b.header(Forwarding.FORWARDED, Forwarding.forwardedHeader());
+        b.header(
+                Forwarding.FORWARDED,
+                Forwarding.forwardedHeader(Forwarding.requestOf("GET", path, req.getQueryString())));
         String protocols = req.getHeader("Sec-WebSocket-Protocol");
         if (protocols != null && !protocols.isBlank()) {
             String[] p = protocols.split("\\s*,\\s*");
@@ -113,7 +131,10 @@ final class WebSocketProxy {
         protected void closed(int statusCode, String reason) {
             WebSocket w = backend;
             if (w != null && !w.isOutputClosed()) {
-                w.sendClose(statusCode >= 1000 && statusCode < 5000 && statusCode != 1005 && statusCode != 1006 ? statusCode : WebSocket.NORMAL_CLOSURE,
+                w.sendClose(
+                        statusCode >= 1000 && statusCode < 5000 && statusCode != 1005 && statusCode != 1006
+                                ? statusCode
+                                : WebSocket.NORMAL_CLOSURE,
                         reason == null ? "" : reason);
             }
         }

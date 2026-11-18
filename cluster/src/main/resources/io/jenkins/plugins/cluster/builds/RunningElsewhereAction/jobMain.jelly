@@ -1,0 +1,9 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:i="jelly:fmt">
+  <h2>${it.displayName}</h2>
+  <ul>
+    <j:forEach var="b" items="${it.builds}">
+      <li><a href="${rootURL}/${it.job.url}${b.number}/">${b.displayName}</a> on ${b.controller}, started <i:formatDate value="${b.startDate}" type="both" dateStyle="medium" timeStyle="short"/></li>
+    </j:forEach>
+  </ul>
+</j:jelly>

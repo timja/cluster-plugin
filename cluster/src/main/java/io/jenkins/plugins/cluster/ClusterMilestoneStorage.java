@@ -6,6 +6,7 @@ import hudson.Extension;
 import hudson.model.Executor;
 import hudson.model.Job;
 import hudson.model.Run;
+import io.jenkins.plugins.cluster.builds.RunningBuilds;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -17,7 +18,6 @@ import java.util.logging.Logger;
 import jenkins.persistence.ConflictException;
 import jenkins.persistence.PersistenceStore;
 import jenkins.persistence.PersistenceStores;
-import jenkins.persistence.RunningBuilds;
 import org.jenkinsci.plugins.pipeline.milestone.MilestoneStorage;
 
 /**
@@ -36,8 +36,9 @@ public class ClusterMilestoneStorage implements MilestoneStorage {
 
     @CheckForNull
     private static String key(Job<?, ?> job) {
-        String jobKey = PersistenceStores.keyFor(job.getRootDir());
-        return jobKey == null ? null : "milestones/" + jobKey;
+        return io.jenkins.plugins.cluster.builds.BuildRecords.isShared(job)
+                ? io.jenkins.plugins.cluster.spi.Keys.milestones(io.jenkins.plugins.cluster.spi.Keys.item(job))
+                : null;
     }
 
     private static Map<Integer, Integer> parse(byte[] content) {

@@ -1,10 +1,10 @@
 package io.jenkins.plugins.cluster;
 
-import io.jenkins.plugins.cluster.spi.ClusterStore;
 import hudson.Extension;
 import hudson.model.Computer;
 import hudson.model.TaskListener;
 import hudson.slaves.ComputerListener;
+import io.jenkins.plugins.cluster.spi.ClusterStore;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -12,7 +12,7 @@ import jenkins.model.Jenkins;
 import jenkins.persistence.PersistenceStores;
 
 /**
- * Publishes which controller holds each agent's channel (Target 7), so that requests for the agent reaching another
+ * Publishes which controller holds each agent's channel, so that requests for the agent reaching another
  * controller can be forwarded to the holder ({@link OwnerRoutingFilter}). Rows of a dead controller are ignored, as
  * the lookup joins live members.
  */

@@ -11,7 +11,7 @@ import java.util.TreeMap;
 import java.util.function.Function;
 
 /**
- * What this controller saw of each trigger tick it left to another controller (Target 15, ticks of a gone owner): the
+ * What this controller saw of each trigger tick it left to another controller (ticks of a gone owner): the
  * owner it left it to, kept for a bounded window. Once that owner is found gone (or not ready), the controller owning
  * the item now runs the trigger once for the ticks it missed, unless a later tick of the same trigger was handled since.
  *
@@ -45,7 +45,9 @@ final class MissedTicks {
         if (windowMinutes <= 0 || entries >= maxEntries) {
             return; // catching up is off, or too much is pending: such ticks are skipped, as before
         }
-        if (deferred.computeIfAbsent(new Key(item, trigger), k -> new TreeMap<>()).put(tick, owner) == null) {
+        if (deferred.computeIfAbsent(new Key(item, trigger), k -> new TreeMap<>())
+                        .put(tick, owner)
+                == null) {
             entries++;
         }
     }
@@ -66,10 +68,16 @@ final class MissedTicks {
      * @param ownerOf the owner now of an item, by its full name
      */
     @NonNull
-    synchronized List<Due> due(long nowMinute, @NonNull Set<String> ready, @NonNull String self, @NonNull Function<String, String> ownerOf) {
+    synchronized List<Due> due(
+            long nowMinute,
+            @NonNull Set<String> ready,
+            @NonNull String self,
+            @NonNull Function<String, String> ownerOf) {
         List<Due> result = new ArrayList<>();
         long oldest = nowMinute - windowMinutes;
-        for (Iterator<Map.Entry<Key, TreeMap<Long, String>>> it = deferred.entrySet().iterator(); it.hasNext(); ) {
+        for (Iterator<Map.Entry<Key, TreeMap<Long, String>>> it =
+                        deferred.entrySet().iterator();
+                it.hasNext(); ) {
             Map.Entry<Key, TreeMap<Long, String>> e = it.next();
             TreeMap<Long, String> ticks = e.getValue();
             int before = ticks.size();
